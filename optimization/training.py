@@ -1,4 +1,3 @@
-from __future__ import print_function
 import torch
 from functools import reduce
 import numpy as np
@@ -6,9 +5,7 @@ import random
 
 from optimization.loss import calculate_loss, calculate_loss_array
 from utils.visual_evaluation import plot_reconstructions
-from utils.log_likelihood import calculate_likelihood
 from scipy.misc import logsumexp
-# from torchsummary import summary
 
 import numpy as np
 
@@ -65,7 +62,7 @@ def train(epoch, train_loader, model, opt, args):
         num_trained += len(data)
         pct_complete = 100. * batch_id / total_batches
         if args.log_interval > 0 and batch_id % args.log_interval == 0:
-            msg = 'Epoch: {:3d} [{:5d}/{:5d} ({:2.0f}%)] \tLoss: {:11.6f}\trec: {:11.3f}\tkl: {:11.6f}'
+            msg = 'Epoch: {:3d} [{:5d}/{:5d} ({:2.0f}%)]   \tLoss: {:11.6f}\trec: {:11.3f}\tkl: {:11.6f}'
 
             if args.input_type == 'binary':
                 print(msg.format(

@@ -1,5 +1,3 @@
-from __future__ import print_function
-
 import torch
 import torch.utils.data as data_utils
 import torchvision

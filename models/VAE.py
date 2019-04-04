@@ -1,5 +1,4 @@
-from __future__ import print_function
-
+import numpy as np
 import torch
 import torch.nn as nn
 import models.flows as flows
@@ -55,7 +54,7 @@ class VAE(nn.Module):
         if self.input_type == 'binary':
             if self.simple:
                 q_z_nn = nn.Sequential(
-                    nn.Linear(reduce(lambda x, y: x * y, self.input_size), self.q_z_nn_hidden_dim),
+                    nn.Linear(np.prod(self.input_size), self.q_z_nn_hidden_dim),
                     nn.ReLU(),
                     nn.Linear(self.q_z_nn_hidden_dim, self.q_z_nn_output_dim),
                     nn.Softplus(),
@@ -116,7 +115,7 @@ class VAE(nn.Module):
                     nn.Softplus(),
                 )
                 p_x_mean = nn.Sequential(
-                    nn.Linear(self.q_z_nn_output_dim, reduce(lambda x, y: x * y, self.input_size)),
+                    nn.Linear(self.q_z_nn_output_dim, np.prod(self.input_size)),
                     nn.Sigmoid()
                 )
             else:

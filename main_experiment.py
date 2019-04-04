@@ -1,4 +1,3 @@
-from __future__ import print_function
 import argparse
 import time
 import torch
@@ -11,7 +10,7 @@ import os
 import datetime
 
 import models.VAE as VAE
-from optimization.training import train, evaluate
+from optimization.training import train, evaluate, evaluate_likelihood
 from utils.load_data import load_dataset
 from utils.plotting import plot_training_curve
 
@@ -28,6 +27,10 @@ parser.add_argument('-freys', '--freyseed', type=int, default=123,
     help="""Seed for shuffling frey face dataset for test split. Ignored for other datasets.
     Results in paper are produced with seeds 123, 321, 231""")
 
+# gpu/cpu
+parser.add_argument('--gpu_id', type=int, default=0, metavar='GPU', help='choose GPU to run on.')
+parser.add_argument('--num_workers', type=int, default=0, metavar='CPU',
+    help='How many CPU cores to run on. If not using GPU, default of zero uses os.cpu_count() - 1.')
 parser.add_argument('-nc', '--no_cuda', action='store_true', default=False,
     help='disables CUDA training')
 
@@ -35,13 +38,14 @@ parser.add_argument('--manual_seed', type=int,
     help='manual seed, if not given resorts to random seed.')
 
 parser.add_argument('-li', '--log_interval', type=int, default=10, metavar='LOG_INTERVAL',
-    help='how many batches to wait before logging training status')
+    help='how many batches to wait before logging training status. Set to <0 to turn off.')
 parser.add_argument('-pi', '--plot_interval', type=int, default=10, metavar='PLOT_INTERVAL',
-    help='how many batches to wait before creating reconstruction plots')
+    help='how many batches to wait before creating reconstruction plots. Set to <0 to turn off.')
 
 parser.add_argument('-od', '--out_dir', type=str, default='snapshots', metavar='OUT_DIR',
     help='output directory for model snapshots etc.')
 
+# testing vs. just validation
 fp = parser.add_mutually_exclusive_group(required=False)
 fp.add_argument('-te', '--testing', action='store_true', dest='testing',
 help='evaluate on test set after training')
@@ -67,6 +71,7 @@ parser.add_argument('--max_beta', type=float, default=1., metavar='MB',
 parser.add_argument('--min_beta', type=float, default=0.0, metavar='MB',
     help='min beta for warm-up')
 
+# flow parameters
 parser.add_argument('-f', '--flow', type=str, default='no_flow',
 choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', 'no_flow', 'boosted'],
     help="""Type of flows to use, no flows can also be selected""")
@@ -91,9 +96,6 @@ parser.add_argument('-l', '--learner_type', type=str, default='planar',
     metavar='FLOW_TYPE',
     help='When flow is boosted -- what type of flow should each weak learner implement.')
 
-# gpu/cpu
-parser.add_argument('--gpu_num', type=int, default=0, metavar='GPU', help='choose GPU to run on.')
-
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 args.device = torch.device("cuda" if args.cuda else "cpu")
@@ -105,10 +107,17 @@ torch.manual_seed(args.manual_seed)
 np.random.seed(args.manual_seed)
 
 if args.cuda:
-    torch.cuda.set_device(args.gpu_num)
+    print("Using CUDA GPU")
+    torch.cuda.set_device(args.gpu_id)
 else:
-    num_cpus = max(1, os.cpu_count() - 1)
-    torch.set_num_threads(num_cpus)
+    print("Using CPU")
+    if args.num_workers > 0:
+        num_workers = args.num_workers
+    else:
+        num_workers = max(1, os.cpu_count() - 1)
+
+    print("Cores available: {} (only using {})".format(os.cpu_count(), os.cpu_count() - 1))
+    torch.set_num_threads(num_workers)
 
 
 kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
@@ -117,8 +126,9 @@ kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
 
 def run(args, kwargs):
 
-    print('\nMODEL SETTINGS: \n', args, '\n')
+    print('\nMODEL SETTINGS: \n', args)
     print("Random Seed: ", args.manual_seed)
+    print("Number of CPU threads: {}".format(torch.get_num_threads()))
 
     # ====================================================
     # SNAPSHOTS
@@ -127,7 +137,7 @@ def run(args, kwargs):
     args.model_signature = args.model_signature.replace(':', '_')
 
     snapshots_path = os.path.join(args.out_dir, 'vae_' + args.dataset + '_')
-    snap_dir = snapshots_path + args.flow + '_gpunum_' + str(args.gpu_num)
+    snap_dir = snapshots_path + args.flow
 
     if args.flow != 'no_flow':
         snap_dir += '_' + 'num_flows_' + str(args.num_flows)
@@ -138,7 +148,7 @@ def run(args, kwargs):
     elif args.flow == 'iaf':
         snap_dir = snap_dir + '_madehsize_' + str(args.made_h_size)
 
-    snap_dir = snap_dir + '__' + args.model_signature + '/'
+    snap_dir = snap_dir + '_' + args.model_signature + '/'
 
     args.snap_dir = snap_dir
 
@@ -264,55 +274,54 @@ def run(args, kwargs):
     train_loss = np.hstack(train_loss)
     train_rec = np.hstack(train_rec)
     train_kl = np.hstack(train_kl)
-    np.savetext(snap_dir + '/train_loss.csv', train_loss, fmt='%10.5f', delimiter=',')
-    np.savetext(snap_dir + '/train_rec.csv', train_rec, fmt='%10.5f', delimiter=',')
-    np.savetext(snap_dir + '/train_kl.csv', train_kl, fmt='%10.5f', delimiter=',')
+    np.savetxt(snap_dir + '/train_loss.csv', train_loss, fmt='%10.5f', delimiter=',')
+    np.savetxt(snap_dir + '/train_rec.csv', train_rec, fmt='%10.5f', delimiter=',')
+    np.savetxt(snap_dir + '/train_kl.csv', train_kl, fmt='%10.5f', delimiter=',')
     val_loss = np.array(val_loss)
     val_rec = np.array(val_rec)
     val_kl = np.array(val_kl)
-    np.savetext(snap_dir + '/val_loss.csv', val_loss, fmt='%10.5f', delimiter=',')
-    np.savetext(snap_dir + '/val_rec.csv', val_rec, fmt='%10.5f', delimiter=',')
-    np.savetext(snap_dir + '/val_kl.csv', val_kl, fmt='%10.5f', delimiter=',')
+    np.savetxt(snap_dir + '/val_loss.csv', val_loss, fmt='%10.5f', delimiter=',')
+    np.savetxt(snap_dir + '/val_rec.csv', val_rec, fmt='%10.5f', delimiter=',')
+    np.savetxt(snap_dir + '/val_kl.csv', val_kl, fmt='%10.5f', delimiter=',')
 
     # plot training and validation loss curves
     plot_training_curve(train_loss, val_loss, fname=snap_dir + '/training_curve_%s.pdf' % args.flow)
 
     # training time per epoch
     train_times = np.array(train_times)
-    mean_train_time = np.mean(train_times)
-    std_train_time = np.std(train_times, ddof=1)
-    # print('Average train time per epoch: %.2f +/- %.2f' % (mean_train_time, std_train_time))
     with open('experiment_log.txt', 'a') as ff:
-        print("\n", str(datetime.datetime.now())[0:19].replace(' ', '_'), file=ff)
+        timestamp = str(datetime.datetime.now())[0:19].replace(' ', '_')
+        print("\n" + ' '.join([timestamp, args.flow, args.dataset]), file=ff)
         print(args, file=ff)
-        print('Stopped after %d epochs' % epoch, file=ff)
-        print('Average train time per epoch: %.2f +/- %.2f' % (mean_train_time, std_train_time), file=ff)
+        print('Stopped after {} epochs'.format(epoch), file=ff)
+        print('Average train time per epoch: {:.2f} +/- {:.2f}'.format(
+            np.mean(train_times), np.std(train_times, ddof=1)), file=ff)
 
 
     # ====================================================
     # EVALUATION
     # ====================================================
     final_model = torch.load(snap_dir + args.flow + '.model')
-    validation_loss = evaluate(val_loader, final_model, args, save_plots=True)
+    validation_loss, validation_rec, validation_kl = evaluate(val_loader, final_model, args, save_plots=True)
     with open('experiment_log.txt', 'a') as ff:
-        print('FINAL EVALUATION ON VALIDATION SET\n'
-              'ELBO (VAL): {:.4f}\n'.format(validation_loss), file=ff)
+        print('FINAL EVALUATION ON VALIDATION SET', file=ff)
+        print('ELBO (VAL): {:.4f}\n'.format(validation_loss), file=ff)
+        print('RECON (VAL): {:.4f}\n'.format(validation_rec), file=ff)
+        print('KL (VAL): {:.4f}\n'.format(validation_kl), file=ff)
 
         if args.input_type != 'binary':
             validation_bpd = (validation_loss / (np.prod(args.input_size) * np.log(2.))) / len(val_loader)
-            print('FINAL EVALUATION ON VALIDATION SET\n'
-                'ELBO (VAL) BPD : {:.4f}\n'.format(validation_bpd), file=ff)
+            print('ELBO (VAL) BPD : {:.4f}\n'.format(validation_bpd), file=ff)
 
     if args.testing:
         test_nll = evaluate_likelihood(test_loader, final_model, args)
         with open('experiment_log.txt', 'a') as ff:
-            print('FINAL EVALUATION ON TEST SET\n'
-                  'NLL (TEST): {:.4f}\n'.format(test_nll), file=ff)
+            print('FINAL EVALUATION ON TEST SET', file=ff)
+            print('NLL (TEST): {:.4f}\n'.format(test_nll), file=ff)
 
             if args.input_type != 'binary':
                 test_bpd = test_nll / (np.prod(args.input_size) * np.log(2.))
-                print('FINAL EVALUATION ON TEST SET\n'
-                      'NLL (TEST) BPD: {:.4f}\n'.format(test_bpd), file=ff)
+                print('NLL (TEST) BPD: {:.4f}\n'.format(test_bpd), file=ff)
 
 
 if __name__ == "__main__":

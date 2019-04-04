@@ -2,9 +2,10 @@
 .ipynb_checkpoints/
 .idea/
 experiment_log.txt
-venv3/
+venv/
 data/CIFAR10/
 data/Freyfaces/
 data/MNIST_static/
 data/Caltech101Silhouettes/
 data/OMNIGLOT/
+snapshots/
