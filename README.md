@@ -1,4 +1,4 @@
-<img src="../master/docs/images/stew.jpg" width="100">
+<img src="../master/docs/images/stew.png" width="100">
 
 # Ensemble Methods for Normalizing Flows
 
