@@ -20,7 +20,13 @@ The experiments can be run on the following datasets:
 * CIFAR10: from Torch Vision library
 
 
-## Usage
+
+## Project Structure
+TBD
+
+
+
+## Getting Started
 
 Below, example commands are given for running experiments on static MNIST with different types of normalizing flows, for 4 flows:
 
@@ -42,4 +48,7 @@ python main_experiment.py -d mnist -nf 4 --flow iaf --made_h_size 320
 
 <br/>
 More information about additional argument options can be found by running ```python main_experiment.py -h```
+
+
+
 
