@@ -1,3 +1,5 @@
+<img src="../master/docs/images/stew.jpg" width="100">
+
 # Ensemble Methods for Normalizing Flows
 
 Under construction! Experiments based off Sylvester Normalizing Flows ([code](https://github.com/riannevdberg/sylvester-flows).
