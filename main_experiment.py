@@ -118,8 +118,10 @@ else:
     else:
         num_workers = max(1, os.cpu_count() - 1)
 
-    print("Cores available: {} (only using {})".format(os.cpu_count(), os.cpu_count() - 1))
+    print("Cores available: {} (only requesting {})".format(os.cpu_count(), num_workers))
     torch.set_num_threads(num_workers)
+    print("Confirmed Number of CPU threads: {}".format(torch.get_num_threads()))
+
 
 
 kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
@@ -130,7 +132,6 @@ def run(args, kwargs):
 
     print('\nMODEL SETTINGS: \n', args)
     print("Random Seed: ", args.manual_seed)
-    print("Number of CPU threads: {}".format(torch.get_num_threads()))
 
     # ====================================================
     # SNAPSHOTS
@@ -194,9 +195,11 @@ def run(args, kwargs):
 
 
     # group model parameters to more easily modify learning rates of weak learners (flow parameters)
+    debug_param_groups = True
     if args.flow == 'boosted':
 
         param_labels = []
+        debug_arr = []
         previous_learner_id = "0"
         vae_params = torch.nn.ParameterList()
         learner_params = torch.nn.ParameterList()
@@ -204,18 +207,23 @@ def run(args, kwargs):
 
         for name, param in model.named_parameters():
             if name.startswith("amor_u") or name.startswith("amor_w") or name.startswith("amor_b"):
-                learner_id = name[7]
+                learner_id = name[7:name.find(".")]
 
                 if learner_id != previous_learner_id:
                     # save parameters for this learner to the collection
                     all_params.append(learner_params)
                     param_labels.append("Weak Learner {}".format(previous_learner_id))
+                    if debug_param_groups:
+                        print("Appending layers [{}] to group for Weak Learner {}".format(
+                            ', '.join(debug_arr), previous_learner_id))
 
                     # re-init params for the next weak learner
                     learner_params = torch.nn.ParameterList()
+                    debug_arr = []
 
                 # else: accumulate the remaining u, w, or b terms for this learner
                 learner_params.append(param)
+                debug_arr.append(name)
 
                 previous_learner_id = learner_id
             else:
@@ -223,6 +231,10 @@ def run(args, kwargs):
 
         all_params.append(learner_params)
         param_labels.append(previous_learner_id)
+        if debug_param_groups:
+            print("Appending layers [{}] to group for Weak Learner {}".format(
+                            ', '.join(debug_arr), previous_learner_id))
+
         all_params.append(vae_params)
         param_labels.append("VAE")
 

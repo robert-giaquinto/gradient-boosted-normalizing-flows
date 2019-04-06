@@ -96,6 +96,10 @@ def evaluate(data_loader, model, args, save_plots=True, epoch=None):
 
         x_mean, z_mu, z_var, ldj, z0, zk = model(data)
 
+        # boosted model averages learners, so average ldjs?
+        if args.flow == "boosted":
+            ldj = torch.mean(ldj, dim=0)
+
         batch_loss, batch_rec, batch_kl = calculate_loss(x_mean, data, z_mu, z_var, z0, zk, ldj, args)
         loss += batch_loss.item()
         rec += batch_rec.item()
@@ -146,6 +150,11 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000):
             # Repeat it for all training points
             x = x_single.expand(S, *x_single.size()[1:]).contiguous()
             x_mean, z_mu, z_var, ldj, z0, zk = model(x)
+
+            # boosted model averages learners, so average ldjs?
+            if args.flow == "boosted":
+                ldj = torch.mean(ldj, dim=0)
+
             a_tmp = calculate_loss_array(x_mean, x, z_mu, z_var, z0, zk, ldj, args)
             a.append(-a_tmp.cpu().data.numpy())
 
