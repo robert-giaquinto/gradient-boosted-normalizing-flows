@@ -56,7 +56,7 @@ parser.set_defaults(testing=True)
 # optimization settings
 parser.add_argument('-e', '--epochs', type=int, default=2000, metavar='EPOCHS',
     help='number of epochs to train (default: 2000)')
-parser.add_argument('-es', '--early_stopping_epochs', type=int, default=100, metavar='EARLY_STOPPING',
+parser.add_argument('-es', '--early_stopping_epochs', type=int, default=50, metavar='EARLY_STOPPING',
     help='number of early stopping epochs')
 
 parser.add_argument('-bs', '--batch_size', type=int, default=100, metavar='BATCH_SIZE',
@@ -77,6 +77,8 @@ choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', '
     help="""Type of flows to use, no flows can also be selected""")
 parser.add_argument('-nf', '--num_flows', type=int, default=4,
     metavar='NUM_FLOWS', help='Number of flow layers, ignored in absence of flows')
+
+# Sylvester parameters
 parser.add_argument('-nv', '--num_ortho_vecs', type=int, default=8, metavar='NUM_ORTHO_VECS',
     help=""" For orthogonal flow: How orthogonal vectors per flow do you need.
     Ignored for other flow types.""")
