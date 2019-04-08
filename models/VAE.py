@@ -203,8 +203,6 @@ class BoostedVAE(VAE):
     """
     Variational auto-encoder with boosted planar flows in the encoder.
 
-    TODO: may want to pass in flow as a parameter -- I think the actual flow
-    computation will be the same... TBD
     """
 
     def __init__(self, args):
@@ -214,7 +212,7 @@ class BoostedVAE(VAE):
         self.num_learners = args.num_learners
 
         # Initialize log-det-jacobian to zero
-        self.log_det_j = 0.
+        self.log_det_j = self.FloatTensor(1, 1).fill_(0.0)
 
         # Flow parameters
         if args.learner_type == "planar":
@@ -267,14 +265,15 @@ class BoostedVAE(VAE):
         Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
         Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
         """
-        self.log_det_j = torch.zeros(self.num_learners, x.size(0))
+        #self.log_det_j = self.FloatTensor(self.num_learners, x.size(0)).fill_(0.0)
+        self.log_det_j = torch.zeros(self.num_learners, x.size(0), device=args.device)
 
         z_mu, z_var, u, w, b = self.encode(x)
 
         z_0 = self.reparameterize(z_mu, z_var)
 
         # Normalizing flows
-        z_sum = torch.zeros_like(z_0, requires_grad=True)
+        z_sum = torch.zeros_like(z_0, device=args.device)
         for c in range(self.num_learners):
             # Sample a z_0 for this learner or sample one z_0 for all learners?
             Z_c = [z_0]
