@@ -9,3 +9,4 @@ data/MNIST_static/
 data/Caltech101Silhouettes/
 data/OMNIGLOT/
 snapshots/
+scripts/test*
