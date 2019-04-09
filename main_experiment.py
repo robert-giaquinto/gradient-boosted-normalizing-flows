@@ -15,7 +15,7 @@ from utils.load_data import load_dataset
 from utils.plotting import plot_training_curve
 
 
-parser = argparse.ArgumentParser(description='PyTorch Sylvester Normalizing flows')
+parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')
 
 parser.add_argument('-d', '--dataset', type=str, default='mnist',
     choices=['mnist', 'freyfaces', 'omniglot', 'caltech', 'cifar10'],
@@ -73,7 +73,7 @@ parser.add_argument('--min_beta', type=float, default=0.0, metavar='MB',
 
 # flow parameters
 parser.add_argument('-f', '--flow', type=str, default='no_flow',
-choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', 'no_flow', 'boosted'],
+choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', 'no_flow', 'boosted', 'bagged'],
     help="""Type of flows to use, no flows can also be selected""")
 parser.add_argument('-nf', '--num_flows', type=int, default=4,
     metavar='NUM_FLOWS', help='Number of flow layers, ignored in absence of flows')
@@ -96,7 +96,7 @@ parser.add_argument('--num_learners', type=int, default=8, metavar='NUM_LEARNERS
 parser.add_argument('-l', '--learner_type', type=str, default='planar',
     choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', 'random'],
     metavar='FLOW_TYPE',
-    help='When flow is boosted -- what type of flow should each weak learner implement.')
+    help='When flow is bagged or boosted -- what type of flow should each weak learner implement.')
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -176,6 +176,8 @@ def run(args, kwargs):
         model = VAE.VAE(args).to(args.device)
     elif args.flow == 'boosted':
         model = VAE.BoostedVAE(args).to(args.device)
+    elif args.flow == 'bagged':
+        model = VAE.BaggedVAE(args).to(args.device)
     elif args.flow == 'planar':
         model = VAE.PlanarVAE(args).to(args.device)
     elif args.flow == 'radial':
@@ -196,7 +198,7 @@ def run(args, kwargs):
 
     # group model parameters to more easily modify learning rates of weak learners (flow parameters)
     debug_param_groups = True
-    if args.flow == 'boosted':
+    if args.flow in ['boosted', 'bagged']:
 
         param_labels = []
         debug_arr = []
@@ -273,6 +275,9 @@ def run(args, kwargs):
         val_loss.append(v_loss)
         val_rec.append(v_rec)
         val_kl.append(v_kl)
+
+        msg = 'Epoch {}: Train (loss, recon, kl)=({:.2f}\t{:.2f}\t{:.2f})\tVal (loss, recon, kl)=({:.2f}\t{:.2f}\t{:.2f})'
+        print(msg.format(epoch, tr_loss.mean(),tr_rec.mean(), tr_kl.mean(), v_loss, v_rec, v_kl))
 
         # early-stopping
         if v_loss < best_loss:
