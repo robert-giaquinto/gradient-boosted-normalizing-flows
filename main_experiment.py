@@ -276,7 +276,8 @@ def run(args, kwargs):
         val_rec.append(v_rec)
         val_kl.append(v_kl)
 
-        msg = 'Epoch {}: Train (loss, recon, kl)=({:.2f}\t{:.2f}\t{:.2f})\tVal (loss, recon, kl)=({:.2f}\t{:.2f}\t{:.2f})'
+        msg = 'Epoch {}: Train (loss, recon, kl) = ({:.2f}\t{:.2f}\t{:.2f})\t'
+        msg += 'Val (loss, recon, kl) = ({:.2f}\t{:.2f}\t{:.2f})'
         print(msg.format(epoch, tr_loss.mean(),tr_rec.mean(), tr_kl.mean(), v_loss, v_rec, v_kl))
 
         # early-stopping

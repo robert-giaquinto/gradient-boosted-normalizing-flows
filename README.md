@@ -2,13 +2,13 @@
 
 # Ensemble Methods for Normalizing Flows
 
-Under construction! Experiments based off Sylvester Normalizing Flows ([code](https://github.com/riannevdberg/sylvester-flows).
+Under construction! Experiments based off Sylvester Normalizing Flows ([code])(https://github.com/riannevdberg/sylvester-flows).
 
 ## Requirements
 The code is compatible with:
 
   * `pytorch 1.0.0`
-  * `python 2.7` (should work fine with python 3 though)
+  * `python 3.6+` (should work fine with python 2.7 though if you include print_function)
 
 
 ## Data
