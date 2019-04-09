@@ -4,6 +4,7 @@ import torch.nn as nn
 import models.flows as flows
 from models.layers import GatedConv2d, GatedConvTranspose2d
 from utils.distributions import log_normal_standard
+import random
 
 
 class VAE(nn.Module):
@@ -199,6 +200,122 @@ class VAE(nn.Module):
         return x_mean, z_mu, z_var, self.log_det_j, z, z
 
 
+
+class BaggedVAE(VAE):
+    """
+    Variational auto-encoder with bagged planar flows in the encoder.
+
+    """
+
+    def __init__(self, args):
+        super(BaggedVAE, self).__init__(args)
+
+        # boosting parameters
+        self.num_learners = args.num_learners
+        self.last_learner_trained = None
+
+        # Initialize log-det-jacobian to zero
+        self.log_det_j = self.FloatTensor(1, 1).fill_(0.0)
+
+        # Flow parameters
+        if args.learner_type == "planar":
+            flow = flows.Planar
+        else:
+            raise ValueError("Lets keep it simple for now and only implement planar weak learners")
+        self.num_flows = args.num_flows
+
+        # Amortized flow parameters for each weak learner
+        for c in range(self.num_learners):
+            amor_u_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+            amor_w_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+            amor_b_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
+            self.add_module('amor_u_' + str(c), amor_u_c)
+            self.add_module('amor_w_' + str(c), amor_w_c)
+            self.add_module('amor_b_' + str(c), amor_b_c)
+
+        # Normalizing flow layers
+        for c in range(self.num_learners):
+            for k in range(self.num_flows):
+                flow_c_k = flow()
+                self.add_module('flow_' + str(c) + '_' + str(k), flow_c_k)
+
+    def encode(self, x):
+        """
+        Encoder that ouputs parameters for base distribution of z and flow parameters.
+        """
+
+        batch_size = x.size(0)
+
+        h = self.q_z_nn(x)
+        h = h.view(-1, self.q_z_nn_output_dim)
+        mean_z = self.q_z_mean(h)
+        var_z = self.q_z_var(h)
+
+        # return amortized u an w for all flows
+        u, w, b = [], [], []
+        for c in range(self.num_learners):
+            u_c = getattr(self, 'amor_u_' + str(c))
+            w_c = getattr(self, 'amor_w_' + str(c))
+            b_c = getattr(self, 'amor_b_' + str(c))
+            u.append(u_c(h).view(batch_size, self.num_flows, self.z_size, 1))
+            w.append(w_c(h).view(batch_size, self.num_flows, 1, self.z_size))
+            b.append(b_c(h).view(batch_size, self.num_flows, 1, 1))
+
+        return mean_z, var_z, u, w, b
+
+    def forward(self, x):
+        """
+        Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
+        Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
+        """
+        z_mu, z_var, u, w, b = self.encode(x)
+        z_0 = self.reparameterize(z_mu, z_var)
+        self.log_det_j = self.FloatTensor(x.size(0)).fill_(0.0)
+
+        if self.training:
+            # Normalizing flows for training: train one weak learner at a time
+            c = random.randint(0, self.num_learners - 1)
+            Z_arr = [z_0]
+            # apply flow transformations
+            for k in range(self.num_flows):
+                flow_c_k = getattr(self, 'flow_' + str(c) + '_' + str(k))
+                z_k, ldj = flow_c_k(Z_arr[k], u[c][:, k, :, :], w[c][:, k, :, :], b[c][:, k, :, :])
+                Z_arr.append(z_k)
+                self.log_det_j += ldj
+
+            z_out = Z_arr[-1]
+            self.last_learner_trained = c
+
+        else:
+            # Normalizing flows for prediction: aggregate over all learners
+            z_sum = torch.zeros_like(z_0)  # defaults to device of z_0
+
+            for c in range(self.num_learners):
+                # Sample a z_0 for this learner or sample one z_0 for all learners?
+                Z_c = [z_0]
+
+                # apply flow transformations
+                for k in range(self.num_flows):
+                    flow_c_k = getattr(self, 'flow_' + str(c) + '_' + str(k))
+                    z_ck, ldj = flow_c_k(Z_c[k], u[c][:, k, :, :], w[c][:, k, :, :], b[c][:, k, :, :])
+                    Z_c.append(z_ck)
+                    self.log_det_j += ldj
+
+                # accumulate final transformation from each weak learner
+                # TODO: should these be accumulate with a weighting scheme?
+                z_sum = z_sum + Z_c[-1]
+
+            # aggregate estimates of z_k across each weak learner
+            z_out = (1.0 / self.num_learners) * z_sum
+
+        # decode aggregated output of weak learners
+        x_mean = self.decode(z_out)
+
+        return x_mean, z_mu, z_var, self.log_det_j, z_0, z_out
+
+
+
+
 class BoostedVAE(VAE):
     """
     Variational auto-encoder with boosted planar flows in the encoder.
@@ -210,6 +327,7 @@ class BoostedVAE(VAE):
 
         # boosting parameters
         self.num_learners = args.num_learners
+        self.last_learner_trained = None
 
         # Initialize log-det-jacobian to zero
         self.log_det_j = self.FloatTensor(1, 1).fill_(0.0)
@@ -266,10 +384,7 @@ class BoostedVAE(VAE):
         Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
         """
         self.log_det_j = self.FloatTensor(self.num_learners, x.size(0)).fill_(0.0)
-        #self.log_det_j = torch.zeros(self.num_learners, x.size(0), device=args.device)
-
         z_mu, z_var, u, w, b = self.encode(x)
-
         z_0 = self.reparameterize(z_mu, z_var)
 
         # Normalizing flows
@@ -290,12 +405,21 @@ class BoostedVAE(VAE):
             z_sum = z_sum + Z_c[-1]
 
         # aggregate estimates of z_k across each weak learner
-        z_agg = (1.0 / self.num_learners) * z_sum
+        z = (1.0 / self.num_learners) * z_sum
 
         # decode aggregated output of weak learners
-        x_mean = self.decode(z_agg)
+        x_mean = self.decode(z)
 
-        return x_mean, z_mu, z_var, self.log_det_j, z_0, z_agg
+        if self.training:
+            # only concerned about log det jacobian of learner being trained
+            self.last_learner_trained = random.randint(0, self.num_learners - 1)
+            self.log_det_j = self.log_det_j[self.last_learner_trained, :]
+        else:
+            self.log_det_j = torch.sum(self.log_det_j, dim=0)
+
+        return x_mean, z_mu, z_var, self.log_det_j, z_0, z
+
+
 
 
 class PlanarVAE(VAE):

@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
+from utils.utilities import safe_log
 from models.layers import MaskedConv2d, MaskedLinear
 
 
@@ -48,7 +49,7 @@ class Planar(nn.Module):
 
         # compute logdetJ
         psi = w * self.der_h(wzb)
-        log_det_jacobian = torch.log(torch.abs(1 + torch.bmm(psi, u_hat)))
+        log_det_jacobian = safe_log(torch.abs(1 + torch.bmm(psi, u_hat)))
         log_det_jacobian = log_det_jacobian.squeeze(2).squeeze(1)
 
         return z, log_det_jacobian
@@ -168,7 +169,7 @@ class Sylvester(nn.Module):
         diag_j = diag_r1 * diag_r2
         diag_j = self.der_h(r2qzb).squeeze(1) * diag_j
         diag_j += 1.
-        log_diag_j = diag_j.abs().log()
+        log_diag_j = safe_log(diag_j.abs())
 
         if sum_ldj:
             log_det_j = log_diag_j.sum(-1)
@@ -247,7 +248,7 @@ class TriangularSylvester(nn.Module):
         diag_j = diag_r1 * diag_r2
         diag_j = self.der_h(r2qzb).squeeze(1) * diag_j
         diag_j += 1.
-        log_diag_j = diag_j.abs().log()
+        log_diag_j = safe_log(diag_j.abs())
 
         if sum_ldj:
             log_det_j = log_diag_j.sum(-1)
@@ -335,5 +336,5 @@ class IAF(nn.Module):
             mean = flow[2](h)
             gate = F.sigmoid(flow[3](h) + self.forget_bias)
             z = gate * z + (1 - gate) * mean
-            logdets += torch.sum(gate.log().view(gate.size(0), -1), 1)
+            logdets += torch.sum(safe_log(gate).view(gate.size(0), -1), 1)
         return z, logdets

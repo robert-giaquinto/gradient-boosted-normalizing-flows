@@ -4,7 +4,7 @@ import numpy as np
 import random
 
 from optimization.loss import calculate_loss, calculate_loss_array
-from utils.visual_evaluation import plot_reconstructions
+from utils.plotting import plot_reconstructions
 from scipy.misc import logsumexp
 
 import numpy as np
@@ -35,21 +35,23 @@ def train(epoch, train_loader, model, opt, args):
         x_mean, z_mu, z_var, ldj, z0, zk = model(data)
 
         # adjust learning rates if performing boosting
-        if args.flow == "boosted":
+        if args.flow in ["boosted", "bagged"]:
             # set the learning rate of all but one weak learner to zero
-            # TODO explore exploit strategy for selecting weak learner
-            # for now, just to uniform random
-            learner_chosen = random.randint(0, args.num_learners - 1)
-
-            # first num_learners groups correspond to the flow parameters for each weak learner
             for c in range(args.num_learners):
-                if c == learner_chosen:
+                if c == model.last_learner_trained:
                     opt.param_groups[c]['lr'] = args.learning_rate
                 else:
                     opt.param_groups[c]['lr'] = 0.0
 
-            # only one row of log det jacobian is retained
-            ldj = ldj[learner_chosen, :]
+
+        # why is loss crashing sometimes?
+        if x_mean.min() < 0 or x_mean.max() > 1:
+            print("\nERROR RECONSTRUCTION NOT IN [0,1]")
+            print(x_mean, x_mean.min(), x_mean.max(), "\n")
+            x_mean = x_mean - x_mean.min()
+            x_mean = x_mean / x.max()
+
+
 
         loss, rec, kl = calculate_loss(x_mean, data, z_mu, z_var, z0, zk, ldj, args, beta=beta)
         loss.backward()
@@ -73,14 +75,6 @@ def train(epoch, train_loader, model, opt, args):
                 print(msg.format(
                     epoch, num_trained, total_data, pct_complete,loss.item(), rec.item(), kl.item(), bpd))
 
-    if args.input_type == 'binary':
-        print('====> Epoch: {:3d} Average train loss: {:.4f}'.format(
-            epoch, train_loss.sum() / total_batches))
-    else:
-        train_bpd = train_loss / (np.prod(args.input_size) * np.log(2.))
-        print('====> Epoch: {:3d} Average train loss: {:.4f}, average bpd: {:.4f}'.format(
-            epoch, train_loss.sum() / total_batches, train_bpd.sum() / total_batches))
-
     return train_loss, train_rec, train_kl
 
 
@@ -95,10 +89,6 @@ def evaluate(data_loader, model, args, save_plots=True, epoch=None):
         data = data.to(args.device)
 
         x_mean, z_mu, z_var, ldj, z0, zk = model(data)
-
-        # boosted model averages learners, so average ldjs?
-        if args.flow == "boosted":
-            ldj = torch.mean(ldj, dim=0)
 
         batch_loss, batch_rec, batch_kl = calculate_loss(x_mean, data, z_mu, z_var, z0, zk, ldj, args)
         loss += batch_loss.item()
@@ -150,10 +140,6 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000):
             # Repeat it for all training points
             x = x_single.expand(S, *x_single.size()[1:]).contiguous()
             x_mean, z_mu, z_var, ldj, z0, zk = model(x)
-
-            # boosted model averages learners, so average ldjs?
-            if args.flow == "boosted":
-                ldj = torch.mean(ldj, dim=0)
 
             a_tmp = calculate_loss_array(x_mean, x, z_mu, z_var, z0, zk, ldj, args)
             a.append(-a_tmp.cpu().data.numpy())

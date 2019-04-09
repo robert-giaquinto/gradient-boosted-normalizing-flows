@@ -3,6 +3,7 @@ import torch
 import torch.nn as nn
 from utils.distributions import log_normal_diag, log_normal_standard, log_bernoulli
 import torch.nn.functional as F
+from utils.utilities import safe_log
 
 
 def binary_loss_function(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
@@ -25,7 +26,7 @@ def binary_loss_function(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
     # ln p(z_k)  (not averaged)
     log_p_zk = log_normal_standard(z_k, dim=1)
     # ln q(z_0)  (not averaged)
-    log_q_z0 = log_normal_diag(z_0, mean=z_mu, log_var=z_var.log(), dim=1)
+    log_q_z0 = log_normal_diag(z_0, mean=z_mu, log_var=safe_log(z_var), dim=1)
     # N E_q0[ ln q(z_0) - ln p(z_k) ]
     summed_logs = torch.sum(log_q_z0 - log_p_zk)
 
@@ -73,7 +74,7 @@ def multinomial_loss_function(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta
     # ln p(z_k)  (not averaged)
     log_p_zk = log_normal_standard(z_k, dim=1)
     # ln q(z_0)  (not averaged)
-    log_q_z0 = log_normal_diag(z_0, mean=z_mu, log_var=z_var.log(), dim=1)
+    log_q_z0 = log_normal_diag(z_0, mean=z_mu, log_var=safe_log(z_var), dim=1)
     # N E_q0[ ln q(z_0) - ln p(z_k) ]
     summed_logs = torch.sum(log_q_z0 - log_p_zk)
 
@@ -107,7 +108,7 @@ def binary_loss_array(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
     # ln p(z_k)  (not averaged)
     log_p_zk = log_normal_standard(z_k, dim=1)
     # ln q(z_0)  (not averaged)
-    log_q_z0 = log_normal_diag(z_0, mean=z_mu, log_var=z_var.log(), dim=1)
+    log_q_z0 = log_normal_diag(z_0, mean=z_mu, log_var=safe_log(z_var), dim=1)
     #  ln q(z_0) - ln p(z_k) ]
     logs = log_q_z0 - log_p_zk
 
@@ -140,7 +141,7 @@ def multinomial_loss_array(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.
     log_p_zk = log_normal_standard(z_k.view(batch_size, -1), dim=1)
     # ln q(z_0)  (not averaged)
     log_q_z0 = log_normal_diag(z_0.view(batch_size, -1), mean=z_mu.view(batch_size, -1),
-                               log_var=z_var.log().view(batch_size, -1), dim=1)
+                               log_var=safe_log(z_var).view(batch_size, -1), dim=1)
 
     #  ln q(z_0) - ln p(z_k) ]
     logs = log_q_z0 - log_p_zk
