@@ -150,6 +150,8 @@ def run(args, kwargs):
         snap_dir = snap_dir + '_num_householder_' + str(args.num_householder)
     elif args.flow == 'iaf':
         snap_dir = snap_dir + '_madehsize_' + str(args.made_h_size)
+    elif args.flow in ['boosted', 'bagged']:
+        snap_dir = snap_dir + '_num_learners_' + str(args.num_learners)
 
     snap_dir = snap_dir + '_' + args.model_signature + '/'
 

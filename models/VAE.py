@@ -383,41 +383,40 @@ class BoostedVAE(VAE):
         Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
         Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
         """
-        self.log_det_j = self.FloatTensor(self.num_learners, x.size(0)).fill_(0.0)
+        self.log_det_j = self.FloatTensor(x.size(0)).fill_(0.0)
         z_mu, z_var, u, w, b = self.encode(x)
         z_0 = self.reparameterize(z_mu, z_var)
 
-        # Normalizing flows
-        z_sum = torch.zeros_like(z_0)  # defaults to device of z_0
+        Z_arr = []  # z_k found by each learner
         for c in range(self.num_learners):
-            # Sample a z_0 for this learner or sample one z_0 for all learners?
-            Z_c = [z_0]
+            if c > 0:
+                # reweight z_0
+                omega = log_normal_standard(Z_arr[-1], dim=1).unsqueeze(1)
+                omega = (omega - omega.min()) + 1e-4
+                omega = (omega / omega.max()) + 0.5
+                z_0c = z_0 * omega
+            else:
+                z_0c = z_0
 
             # apply flow transformations
+            Z_c = [z_0c]
             for k in range(self.num_flows):
                 flow_c_k = getattr(self, 'flow_' + str(c) + '_' + str(k))
                 z_ck, ldj = flow_c_k(Z_c[k], u[c][:, k, :, :], w[c][:, k, :, :], b[c][:, k, :, :])
                 Z_c.append(z_ck)
-                self.log_det_j[c, :] += ldj
+                self.log_det_j += ldj
 
             # accumulate final transformation from each weak learner
-            # TODO: should these be accumulate with a weighting scheme?
-            z_sum = z_sum + Z_c[-1]
+            Z_arr.append(Z_c[-1])
 
+        # TODO: use line search to optimally combine
         # aggregate estimates of z_k across each weak learner
-        z = (1.0 / self.num_learners) * z_sum
+        z_out = torch.stack(Z_arr).sum(0) * (1.0 / self.num_learners)
 
         # decode aggregated output of weak learners
-        x_mean = self.decode(z)
+        x_mean = self.decode(z_out)
 
-        if self.training:
-            # only concerned about log det jacobian of learner being trained
-            self.last_learner_trained = random.randint(0, self.num_learners - 1)
-            self.log_det_j = self.log_det_j[self.last_learner_trained, :]
-        else:
-            self.log_det_j = torch.sum(self.log_det_j, dim=0)
-
-        return x_mean, z_mu, z_var, self.log_det_j, z_0, z
+        return x_mean, z_mu, z_var, self.log_det_j, z_0, z_out
 
 
 
