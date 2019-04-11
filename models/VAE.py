@@ -5,6 +5,7 @@ import models.flows as flows
 from models.layers import GatedConv2d, GatedConvTranspose2d
 from utils.distributions import log_normal_standard
 import random
+from scipy.optimize import line_search
 
 
 class VAE(nn.Module):
@@ -328,6 +329,7 @@ class BoostedVAE(VAE):
         # boosting parameters
         self.num_learners = args.num_learners
         self.last_learner_trained = None
+        self.use_line_search = True
 
         # Initialize log-det-jacobian to zero
         self.log_det_j = self.FloatTensor(1, 1).fill_(0.0)
@@ -378,6 +380,15 @@ class BoostedVAE(VAE):
 
         return mean_z, var_z, u, w, b
 
+    def combine_learners(self, Z):
+        if self.use_line_search:
+            # TBD
+            z_out = torch.stack(Z_arr).sum(0) * (1.0 / self.num_learners)
+        else:
+            z_out = torch.stack(Z_arr).sum(0) * (1.0 / self.num_learners)
+
+        return z_out
+
     def forward(self, x):
         """
         Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
@@ -390,11 +401,14 @@ class BoostedVAE(VAE):
         Z_arr = []  # z_k found by each learner
         for c in range(self.num_learners):
             if c > 0:
+                # WARNING: THIS IS A TERRIBLE WAY TO NORMALIZE THE LIKELIHOODS!!!
+                # SHOULD USE IMPORTANCE SAMPLING, BUT THATS EXPENSIVE...
+                # USE Importance weight like IWAE instead?
                 # reweight z_0
                 omega = log_normal_standard(Z_arr[-1], dim=1).unsqueeze(1)
-                omega = (omega - omega.min()) + 1e-4
-                omega = (omega / omega.max()) + 0.5
-                z_0c = z_0 * omega
+                omega = (omega - omega.min()) + 1e-4  # don't want any to be zero
+                omega = (omega / omega.max()) + 0.5  # center around 1.0, should be along [0.5, 1.5]
+                z_0c = z_0 * omega.reciprocal()
             else:
                 z_0c = z_0
 
@@ -411,7 +425,7 @@ class BoostedVAE(VAE):
 
         # TODO: use line search to optimally combine
         # aggregate estimates of z_k across each weak learner
-        z_out = torch.stack(Z_arr).sum(0) * (1.0 / self.num_learners)
+        z_out = self.combine_learners(Z_arr)
 
         # decode aggregated output of weak learners
         x_mean = self.decode(z_out)
@@ -513,6 +527,7 @@ class RadialVAE(VAE):
                 nn.Hardtanh(min_val=0.01, max_val=7.)
         )
         self.amor_beta = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
+        self.amor_z_ref = nn.Linear(self.q_z_nn_output_dim, self.z_size)
 
         # Normalizing flow layers
         for k in range(self.num_flows):
@@ -532,10 +547,9 @@ class RadialVAE(VAE):
 
         # return amortized u an w for all flows
         alpha = self.amor_alpha(h).view(batch_size, self.num_flows, 1, 1)
-        #alpha = nn.functional.relu(self.amor_alpha(h).view(batch_size, self.num_flows, 1, 1))
-        #alpha = nn.functional.hardtanh(self.amor_alpha(h).view(batch_size, self.num_flows, 1, 1), min_val=0.0, max_val=2.0)
         beta = self.amor_beta(h).view(batch_size, self.num_flows, 1, 1)
-        return mean_z, var_z, alpha, beta
+        z_ref = self.amor_z_ref(h).view(batch_size, self.z_size)
+        return mean_z, var_z, alpha, beta, z_ref
 
     def forward(self, x):
         """
@@ -544,18 +558,19 @@ class RadialVAE(VAE):
         """
         self.log_det_j = 0.
 
-        z_mu, z_var, alpha, beta = self.encode(x)
+        z_mu, z_var, alpha, beta, z_ref = self.encode(x)
 
         # Sample z_0
         z = [self.reparameterize(z_mu, z_var)]
 
         # create reference point z0
-        z0 = self.reparameterize(z_mu, z_var).mean(dim=0).unsqueeze(0)
+        # better to create a running mean of z0 as reference point?
+        # z0 = self.reparameterize(z_mu, z_var).mean(dim=0).unsqueeze(0)
 
         # Normalizing flows
         for k in range(self.num_flows):
             flow_k = getattr(self, 'flow_' + str(k))
-            z_k, log_det_jacobian = flow_k(z[k], z0, alpha[:, k, :, :], beta[:, k, :, :])
+            z_k, log_det_jacobian = flow_k(z[k], z_ref, alpha[:, k, :, :], beta[:, k, :, :])
             z.append(z_k)
             self.log_det_j += log_det_jacobian
 

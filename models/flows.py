@@ -75,16 +75,7 @@ class Radial(nn.Module):
 
     def forward(self, zk, z0, alpha, beta):
         """
-        Forward pass. Assumes amortized u, w and b. Conditions on diagonals of u and w for invertibility
-        will be be satisfied inside this function. Computes the following transformation:
-        z' = z + beta * h(alpha, r) * (z - z0)
-        or actually
-        z'^T = z^T + beta * h(alpha, r) * (z - z0)
-        Assumes the following input shapes:
-        shape u = (batch_size, z_size, 1)
-        shape w = (batch_size, 1, z_size)
-        shape b = (batch_size, 1, 1)
-        shape z = (batch_size, z_size).
+        Forward pass.
         """
         zk = zk.unsqueeze(2)
         z0 = z0.unsqueeze(2)
@@ -99,8 +90,8 @@ class Radial(nn.Module):
         z = z.squeeze(2)
 
         # compute logdetJ
-        log_det_jacobian = torch.bmm(1 + beta_h + (beta_hat * self.der_h(r, alpha) * r),
-            (1.0 + beta_h)**(self.z_size - 1))
+        log_det_jacobian = safe_log(torch.bmm(1 + beta_h + (beta_hat * self.der_h(r, alpha) * r),
+            (1.0 + beta_h)**(self.z_size - 1)))
         log_det_jacobian = log_det_jacobian.squeeze(2).squeeze(1)
 
         return z, log_det_jacobian
