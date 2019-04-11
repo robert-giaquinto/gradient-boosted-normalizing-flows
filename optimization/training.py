@@ -35,7 +35,7 @@ def train(epoch, train_loader, model, opt, args):
         x_mean, z_mu, z_var, ldj, z0, zk = model(data)
 
         # adjust learning rates if performing boosting
-        if args.flow in ["boosted", "bagged"]:
+        if args.flow in ["bagged"]:
             # set the learning rate of all but one weak learner to zero
             for c in range(args.num_learners):
                 if c == model.last_learner_trained:

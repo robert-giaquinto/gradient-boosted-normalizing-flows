@@ -56,7 +56,7 @@ parser.set_defaults(testing=True)
 # optimization settings
 parser.add_argument('-e', '--epochs', type=int, default=2000, metavar='EPOCHS',
     help='number of epochs to train (default: 2000)')
-parser.add_argument('-es', '--early_stopping_epochs', type=int, default=50, metavar='EARLY_STOPPING',
+parser.add_argument('-es', '--early_stopping_epochs', type=int, default=20, metavar='EARLY_STOPPING',
     help='number of early stopping epochs')
 
 parser.add_argument('-bs', '--batch_size', type=int, default=100, metavar='BATCH_SIZE',
@@ -97,6 +97,10 @@ parser.add_argument('-l', '--learner_type', type=str, default='planar',
     choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', 'random'],
     metavar='FLOW_TYPE',
     help='When flow is bagged or boosted -- what type of flow should each weak learner implement.')
+parser.add_argument('-agg', '--aggregation_method', type=str, default='parameterized',
+    choices=['parameterized', 'average', 'line search'],
+    metavar='AGGREGATION_METHOD',
+    help='When flow is bagged or boosted -- how should weak learners be combined.')
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -151,7 +155,7 @@ def run(args, kwargs):
     elif args.flow == 'iaf':
         snap_dir = snap_dir + '_madehsize_' + str(args.made_h_size)
     elif args.flow in ['boosted', 'bagged']:
-        snap_dir = snap_dir + '_num_learners_' + str(args.num_learners)
+        snap_dir = snap_dir + '_' + args.learner_type + '_num_learners_' + str(args.num_learners)
 
     snap_dir = snap_dir + '_' + args.model_signature + '/'
 

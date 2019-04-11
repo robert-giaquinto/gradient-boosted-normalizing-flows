@@ -211,28 +211,43 @@ class BaggedVAE(VAE):
     def __init__(self, args):
         super(BaggedVAE, self).__init__(args)
 
-        # boosting parameters
+        # bagging parameters
+        self.learner_type = args.learner_type
         self.num_learners = args.num_learners
         self.last_learner_trained = None
+        self.num_flows = args.num_flows
 
         # Initialize log-det-jacobian to zero
         self.log_det_j = self.FloatTensor(1, 1).fill_(0.0)
 
         # Flow parameters
-        if args.learner_type == "planar":
+        if self.learner_type == "planar":
             flow = flows.Planar
-        else:
-            raise ValueError("Lets keep it simple for now and only implement planar weak learners")
-        self.num_flows = args.num_flows
+            # Amortized flow parameters for each weak learner
+            for c in range(self.num_learners):
+                amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+                amor_w = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+                amor_b = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
+                self.add_module('amor_u_' + str(c), amor_u)
+                self.add_module('amor_w_' + str(c), amor_w)
+                self.add_module('amor_b_' + str(c), amor_b)
 
-        # Amortized flow parameters for each weak learner
-        for c in range(self.num_learners):
-            amor_u_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
-            amor_w_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
-            amor_b_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
-            self.add_module('amor_u_' + str(c), amor_u_c)
-            self.add_module('amor_w_' + str(c), amor_w_c)
-            self.add_module('amor_b_' + str(c), amor_b_c)
+        elif self.learner_type == "radial":
+            flow = flows.Radial
+            for c in range(self.num_learners):
+                amor_alpha = nn.Sequential(
+                        nn.Linear(self.q_z_nn_output_dim, self.num_flows),
+                        nn.Softplus(),
+                        nn.Hardtanh(min_val=0.01, max_val=7.)
+                )
+                amor_beta = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
+                amor_zref = nn.Linear(self.q_z_nn_output_dim, self.z_size)
+                self.add_module('amor_a_' + str(c), amor_alpha)
+                self.add_module('amor_b_' + str(c), amor_beta)
+                self.add_module('amor_z_' + str(c), amor_zref)
+
+        else:
+            raise ValueError("Only radial or planar weak learners allowed for now.")
 
         # Normalizing flow layers
         for c in range(self.num_learners):
@@ -252,35 +267,60 @@ class BaggedVAE(VAE):
         mean_z = self.q_z_mean(h)
         var_z = self.q_z_var(h)
 
-        # return amortized u an w for all flows
-        u, w, b = [], [], []
-        for c in range(self.num_learners):
-            u_c = getattr(self, 'amor_u_' + str(c))
-            w_c = getattr(self, 'amor_w_' + str(c))
-            b_c = getattr(self, 'amor_b_' + str(c))
-            u.append(u_c(h).view(batch_size, self.num_flows, self.z_size, 1))
-            w.append(w_c(h).view(batch_size, self.num_flows, 1, self.z_size))
-            b.append(b_c(h).view(batch_size, self.num_flows, 1, 1))
+        # return amortized flow parameters for all flows
 
-        return mean_z, var_z, u, w, b
+        flow_params = []
+        if self.learner_type == "planar":
+            for c in range(self.num_learners):
+                amor_u = getattr(self, 'amor_u_' + str(c))
+                amor_w = getattr(self, 'amor_w_' + str(c))
+                amor_b = getattr(self, 'amor_b_' + str(c))
+                u = amor_u(h).view(batch_size, self.num_flows, self.z_size, 1)
+                w = amor_w(h).view(batch_size, self.num_flows, 1, self.z_size)
+                b = amor_b(h).view(batch_size, self.num_flows, 1, 1)
+                flow_params.append([u, w, b])
+
+        elif self.learner_type == "radial":
+            for c in range(self.num_learners):
+                amor_alpha = getattr(self, 'amor_a_' + str(c))
+                amor_beta = getattr(self, 'amor_b_' + str(c))
+                amor_zref = getattr(self, 'amor_z_' + str(c))
+                alpha = amor_alpha(h).view(batch_size, self.num_flows, 1, 1)
+                beta = amor_beta(h).view(batch_size, self.num_flows, 1, 1)
+                z_ref = amor_zref(h).view(batch_size, self.z_size)
+
+                flow_params.append([alpha, beta, z_ref])
+
+        else:
+            raise ValueError("Only radial or planar weak learners allowed for now.")
+
+        return mean_z, var_z, flow_params
 
     def forward(self, x):
         """
         Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
         Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
         """
-        z_mu, z_var, u, w, b = self.encode(x)
+        z_mu, z_var, flow_params = self.encode(x)
         z_0 = self.reparameterize(z_mu, z_var)
         self.log_det_j = self.FloatTensor(x.size(0)).fill_(0.0)
 
         if self.training:
             # Normalizing flows for training: train one weak learner at a time
             c = random.randint(0, self.num_learners - 1)
+
             Z_arr = [z_0]
             # apply flow transformations
             for k in range(self.num_flows):
                 flow_c_k = getattr(self, 'flow_' + str(c) + '_' + str(k))
-                z_k, ldj = flow_c_k(Z_arr[k], u[c][:, k, :, :], w[c][:, k, :, :], b[c][:, k, :, :])
+
+                if self.learner_type == "planar":
+                    u, w, b = flow_params[c]
+                    z_k, ldj = flow_c_k(Z_arr[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
+                elif self.learner_type == "radial":
+                    alpha, beta, z_ref = flow_params[c]
+                    z_k, ldj = flow_c_k(Z_arr[k], z_ref, alpha[:, k, :, :], beta[:, k, :, :])
+
                 Z_arr.append(z_k)
                 self.log_det_j += ldj
 
@@ -298,7 +338,14 @@ class BaggedVAE(VAE):
                 # apply flow transformations
                 for k in range(self.num_flows):
                     flow_c_k = getattr(self, 'flow_' + str(c) + '_' + str(k))
-                    z_ck, ldj = flow_c_k(Z_c[k], u[c][:, k, :, :], w[c][:, k, :, :], b[c][:, k, :, :])
+
+                    if self.learner_type == "planar":
+                        u, w, b = flow_params[c]
+                        z_ck, ldj = flow_c_k(Z_c[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
+                    elif self.learner_type == "radial":
+                        alpha, beta, z_ref = flow_params[c]
+                        z_ck, ldj = flow_c_k(Z_c[k], z_ref, alpha[:, k, :, :], beta[:, k, :, :])
+
                     Z_c.append(z_ck)
                     self.log_det_j += ldj
 
@@ -315,8 +362,6 @@ class BaggedVAE(VAE):
         return x_mean, z_mu, z_var, self.log_det_j, z_0, z_out
 
 
-
-
 class BoostedVAE(VAE):
     """
     Variational auto-encoder with boosted planar flows in the encoder.
@@ -328,8 +373,8 @@ class BoostedVAE(VAE):
 
         # boosting parameters
         self.num_learners = args.num_learners
-        self.last_learner_trained = None
-        self.use_line_search = True
+        self.aggregation_method = args.aggregation_method
+        self.num_flows = args.num_flows
 
         # Initialize log-det-jacobian to zero
         self.log_det_j = self.FloatTensor(1, 1).fill_(0.0)
@@ -339,16 +384,23 @@ class BoostedVAE(VAE):
             flow = flows.Planar
         else:
             raise ValueError("Lets keep it simple for now and only implement planar weak learners")
-        self.num_flows = args.num_flows
 
         # Amortized flow parameters for each weak learner
         for c in range(self.num_learners):
-            amor_u_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
-            amor_w_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
-            amor_b_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
-            self.add_module('amor_u_' + str(c), amor_u_c)
-            self.add_module('amor_w_' + str(c), amor_w_c)
-            self.add_module('amor_b_' + str(c), amor_b_c)
+            amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+            amor_w = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+            amor_b = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
+            self.add_module('amor_u_' + str(c), amor_u)
+            self.add_module('amor_w_' + str(c), amor_w)
+            self.add_module('amor_b_' + str(c), amor_b)
+
+        if self.aggregation_method == 'parameterized':
+            self.amor_rho = nn.Sequential(
+                nn.Linear(self.q_z_nn_output_dim, self.num_learners, 1),
+                nn.Softmax(dim=1),
+            )
+        else:
+            self.amor_rho = None
 
         # Normalizing flow layers
         for c in range(self.num_learners):
@@ -371,21 +423,31 @@ class BoostedVAE(VAE):
         # return amortized u an w for all flows
         u, w, b = [], [], []
         for c in range(self.num_learners):
-            u_c = getattr(self, 'amor_u_' + str(c))
-            w_c = getattr(self, 'amor_w_' + str(c))
-            b_c = getattr(self, 'amor_b_' + str(c))
-            u.append(u_c(h).view(batch_size, self.num_flows, self.z_size, 1))
-            w.append(w_c(h).view(batch_size, self.num_flows, 1, self.z_size))
-            b.append(b_c(h).view(batch_size, self.num_flows, 1, 1))
+            amor_u = getattr(self, 'amor_u_' + str(c))
+            amor_w = getattr(self, 'amor_w_' + str(c))
+            amor_b = getattr(self, 'amor_b_' + str(c))
+            u.append(amor_u(h).view(batch_size, self.num_flows, self.z_size, 1))
+            w.append(amor_w(h).view(batch_size, self.num_flows, 1, self.z_size))
+            b.append(amor_b(h).view(batch_size, self.num_flows, 1, 1))
 
-        return mean_z, var_z, u, w, b
-
-    def combine_learners(self, Z):
-        if self.use_line_search:
-            # TBD
-            z_out = torch.stack(Z_arr).sum(0) * (1.0 / self.num_learners)
+        if self.aggregation_method == 'parameterized':
+            rho = self.amor_rho(h).view(batch_size, self.num_learners, 1)
         else:
-            z_out = torch.stack(Z_arr).sum(0) * (1.0 / self.num_learners)
+            rho = None
+
+        return mean_z, var_z, u, w, b, rho
+
+    def combine_learners(self, Z, rho):
+        if self.aggregation_method == 'line search':
+            # TBD
+            raise ValueError("line search aggregation method not implemented yet.")
+        elif self.aggregation_method == 'parameterized':
+            Z_arr = torch.stack(Z)
+            batch_size = Z_arr.size(1)
+            Z_arr = Z_arr.view(batch_size, self.z_size, self.num_learners)
+            z_out = torch.bmm(Z_arr, rho).squeeze(2)
+        else:
+            z_out = torch.stack(Z).sum(0) * (1.0 / self.num_learners)
 
         return z_out
 
@@ -395,7 +457,7 @@ class BoostedVAE(VAE):
         Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
         """
         self.log_det_j = self.FloatTensor(x.size(0)).fill_(0.0)
-        z_mu, z_var, u, w, b = self.encode(x)
+        z_mu, z_var, u, w, b, rho = self.encode(x)
         z_0 = self.reparameterize(z_mu, z_var)
 
         Z_arr = []  # z_k found by each learner
@@ -404,6 +466,7 @@ class BoostedVAE(VAE):
                 # WARNING: THIS IS A TERRIBLE WAY TO NORMALIZE THE LIKELIHOODS!!!
                 # SHOULD USE IMPORTANCE SAMPLING, BUT THATS EXPENSIVE...
                 # USE Importance weight like IWAE instead?
+                # Or use parameterized version?
                 # reweight z_0
                 omega = log_normal_standard(Z_arr[-1], dim=1).unsqueeze(1)
                 omega = (omega - omega.min()) + 1e-4  # don't want any to be zero
@@ -423,16 +486,13 @@ class BoostedVAE(VAE):
             # accumulate final transformation from each weak learner
             Z_arr.append(Z_c[-1])
 
-        # TODO: use line search to optimally combine
         # aggregate estimates of z_k across each weak learner
-        z_out = self.combine_learners(Z_arr)
+        z_out = self.combine_learners(Z_arr, rho)
 
         # decode aggregated output of weak learners
         x_mean = self.decode(z_out)
 
         return x_mean, z_mu, z_var, self.log_det_j, z_0, z_out
-
-
 
 
 class PlanarVAE(VAE):
@@ -520,7 +580,6 @@ class RadialVAE(VAE):
         self.num_flows = args.num_flows
 
         # Amortized flow parameters
-        #self.amor_alpha = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
         self.amor_alpha = nn.Sequential(
                 nn.Linear(self.q_z_nn_output_dim, self.num_flows),
                 nn.Softplus(),
@@ -531,7 +590,7 @@ class RadialVAE(VAE):
 
         # Normalizing flow layers
         for k in range(self.num_flows):
-            flow_k = flow(z_size=self.z_size)
+            flow_k = flow()
             self.add_module('flow_' + str(k), flow_k)
 
     def encode(self, x):

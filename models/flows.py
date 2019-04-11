@@ -61,10 +61,9 @@ class Radial(nn.Module):
     by Danilo Jimenez Rezende, Shakir Mohamed. Model assumes amortized flow parameters.
     """
 
-    def __init__(self, z_size):
+    def __init__(self):
 
         super(Radial, self).__init__()
-        self.z_size = z_size
         self.softplus = nn.Softplus()
 
     def der_h(self, r, alpha):
@@ -77,6 +76,7 @@ class Radial(nn.Module):
         """
         Forward pass.
         """
+        z_size = z0.size(1)
         zk = zk.unsqueeze(2)
         z0 = z0.unsqueeze(2)
 
@@ -91,7 +91,7 @@ class Radial(nn.Module):
 
         # compute logdetJ
         log_det_jacobian = safe_log(torch.bmm(1 + beta_h + (beta_hat * self.der_h(r, alpha) * r),
-            (1.0 + beta_h)**(self.z_size - 1)))
+            (1.0 + beta_h)**(z_size - 1)))
         log_det_jacobian = log_det_jacobian.squeeze(2).squeeze(1)
 
         return z, log_det_jacobian
