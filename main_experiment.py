@@ -155,7 +155,11 @@ def run(args, kwargs):
     elif args.flow == 'iaf':
         snap_dir = snap_dir + '_madehsize_' + str(args.made_h_size)
     elif args.flow in ['boosted', 'bagged']:
-        snap_dir = snap_dir + '_' + args.learner_type + '_num_learners_' + str(args.num_learners)
+        snap_dir = snap_dir + '_' + args.learner_type
+        if args.flow == "boosted":
+            snap_dir = snap_dir + '_' + args.aggregation_method
+
+        snap_dir = snap_dir + '_num_learners_' + str(args.num_learners)
 
     snap_dir = snap_dir + '_' + args.model_signature + '/'
 
