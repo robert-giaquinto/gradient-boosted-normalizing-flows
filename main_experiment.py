@@ -97,8 +97,8 @@ parser.add_argument('-l', '--learner_type', type=str, default='planar',
     choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', 'random'],
     metavar='FLOW_TYPE',
     help='When flow is bagged or boosted -- what type of flow should each weak learner implement.')
-parser.add_argument('-agg', '--aggregation_method', type=str, default='parameterized',
-    choices=['parameterized', 'average', 'line search'],
+parser.add_argument('-agg', '--aggregation_method', type=str, default='parameterize',
+    choices=['parameterize', 'average', 'line search'],
     metavar='AGGREGATION_METHOD',
     help='When flow is bagged or boosted -- how should weak learners be combined.')
 
@@ -203,7 +203,7 @@ def run(args, kwargs):
 
 
     # group model parameters to more easily modify learning rates of weak learners (flow parameters)
-    debug_param_groups = True
+    debug_param_groups = False
     if args.flow in ['boosted', 'bagged']:
 
         param_labels = []

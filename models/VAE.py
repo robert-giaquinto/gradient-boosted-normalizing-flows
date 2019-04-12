@@ -394,7 +394,7 @@ class BoostedVAE(VAE):
             self.add_module('amor_w_' + str(c), amor_w)
             self.add_module('amor_b_' + str(c), amor_b)
 
-        if self.aggregation_method == 'parameterized':
+        if self.aggregation_method == 'parameterize':
             self.amor_rho = nn.Sequential(
                 nn.Linear(self.q_z_nn_output_dim, self.num_learners, 1),
                 nn.Softmax(dim=1),
@@ -430,7 +430,7 @@ class BoostedVAE(VAE):
             w.append(amor_w(h).view(batch_size, self.num_flows, 1, self.z_size))
             b.append(amor_b(h).view(batch_size, self.num_flows, 1, 1))
 
-        if self.aggregation_method == 'parameterized':
+        if self.aggregation_method == 'parameterize':
             rho = self.amor_rho(h).view(batch_size, self.num_learners, 1)
         else:
             rho = None
@@ -441,7 +441,7 @@ class BoostedVAE(VAE):
         if self.aggregation_method == 'line search':
             # TBD
             raise ValueError("line search aggregation method not implemented yet.")
-        elif self.aggregation_method == 'parameterized':
+        elif self.aggregation_method == 'parameterize':
             Z_arr = torch.stack(Z)
             batch_size = Z_arr.size(1)
             Z_arr = Z_arr.view(batch_size, self.z_size, self.num_learners)
