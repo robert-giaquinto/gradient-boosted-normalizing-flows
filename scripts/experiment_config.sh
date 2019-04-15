@@ -1,0 +1,11 @@
+seed=1
+dataset=mnist
+bs=64
+log_int=0
+plot_int=25
+learner_type=planar
+aggregation_method=average
+warmup=200
+epochs=1500
+early_stopping_epochs=50
+z_size=64
