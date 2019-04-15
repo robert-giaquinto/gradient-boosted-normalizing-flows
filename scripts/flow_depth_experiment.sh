@@ -4,7 +4,7 @@
 
 
 # Load defaults for all experiments
-source experiment_config.sh
+source /export/scratch/robert/ensemble-normalizing-flows/scripts/experiment_config.sh
 
 # activate virtual environment
 cd /export/scratch/robert/ensemble-normalizing-flows
