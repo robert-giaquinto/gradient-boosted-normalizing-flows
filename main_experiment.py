@@ -22,6 +22,9 @@ parser.add_argument('-d', '--dataset', type=str, default='mnist',
     metavar='DATASET',
     help='Dataset choice.')
 
+# seeds
+parser.add_argument('--manual_seed', type=int,
+    help='manual seed, if not given resorts to random seed.')
 parser.add_argument('-freys', '--freyseed', type=int, default=123,
     metavar='FREYSEED',
     help="""Seed for shuffling frey face dataset for test split. Ignored for other datasets.
@@ -34,14 +37,11 @@ parser.add_argument('--num_workers', type=int, default=0, metavar='CPU',
 parser.add_argument('-nc', '--no_cuda', action='store_true', default=False,
     help='disables CUDA training')
 
-parser.add_argument('--manual_seed', type=int,
-    help='manual seed, if not given resorts to random seed.')
-
+# Reporting
 parser.add_argument('-li', '--log_interval', type=int, default=10, metavar='LOG_INTERVAL',
     help='how many batches to wait before logging training status. Set to <0 to turn off.')
 parser.add_argument('-pi', '--plot_interval', type=int, default=10, metavar='PLOT_INTERVAL',
     help='how many batches to wait before creating reconstruction plots. Set to <0 to turn off.')
-
 parser.add_argument('-od', '--out_dir', type=str, default='snapshots', metavar='OUT_DIR',
     help='output directory for model snapshots etc.')
 
@@ -101,6 +101,11 @@ parser.add_argument('-agg', '--aggregation_method', type=str, default='parameter
     choices=['parameterize', 'average', 'line search'],
     metavar='AGGREGATION_METHOD',
     help='When flow is bagged or boosted -- how should weak learners be combined.')
+parser.add_argument('-rwt', '--boosting_reweighting', type=str, default='zk',
+    choices=['zk', 'z0', 'none', 'both'],
+    metavar='BOOSTING_REWEIGHTING',
+    help='When flow is bagged or boosted -- how should each sample be reweighted.')
+
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
@@ -157,7 +162,7 @@ def run(args, kwargs):
     elif args.flow in ['boosted', 'bagged']:
         snap_dir = snap_dir + '_' + args.learner_type
         if args.flow == "boosted":
-            snap_dir = snap_dir + '_' + args.aggregation_method
+            snap_dir = snap_dir + '_' + args.aggregation_method + '_' + args.boosting_reweighting
 
         snap_dir = snap_dir + '_num_learners_' + str(args.num_learners)
 
@@ -203,7 +208,7 @@ def run(args, kwargs):
     else:
         raise ValueError('Invalid flow choice')
 
-    print(model)
+    #print(model)
 
 
     # group model parameters to more easily modify learning rates of weak learners (flow parameters)

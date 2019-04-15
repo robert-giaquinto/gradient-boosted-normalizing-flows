@@ -3,9 +3,10 @@ import torch
 import torch.nn as nn
 import models.flows as flows
 from models.layers import GatedConv2d, GatedConvTranspose2d
-from utils.distributions import log_normal_standard
+from utils.distributions import log_normal_standard, log_normal_diag
 import random
 from scipy.optimize import line_search
+from utils.utilities import safe_log
 
 
 class VAE(nn.Module):
@@ -373,8 +374,10 @@ class BoostedVAE(VAE):
 
         # boosting parameters
         self.num_learners = args.num_learners
-        self.aggregation_method = args.aggregation_method
         self.num_flows = args.num_flows
+        self.reweighting = args.boosting_reweighting
+        # WARNING aggregation_method=="parameterize" results in negative KLs ATM, need to fix!
+        self.aggregation_method = args.aggregation_method
 
         # Initialize log-det-jacobian to zero
         self.log_det_j = self.FloatTensor(1, 1).fill_(0.0)
@@ -451,6 +454,40 @@ class BoostedVAE(VAE):
 
         return z_out
 
+    def reweight_samples(self, z_0, zk, z_mu, log_var):
+        """
+        reweight z_0
+
+        can importance weighting be incorporated
+        """
+        if self.reweighting == "none":
+            omega = 1.0
+        elif self.reweighting == "zk":
+            # WARNING: THIS IS A TERRIBLE WAY TO NORMALIZE THE LIKELIHOODS!!!
+            omega = log_normal_standard(zk, dim=1).unsqueeze(1)
+            omega = (omega - omega.min()) + 1e-4  # don't want any to be zero
+            omega = (omega / omega.max()) + 0.5  # center around 1.0, should be along [0.5, 1.5]
+            omega = omega.reciprocal()
+        elif self.reweighting == "z0":
+            omega = log_normal_diag(z_0, mean=z_mu, log_var=log_var, dim=1).unsqueeze(1)
+            omega = (omega - omega.min()) + 1e-4
+            omega = (omega / omega.max()) + 0.5
+            omega = omega.reciprocal()
+        elif self.reweighting == "both":
+            zk_lhood = log_normal_standard(zk, dim=1)
+            z0_lhood = log_normal_diag(z_0, mean=z_mu, log_var=log_var, dim=1)
+            lhoods = torch.stack((zk_lhood, z0_lhood), dim=1)
+            omega = torch.logsumexp(lhoods, dim=1).unsqueeze(1)
+            omega = (omega - omega.min()) + 1e-4
+            omega = (omega / omega.max()) + 0.5
+            omega = omega.reciprocal()
+        else:
+            raise ValueError("Only accepts sample reweighting based on zk, z0, or none")
+
+        return z_0 * omega
+
+
+
     def forward(self, x):
         """
         Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
@@ -463,15 +500,7 @@ class BoostedVAE(VAE):
         Z_arr = []  # z_k found by each learner
         for c in range(self.num_learners):
             if c > 0:
-                # WARNING: THIS IS A TERRIBLE WAY TO NORMALIZE THE LIKELIHOODS!!!
-                # SHOULD USE IMPORTANCE SAMPLING, BUT THATS EXPENSIVE...
-                # USE Importance weight like IWAE instead?
-                # Or use parameterized version?
-                # reweight z_0
-                omega = log_normal_standard(Z_arr[-1], dim=1).unsqueeze(1)
-                omega = (omega - omega.min()) + 1e-4  # don't want any to be zero
-                omega = (omega / omega.max()) + 0.5  # center around 1.0, should be along [0.5, 1.5]
-                z_0c = z_0 * omega.reciprocal()
+                z_0c = self.reweight_samples(z_0, Z_arr[-1], z_mu, safe_log(z_var))
             else:
                 z_0c = z_0
 
@@ -481,7 +510,11 @@ class BoostedVAE(VAE):
                 flow_c_k = getattr(self, 'flow_' + str(c) + '_' + str(k))
                 z_ck, ldj = flow_c_k(Z_c[k], u[c][:, k, :, :], w[c][:, k, :, :], b[c][:, k, :, :])
                 Z_c.append(z_ck)
-                self.log_det_j += ldj
+
+                if self.aggregation_method == "average":
+                    self.log_det_j += ldj * (1.0 / self.num_learners)
+                elif self.aggregation_method == "parameterize":
+                    self.log_det_j += ldj * rho[:, c, 0]
 
             # accumulate final transformation from each weak learner
             Z_arr.append(Z_c[-1])
