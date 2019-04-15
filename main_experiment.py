@@ -97,10 +97,10 @@ parser.add_argument('-l', '--learner_type', type=str, default='planar',
     choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', 'random'],
     metavar='FLOW_TYPE',
     help='When flow is bagged or boosted -- what type of flow should each weak learner implement.')
-parser.add_argument('-agg', '--aggregation_method', type=str, default='parameterize',
+parser.add_argument('-agg', '--aggregation_method', type=str, default='average',
     choices=['parameterize', 'average', 'line search'],
     metavar='AGGREGATION_METHOD',
-    help='When flow is bagged or boosted -- how should weak learners be combined.')
+    help='When flow is boosted -- how should weak learners be combined.')
 parser.add_argument('-rwt', '--boosting_reweighting', type=str, default='zk',
     choices=['zk', 'z0', 'none', 'both'],
     metavar='BOOSTING_REWEIGHTING',
