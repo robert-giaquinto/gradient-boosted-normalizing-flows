@@ -104,6 +104,7 @@ def evaluate(data_loader, model, args, save_plots=True, epoch=None):
     avg_loss = loss / len(data_loader)
     avg_rec = rec / len(data_loader)
     avg_kl = kl / len(data_loader)
+
     return avg_loss, avg_rec, avg_kl
 
 

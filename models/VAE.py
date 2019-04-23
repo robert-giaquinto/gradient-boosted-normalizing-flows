@@ -463,30 +463,30 @@ class BoostedVAE(VAE):
         if self.reweighting == "none":
             omega = 1.0
         elif self.reweighting == "zk":
-            # WARNING: THIS IS A TERRIBLE WAY TO NORMALIZE THE LIKELIHOODS!!!
-            omega = log_normal_standard(zk, dim=1).unsqueeze(1)
-            omega = (omega - omega.min()) + 1e-4  # don't want any to be zero
-            omega = (omega / omega.max()) + 0.5  # center around 1.0, should be along [0.5, 1.5]
-            omega = omega.reciprocal()
+            # Similar to importance weighted autoencoder, but boost observations that the previous
+            # learner put close to the prior
+            log_pzk = log_normal_standard(zk, dim=1).unsqueeze(1) # prior log-likelihood of z_k^{c-1}
+            wt = torch.exp(log_pzk - log_pzk.max())
+            # put more weight to observations that weren't transformed far from the prior
+            omega = wt / wt.sum(dim=0)
         elif self.reweighting == "z0":
-            omega = log_normal_diag(z_0, mean=z_mu, log_var=log_var, dim=1).unsqueeze(1)
-            omega = (omega - omega.min()) + 1e-4
-            omega = (omega / omega.max()) + 0.5
-            omega = omega.reciprocal()
+            # Similar to importance weighted autoencoder, but boost observations underrepresented
+            # by approximation  q_0(z_0)
+            log_qz0 = log_normal_diag(z_0, mean=z_mu, log_var=log_var, dim=1).unsqueeze(1)
+            # take reciprocal: boost observation i where z_0[i] has low likelihood 
+            wt = torch.exp(log_qz0.max() - log_qz0)
+            omega = wt / wt.sum(dim=0)
         elif self.reweighting == "both":
-            zk_lhood = log_normal_standard(zk, dim=1)
-            z0_lhood = log_normal_diag(z_0, mean=z_mu, log_var=log_var, dim=1)
-            lhoods = torch.stack((zk_lhood, z0_lhood), dim=1)
-            omega = torch.logsumexp(lhoods, dim=1).unsqueeze(1)
-            omega = (omega - omega.min()) + 1e-4
-            omega = (omega / omega.max()) + 0.5
-            omega = omega.reciprocal()
+            # importance weighting from Vboosting: boost those near prior and underrepresented by approximation
+            log_pzk = log_normal_standard(zk, dim=1).unsqueeze(1)  # prior
+            log_qz0 = log_normal_diag(z_0, mean=z_mu, log_var=log_var, dim=1).unsqueeze(1)  # approximation
+            lhood_ratio = log_pzk - log_qz0
+            wt = torch.exp(lhood_ratio - lhood_ratio.max())
+            omega = wt / wt.sum(dim=0)
         else:
             raise ValueError("Only accepts sample reweighting based on zk, z0, or none")
 
         return z_0 * omega
-
-
 
     def forward(self, x):
         """
