@@ -2,156 +2,209 @@ import torch
 from functools import reduce
 import numpy as np
 import random
+import datetime
+import time
 
 from optimization.loss import calculate_loss, calculate_loss_array
 from utils.plotting import plot_reconstructions
 from scipy.misc import logsumexp
-
-import numpy as np
-
-
-def train(epoch, train_loader, model, opt, args):
-    model.train()
-
-    num_trained = 0
-    total_data = len(train_loader.sampler)
-    total_batches = len(train_loader)
-
-    train_loss = np.zeros(total_batches)
-    train_bpd = np.zeros(total_batches)
-    train_rec = np.zeros(total_batches)
-    train_kl = np.zeros(total_batches)
-
-    # set warmup coefficient
-    beta = min([(epoch * 1.) / max([args.warmup, 1.]), args.max_beta])
-
-    for batch_id, (data, _) in enumerate(train_loader):
-        data = data.to(args.device)
-
-        if args.dynamic_binarization:
-            data = torch.bernoulli(data)
-
-        opt.zero_grad()
-        x_mean, z_mu, z_var, ldj, z0, zk = model(data)
-
-        # adjust learning rates if performing boosting
-        if args.flow in ["bagged"]:
-            # set the learning rate of all but one weak learner to zero
-            for c in range(args.num_learners):
-                if c == model.last_learner_trained:
-                    opt.param_groups[c]['lr'] = args.learning_rate
-                else:
-                    opt.param_groups[c]['lr'] = 0.0
+from optimization.evaluation import evaluate, evaluate_likelihood
 
 
-        # why is loss crashing sometimes?
-        if x_mean.min() < 0 or x_mean.max() > 1:
-            print("\nERROR RECONSTRUCTION NOT IN [0,1]")
-            print(x_mean, x_mean.min(), x_mean.max(), "\n")
-            x_mean = x_mean - x_mean.min()
-            x_mean = x_mean / x.max()
+def train(train_loader, val_loader, model, optimizer, args):
+	header_msg = f'| Epoch |  TRAIN{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"| ": >4}'
+	header_msg += f'{"VALIDATION": >11}{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"|": >3}'
+	print('|' + "-"*(len(header_msg)-2) + '|')
+	print(header_msg)
+	print('|' + "-"*(len(header_msg)-2) + '|')
+
+	if args.flow == "boosted":
+		train_loss, train_rec, train_kl, val_loss, val_rec, val_kl, train_times  = train_boosted(train_loader, val_loader, model, optimizer, args)
+	else:
+		train_loss, train_rec, train_kl, val_loss, val_rec, val_kl, train_times  = train_vae(train_loader, val_loader, model, optimizer, args)
+
+	# save training and validation results
+	train_loss = np.hstack(train_loss)
+	train_rec = np.hstack(train_rec)
+	train_kl = np.hstack(train_kl)
+	val_loss = np.array(val_loss)
+	val_rec = np.array(val_rec)
+	val_kl = np.array(val_kl)
+	train_times = np.array(train_times)
+
+	print('|' + "-"*(len(header_msg)-2) + '|')
+	timing_msg = f"\nStopped after {train_times.shape[0]} epochs\n"
+	timing_msg += f"Average train time per epoch: {np.mean(train_times):.2f} +/- {np.std(train_times, ddof=1):.2f}"
+	print(timing_msg)
 
 
+	if args.save_results:
+		np.savetxt(args.snap_dir + '/train_loss.csv', train_loss, fmt='%f', delimiter=',')
+		np.savetxt(args.snap_dir + '/train_rec.csv', train_rec, fmt='%f', delimiter=',')
+		np.savetxt(args.snap_dir + '/train_kl.csv', train_kl, fmt='%f', delimiter=',')
+		np.savetxt(args.snap_dir + '/val_loss.csv', val_loss, fmt='%f', delimiter=',')
+		np.savetxt(args.snap_dir + '/val_rec.csv', val_rec, fmt='%f', delimiter=',')
+		np.savetxt(args.snap_dir + '/val_kl.csv', val_kl, fmt='%f', delimiter=',')
 
-        loss, rec, kl = calculate_loss(x_mean, data, z_mu, z_var, z0, zk, ldj, args, beta=beta)
-        loss.backward()
-        opt.step()
+		with open(args.exp_log, 'a') as ff:
+			timestamp = str(datetime.datetime.now())[0:19].replace(' ', '_')
+			setup_msg = ' '.join([timestamp, args.flow, args.dataset]) + "\n" + repr(args)
+			print("\n" + setup_msg + "\n" + timing_msg, file=ff)
 
-        train_loss[batch_id] = loss.item()
-        train_rec[batch_id] = rec.item()
-        train_kl[batch_id] = kl.item()
-
-        num_trained += len(data)
-        pct_complete = 100. * batch_id / total_batches
-        if args.log_interval > 0 and batch_id % args.log_interval == 0:
-            msg = 'Epoch: {:3d} [{:5d}/{:5d} ({:2.0f}%)]   \tLoss: {:11.6f}\trec: {:11.3f}\tkl: {:11.6f}'
-
-            if args.input_type == 'binary':
-                print(msg.format(
-                    epoch, num_trained, total_data, pct_complete, loss.item(), rec.item(), kl.item()))
-            else:
-                msg += '\tbpd: {:8.6f}'
-                bpd = loss.item() / (np.prod(args.input_size) * np.log(2.))
-                print(msg.format(
-                    epoch, num_trained, total_data, pct_complete,loss.item(), rec.item(), kl.item(), bpd))
-
-    return train_loss, train_rec, train_kl
+	return train_loss, val_loss
 
 
-def evaluate(data_loader, model, args, save_plots=True, epoch=None):
-    model.eval()
+def train_boosted(train_loader, val_loader, model, optimizer, args):
+	train_loss = []
+	train_rec = []
+	train_kl = []
+	val_loss = []
+	val_rec = []
+	val_kl = []
 
-    loss = 0.0
-    rec = 0.0
-    kl = 0.0
+	# for early stopping
+	best_loss = np.inf
+	best_bpd = np.inf
+	e = 0
+	epoch = 0
+	train_times = []
 
-    for batch_id, (data, _) in enumerate(data_loader):
-        data = data.to(args.device)
+	model.learner = 0
+	for c in range(args.num_learners):
+		optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.learner else 0.0
 
-        x_mean, z_mu, z_var, ldj, z0, zk = model(data)
+	for epoch in range(1, args.epochs + 1):
+		t_start = time.time()
+		tr_loss, tr_rec, tr_kl = train_epoch(epoch, train_loader, model, optimizer, args)
+		train_times.append(time.time() - t_start)
+		train_loss.append(tr_loss)
+		train_rec.append(tr_rec)
+		train_kl.append(tr_kl)
 
-        batch_loss, batch_rec, batch_kl = calculate_loss(x_mean, data, z_mu, z_var, z0, zk, ldj, args)
-        loss += batch_loss.item()
-        rec += batch_rec.item()
-        kl += batch_kl.item()
+		v_loss, v_rec, v_kl = evaluate(val_loader, model, args, save_plots=True, epoch=epoch)
+		val_loss.append(v_loss)
+		val_rec.append(v_rec)
+		val_kl.append(v_kl)
 
-        # PRINT RECONSTRUCTIONS
-        save_this_epoch = epoch is None or epoch==1 or \
-            (args.plot_interval > 0 and epoch % args.plot_interval == 0)
-        if batch_id == 0 and save_plots and save_this_epoch:
-            plot_reconstructions(data=data, recon_mean=x_mean, loss=batch_loss, args=args, epoch=epoch)
+		epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}'
+		epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}'
+		print(epoch_msg + f'{"| ": >4}')
 
-    avg_loss = loss / len(data_loader)
-    avg_rec = rec / len(data_loader)
-    avg_kl = kl / len(data_loader)
+		# compute value of grad elbo
+		
+		# new learner performance converged?
+		if epoch % 5 == 0:
+			model.learner += 1
 
-    return avg_loss, avg_rec, avg_kl
+			# set the learning rate of all but one weak learner to zero
+			for c in range(args.num_learners):
+				optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.learner else 0.0
+
+		# early-stopping: does adding a new learner help?
+		if v_loss < best_loss:
+			e = 0
+			best_loss = v_loss
+			torch.save(model, args.snap_dir + 'model.pt')
+		elif (args.early_stopping_epochs > 0) and (epoch >= args.warmup):
+			e += 1
+			if e > args.early_stopping_epochs:
+				break
+
+	return train_loss, train_rec, train_kl, val_loss, val_rec, val_kl, train_times
 
 
+def train_vae(train_loader, val_loader, model, optimizer, args):
+	train_loss = []
+	train_rec = []
+	train_kl = []
+	val_loss = []
+	val_rec = []
+	val_kl = []
+
+	# for early stopping
+	best_loss = np.inf
+	best_bpd = np.inf
+	e = 0
+	epoch = 0
+	train_times = []
+
+	for epoch in range(1, args.epochs + 1):
+		t_start = time.time()
+		tr_loss, tr_rec, tr_kl = train_epoch(epoch, train_loader, model, optimizer, args)
+		train_times.append(time.time() - t_start)
+		train_loss.append(tr_loss)
+		train_rec.append(tr_rec)
+		train_kl.append(tr_kl)
+
+		v_loss, v_rec, v_kl = evaluate(val_loader, model, args, save_plots=True, epoch=epoch)
+		val_loss.append(v_loss)
+		val_rec.append(v_rec)
+		val_kl.append(v_kl)
+
+		epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}'
+		epoch_msg += f'{"| ": >4}{v_loss:22.3f}{v_rec:19.3f}{v_kl:12.3f}'
+		print(epoch_msg + f'{"| ": >4}')
+
+		# early-stopping: does adding a new learner help?
+		if v_loss < best_loss:
+			e = 0
+			best_loss = v_loss
+			torch.save(model, args.snap_dir + 'model.pt')
+		elif (args.early_stopping_epochs > 0) and (epoch >= args.warmup):
+			e += 1
+			if e > args.early_stopping_epochs:
+				break
+
+	return train_loss, train_rec, train_kl, val_loss, val_rec, val_kl, train_times
 
 
-def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000):
-    """
-    Calculate negative log likelihood using importance sampling
-    """
+def train_epoch(epoch, train_loader, model, opt, args):
+	model.train()
 
-    model.eval()
+	num_trained = 0
+	total_data = len(train_loader.sampler)
+	total_batches = len(train_loader)
 
-    X = torch.cat([x for x, y in list(data_loader)], 0).to(args.device)
+	train_loss = np.zeros(total_batches)
+	train_bpd = np.zeros(total_batches)
+	train_rec = np.zeros(total_batches)
+	train_kl = np.zeros(total_batches)
 
-    # set auxiliary variables for number of training and test sets
-    N_test = X.size(0)
+	# set warmup coefficient
+	beta = min([(epoch * 1.) / max([args.warmup, 1.]), args.max_beta])
 
-    likelihood_test = []
+	for batch_id, (data, _) in enumerate(train_loader):
+		data = data.to(args.device)
 
-    if S <= MB:
-        R = 1
-    else:
-        R = S // MB
-        S = MB
+		if args.dynamic_binarization:
+			data = torch.bernoulli(data)
 
-    for j in range(N_test):
-        if j % 100 == 0:
-            print('Progress: {:.2f}%'.format(j / (1. * N_test) * 100))
+		opt.zero_grad()
+		x_mean, z_mu, z_var, ldj, z0, zk = model(data)
 
-        x_single = X[j].unsqueeze(0)
+		loss, rec, kl = calculate_loss(x_mean, data, z_mu, z_var, z0, zk, ldj, args, beta=beta)
+		loss.backward()
+		opt.step()
 
-        a = []
-        for r in range(0, R):
-            # Repeat it for all training points
-            x = x_single.expand(S, *x_single.size()[1:]).contiguous()
-            x_mean, z_mu, z_var, ldj, z0, zk = model(x)
+		train_loss[batch_id] = loss.item()
+		train_rec[batch_id] = rec.item()
+		train_kl[batch_id] = kl.item()
 
-            a_tmp = calculate_loss_array(x_mean, x, z_mu, z_var, z0, zk, ldj, args)
-            a.append(-a_tmp.cpu().data.numpy())
+		num_trained += len(data)
+		pct_complete = 100. * batch_id / total_batches
+		if args.log_interval > 0 and batch_id % args.log_interval == 0:
+			msg = 'Epoch: {:3d} [{:5d}/{:5d} ({:2.0f}%)]   \tLoss: {:11.6f}\trec: {:11.3f}\tkl: {:11.6f}'
 
-        # calculate max
-        a = np.asarray(a)
-        a = np.reshape(a, (a.shape[0] * a.shape[1], 1))
-        likelihood_x = logsumexp(a)
-        likelihood_test.append(likelihood_x - np.log(len(a)))
+			if args.input_type == 'binary':
+				print(msg.format(
+					epoch, num_trained, total_data, pct_complete, loss.item(), rec.item(), kl.item()))
+			else:
+				msg += '\tbpd: {:8.6f}'
+				bpd = loss.item() / (np.prod(args.input_size) * np.log(2.))
+				print(msg.format(
+					epoch, num_trained, total_data, pct_complete,loss.item(), rec.item(), kl.item(), bpd))
 
-    likelihood_test = np.array(likelihood_test)
-    nll = -np.mean(likelihood_test)
-    return nll
+	return train_loss, train_rec, train_kl
+
+
 
