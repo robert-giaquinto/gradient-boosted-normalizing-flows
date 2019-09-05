@@ -432,7 +432,9 @@ class BoostedVAE(VAE):
             j = self.learner + 1
         else:
             c = max(self.learner + 1 if sample_from == "all" else self.learner, 1)
-            j = torch.multinomial(self.rho[0:c], 1, replacement=True).item()
+            rho_hat = self.rho[0:c] / torch.sum(self.rho[0:c])
+            print(f"rho {self.rho[0:c]}, rho_hat {rho_hat}")
+            j = torch.multinomial(rho_hat, 1, replacement=True).item()
 
         for k in range(self.num_flows):
             z_jk, ldj = self.flow(z[k], u[j][:, k, :, :], w[j][:, k, :, :], b[j][:, k, :, :])
@@ -444,30 +446,31 @@ class BoostedVAE(VAE):
     def _gradient_rho(self, x):
         batch_size = x.size(0)
         x_recon, z_mu, z_var, ldj, z0, zk = self.forward(x, sample_from="all")
-        loss, recon, kl = calculate_loss(x_recon, x, z_mu, z_var, z0, zk, ldj, self.args)
+        _, recon, kl = calculate_loss(x_recon, x, z_mu, z_var, z0, zk, ldj, self.args)
+        gamma = recon + kl + 1.0
         _, _, _, gc = self.encode(x, sample_from="new")
         _, _, _, Gprev = self.encode(x, sample_from="fixed")
-        return torch.sum((gc - Gprev) * loss) / batch_size
+        return torch.sum((gc - Gprev) * gamma) / batch_size
         
     def update_rho(self, data_loader):
         """
-        Use line search to find an optimal rho for new weak learner
+        trying exponentiated gradient descent or projected
         """
         if self.learner > 0:
             init = 1.0 / self.num_learners
             step_size = 0.005
+            num_iters = 50
 
             rho_c = init
-            for x, _ in data_loader:
+            for batch_id, (x, _) in enumerate(data_loader):
                 gradient = self._gradient_rho(x)
-                rho_c = rho_c + step_size * gradient
+                #rho_c = rho_c * torch.exp(step_size * gradient)
+                rho_c = torch.clamp(rho_c - step_size * gradient, min=0.0, max=1.0)
+                self.rho[self.learner] = rho_c
+                
+                if batch_id > num_iters:
+                    break
 
-            # map rhos to simplex
-            rhos = torch.cat((self.rho[0:self.learner], rho_c))
-            rhos = torch.exp(rhos) / torch.sum(torch.exp(rhos))
-
-            # is this assignment ok?
-            self.rho[0:self.learner + 1] = rhos
 
     def forward(self, x, sample_from="fixed"):
         """

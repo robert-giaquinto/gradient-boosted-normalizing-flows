@@ -88,7 +88,9 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
 
         # new learner performance converged?
         if epoch % 5 == 0:
+            print(f"Rho pre-update: {model.rho}")
             model.update_rho()
+            print(f"Rho post-update: {model.rho}")
             model.learner += 1
 
             # set the learning rate of all but one weak learner to zero
