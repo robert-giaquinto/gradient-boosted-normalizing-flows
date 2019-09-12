@@ -5,7 +5,7 @@ import random
 import datetime
 import time
 
-from optimization.loss import calculate_loss, calculate_loss_array
+from optimization.loss import calculate_loss, calculate_loss_array, boosted_regularizer
 from utils.plotting import plot_reconstructions
 from scipy.misc import logsumexp
 from optimization.evaluation import evaluate, evaluate_likelihood
@@ -58,6 +58,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
     # for early stopping
     best_loss = np.inf
     best_bpd = np.inf
+    prev_v_kl = np.inf
     e = 0
     epoch = 0
     train_times = []
@@ -68,7 +69,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
 
     for epoch in range(1, args.epochs + 1):
         t_start = time.time()
-        tr_loss, tr_rec, tr_kl = train_epoch(epoch, train_loader, model, optimizer, args)
+        tr_loss, tr_rec, tr_kl = train_epoch_boosted(epoch, train_loader, model, optimizer, args)
         train_times.append(time.time() - t_start)
         train_loss.append(tr_loss)
         train_rec.append(tr_rec)
@@ -79,24 +80,34 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
         val_rec.append(v_rec)
         val_kl.append(v_kl)
 
+        if epoch < args.burnin + args.warmup:
+            offset = (1.0 / (args.burnin + args.warmup))
+            c1_epochs = max([args.warmup + args.burnin, 1.])
+            beta = min([((((epoch - 1) % (args.warmup + args.burnin)) * 1.) / c1_epochs) + offset,
+                        args.max_beta ])
+        else:
+            beta = min([(((epoch - 1) % args.warmup) * 1.) / max([args.warmup, 1.]) + (1.0 / args.warmup), args.max_beta])
+
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}'
-        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}'
-        print(epoch_msg + f'{"| ": >4}')
+        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f} {beta:8.3f}'
 
         # compute value of grad elbo
+        converged = abs(v_kl - prev_v_kl) < 1.0
         
 
         # new learner performance converged?
-        if epoch % 5 == 0:
-            print(f"Rho pre-update: {model.rho}")
-            model.update_rho()
-            print(f"Rho post-update: {model.rho}")
-            model.learner += 1
+        update_schedule = args.warmup + args.burnin if epoch < (args.burnin + args.warmup) else args.warmup
+        if epoch % update_schedule == 0 and model.learner < model.num_learners:
+            model.update_rho(train_loader)
+            epoch_msg += f'  | {converged} Rho Updated: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]) 
+            model.learner += 1 if model.learner < model.num_learners - 1 else 0
 
             # set the learning rate of all but one weak learner to zero
             for c in range(args.num_learners):
                 optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.learner else 0.0
 
+
+        print(epoch_msg + f'{"| ": >4}')
         # early-stopping: does adding a new learner help?
         if v_loss < best_loss:
             e = 0
@@ -106,6 +117,8 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
             e += 1
             if e > args.early_stopping_epochs:
                 break
+
+        prev_v_kl = v_kl
 
     train_loss = np.hstack(train_loss)
     train_rec = np.hstack(train_rec)
@@ -134,7 +147,7 @@ def train_vae(train_loader, val_loader, model, optimizer, args):
 
     for epoch in range(1, args.epochs + 1):
         t_start = time.time()
-        tr_loss, tr_rec, tr_kl = train_epoch(epoch, train_loader, model, optimizer, args)
+        tr_loss, tr_rec, tr_kl = train_epoch_vae(epoch, train_loader, model, optimizer, args)
         train_times.append(time.time() - t_start)
         train_loss.append(tr_loss)
         train_rec.append(tr_rec)
@@ -169,7 +182,63 @@ def train_vae(train_loader, val_loader, model, optimizer, args):
     return train_loss, train_rec, train_kl, val_loss, val_rec, val_kl, train_times
 
 
-def train_epoch(epoch, train_loader, model, opt, args):
+def train_epoch_boosted(epoch, train_loader, model, opt, args):
+    model.train()
+
+    num_trained = 0
+    total_data = len(train_loader.sampler)
+    total_batches = len(train_loader)
+
+    train_loss = np.zeros(total_batches)
+    train_bpd = np.zeros(total_batches)
+    train_rec = np.zeros(total_batches)
+    train_kl = np.zeros(total_batches)
+
+    # set warmup coefficient
+    #beta = min([(epoch * 1.) / max([args.warmup, 1.]), args.max_beta])
+    beta = min([(((epoch - 1) % args.warmup) * 1.) / max([args.warmup, 1.]) + (1.0 / args.warmup), args.max_beta])
+
+    for batch_id, (data, _) in enumerate(train_loader):
+        data = data.to(args.device)
+
+        if args.dynamic_binarization:
+            data = torch.bernoulli(data)
+
+        opt.zero_grad()
+        x_recon, z_mu, z_var, ldj, z0, zk = model(data, sample_from="fixed")
+        loss, rec, kl = calculate_loss(x_recon, data, z_mu, z_var, z0, zk, ldj, args, beta=beta)
+
+        if args.regularization_rate > 0:
+            # compute regularization terms
+            _, new_z_mu, new_z_var, new_ldj, new_z0, _ = model(data, sample_from="new")
+            regularizer = boosted_regularizer(new_z_mu, new_z_var, new_z0, new_ldj)
+            loss = loss - args.regularization_rate * regularizer
+        
+        loss.backward()
+        opt.step()
+
+        train_loss[batch_id] = loss.item()
+        train_rec[batch_id] = rec.item()
+        train_kl[batch_id] = kl.item()
+
+        num_trained += len(data)
+        pct_complete = 100. * batch_id / total_batches
+        if args.log_interval > 0 and batch_id % args.log_interval == 0:
+            msg = 'Epoch: {:3d} [{:5d}/{:5d} ({:2.0f}%)]   \tLoss: {:11.6f}\trec: {:11.3f}\tkl: {:11.6f}'
+
+            if args.input_type == 'binary':
+                print(msg.format(
+                    epoch, num_trained, total_data, pct_complete, loss.item(), rec.item(), kl.item()))
+            else:
+                msg += '\tbpd: {:8.6f}'
+                bpd = loss.item() / (np.prod(args.input_size) * np.log(2.))
+                print(msg.format(
+                    epoch, num_trained, total_data, pct_complete,loss.item(), rec.item(), kl.item(), bpd))
+
+    return train_loss, train_rec, train_kl
+
+
+def train_epoch_vae(epoch, train_loader, model, opt, args):
     model.train()
 
     num_trained = 0

@@ -20,7 +20,10 @@ def evaluate(data_loader, model, args, save_plots=True, epoch=None):
     for batch_id, (data, _) in enumerate(data_loader):
         data = data.to(args.device)
 
-        x_mean, z_mu, z_var, ldj, z0, zk = model(data)
+        if args.flow == 'boosted':
+            x_mean, z_mu, z_var, ldj, z0, zk = model(data, sample_from='new')
+        else:
+            x_mean, z_mu, z_var, ldj, z0, zk = model(data)
 
         batch_loss, batch_rec, batch_kl = calculate_loss(x_mean, data, z_mu, z_var, z0, zk, ldj, args)
         loss += batch_loss.item()
@@ -38,8 +41,6 @@ def evaluate(data_loader, model, args, save_plots=True, epoch=None):
     avg_kl = kl / len(data_loader)
 
     return avg_loss, avg_rec, avg_kl
-
-
 
 
 def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000):

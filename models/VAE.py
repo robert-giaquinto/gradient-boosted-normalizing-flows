@@ -8,6 +8,8 @@ import random
 from scipy.optimize import line_search
 from utils.utilities import safe_log
 
+from optimization.loss import calculate_loss
+
 
 class VAE(nn.Module):
     """
@@ -173,8 +175,8 @@ class VAE(nn.Module):
         h = self.q_z_nn(x)
         if not self.simple:
             h = h.view(h.size(0), -1)
-            mean = self.q_z_mean(h)
-            var = self.q_z_var(h)
+        mean = self.q_z_mean(h)
+        var = self.q_z_var(h)
         return mean, var
 
     def decode(self, z):
@@ -184,8 +186,8 @@ class VAE(nn.Module):
         """
         if not self.simple:
             z = z.view(z.size(0), self.z_size, 1, 1)
-            h = self.p_x_nn(z)
-            x_mean = self.p_x_mean(h)
+        h = self.p_x_nn(z)
+        x_mean = self.p_x_mean(h)
         return x_mean
 
     def forward(self, x):
@@ -222,7 +224,7 @@ class BaggedVAE(VAE):
 
         # Flow parameters
         if self.learner_type == "planar":
-            flow = flows.Planar
+            self.flow = flows.Planar()
             # Amortized flow parameters for each weak learner
             for c in range(self.num_learners):
                 amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
@@ -233,7 +235,7 @@ class BaggedVAE(VAE):
                 self.add_module('amor_b_' + str(c), amor_b)
 
         elif self.learner_type == "radial":
-            flow = flows.Radial
+            self.flow = flows.Radial
             for c in range(self.num_learners):
                 amor_alpha = nn.Sequential(
                     nn.Linear(self.q_z_nn_output_dim, self.num_flows),
@@ -248,12 +250,6 @@ class BaggedVAE(VAE):
 
         else:
             raise ValueError("Only radial or planar weak learners allowed for now.")
-
-        # Normalizing flow layers
-        for c in range(self.num_learners):
-            for k in range(self.num_flows):
-                flow_c_k = flow()
-                self.add_module('flow_' + str(c) + '_' + str(k), flow_c_k)
 
     def encode(self, x):
         """
@@ -313,14 +309,12 @@ class BaggedVAE(VAE):
             Z_arr = [z_0]
             # apply flow transformations
             for k in range(self.num_flows):
-                flow_c_k = getattr(self, 'flow_' + str(c) + '_' + str(k))
-
                 if self.learner_type == "planar":
                     u, w, b = flow_params[c]
-                    z_k, ldj = flow_c_k(Z_arr[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
+                    z_k, ldj = self.flow(Z_arr[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
                 elif self.learner_type == "radial":
                     alpha, beta, z_ref = flow_params[c]
-                    z_k, ldj = flow_c_k(Z_arr[k], z_ref, alpha[:, k, :, :], beta[:, k, :, :])
+                    z_k, ldj = self.flow(Z_arr[k], z_ref, alpha[:, k, :, :], beta[:, k, :, :])
 
                 Z_arr.append(z_k)
                 self.log_det_j += ldj
@@ -378,7 +372,7 @@ class BoostedVAE(VAE):
         self.num_learners = args.num_learners
         self.num_flows = args.num_flows
         self.learner = 0  # current learner being trained / number of learners trained thus far
-        self.rho = self.FloatTensor(self.num_learners).fill_(1.0)  # mixing weights for weak learners
+        self.rho = self.FloatTensor(self.num_learners).fill_(1.0 / self.num_learners)  # mixing weights for weak learners
 
         # Initialize log-det-jacobian to zero
         self.log_det_j = self.FloatTensor(1, 1).fill_(0.0)
@@ -398,86 +392,96 @@ class BoostedVAE(VAE):
             self.add_module('amor_w_' + str(c), amor_w)
             self.add_module('amor_b_' + str(c), amor_b)
 
-    def encode(self, x, sample_from):
+    def _rho_gradient(self, x):
+        """
+        Estimate gradient with Monte Carlo by drawing samples from g_K^c and G_K^(c-1)
+        """
+        # monto carlo sample from g_K^c
+        new_x, new_mu, new_var, new_ldj, new_z0, new_zk = self.forward(x, sample_from="new")
+        new_gamma, _, _ = calculate_loss(new_x, x, new_mu, new_var, new_z0, new_zk, new_ldj, self.args, beta=1.0)
+
+        # monte carlo sample from G_K^(c-1)
+        fix_x, fix_mu, fix_var, fix_ldj, fix_z0, fix_zk = self.forward(x, sample_from="fixed")
+        fix_gamma, _, _ = calculate_loss(fix_x, x, fix_mu, fix_var, fix_z0, fix_zk, fix_ldj, self.args, beta=1.0)
+        return new_gamma, fix_gamma
+        
+    def update_rho(self, data_loader):
+        """
+        trying exponentiated gradient descent or projected
+
+        try a decaying step size as in Guo
+        """
+        if self.learner > 0:
+            step_size = 0.01
+            tolerance = 0.0001
+            max_iters = 500
+
+            prev_rho_j = 1.0 / self.num_learners
+            for batch_id, (x, _) in enumerate(data_loader):
+                x.to(self.args.device).detach()
+
+                new_gamma, fix_gamma = self._rho_gradient(x)
+                gradient = torch.sum(new_gamma - fix_gamma) / x.size(0)
+                #rho_j = prev_rho_j * torch.exp(step_size * gradient)
+                rho_j = torch.clamp(prev_rho_j - (step_size / (batch_id + 1)) * gradient, min=0.05, max=1.0)
+
+                if batch_id % 5 == 0:
+                    print(f"\t{batch_id}: gradient={gradient:.4f}, rho_j={rho_j:.3f}, new_gamma={new_gamma:.1f}, fix_gamma={fix_gamma:.1f}")
+                
+                self.rho[self.learner] = rho_j
+                dif = abs(prev_rho_j - rho_j)
+                prev_rho_j = rho_j
+
+                if batch_id > max_iters or dif < tolerance:
+                    break
+                
+    def encode(self, x):
         """
         Encoder that ouputs parameters for base distribution of z and flow parameters.
-        """
-        batch_size = x.size(0)
-        self.log_det_j = self.FloatTensor(x.size(0)).fill_(0.0)
-        
+        """        
         h = self.q_z_nn(x).view(-1, self.q_z_nn_output_dim)
-        mean_z = self.q_z_mean(h)
-        var_z = self.q_z_var(h)
+        z_mu = self.q_z_mean(h)
+        z_var = self.q_z_var(h)
+        return h, z_mu, z_var
 
-        # TODO combine below, dont need all u,w,b just the j-th component
+    def gradient_boosted_flow(self, h, z_mu, z_var, sample_from):
+        batch_size = h.size(0)
+        self.log_det_j = self.FloatTensor(batch_size).fill_(0.0)
         
-        # return amortized beta = {u, w, b} for first c flows
-        u, w, b = [], [], []
-        for c in range(self.learner + 1):
-            amor_u = getattr(self, 'amor_u_' + str(c))
-            amor_w = getattr(self, 'amor_w_' + str(c))
-            amor_b = getattr(self, 'amor_b_' + str(c))
-            u.append(amor_u(h).view(batch_size, self.num_flows, self.z_size, 1))
-            w.append(amor_w(h).view(batch_size, self.num_flows, 1, self.z_size))
-            b.append(amor_b(h).view(batch_size, self.num_flows, 1, 1))
-
-        ldj_arr = []
         z = [self.reparameterize(z_mu, z_var)]
-
+        
         # draw a component flow.
         # option (b) draw from G_K^(c-1), do not draw from g_K^c
         # ideally, would sample a different flow for each observation.
         # instead, for efficiency/simplicity just sample a flow PER BATCH
         if sample_from == "new":
-            j = self.learner + 1
+            j = self.learner
         else:
-            c = max(self.learner + 1 if sample_from == "all" else self.learner, 1)
-            rho_hat = self.rho[0:c] / torch.sum(self.rho[0:c])
-            print(f"rho {self.rho[0:c]}, rho_hat {rho_hat}")
-            j = torch.multinomial(rho_hat, 1, replacement=True).item()
+            num_components = min(max(self.learner, 1), self.num_learners)
+            rho_simplex = self.rho[0:num_components] / torch.sum(self.rho[0:num_components])
+            j = torch.multinomial(rho_simplex, 1, replacement=True).item()
+
+        amor_u = getattr(self, 'amor_u_' + str(j))
+        amor_w = getattr(self, 'amor_w_' + str(j))
+        amor_b = getattr(self, 'amor_b_' + str(j))
+        u = amor_u(h).view(batch_size, self.num_flows, self.z_size, 1)
+        w = amor_w(h).view(batch_size, self.num_flows, 1, self.z_size)
+        b = amor_b(h).view(batch_size, self.num_flows, 1, 1)
 
         for k in range(self.num_flows):
-            z_jk, ldj = self.flow(z[k], u[j][:, k, :, :], w[j][:, k, :, :], b[j][:, k, :, :])
+            z_jk, ldj = self.flow(z[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
             z.append(z_jk)
             self.log_det_j += ldj
 
-        return mean_z, var_z, z[0], z[-1]
-
-    def _gradient_rho(self, x):
-        batch_size = x.size(0)
-        x_recon, z_mu, z_var, ldj, z0, zk = self.forward(x, sample_from="all")
-        _, recon, kl = calculate_loss(x_recon, x, z_mu, z_var, z0, zk, ldj, self.args)
-        gamma = recon + kl + 1.0
-        _, _, _, gc = self.encode(x, sample_from="new")
-        _, _, _, Gprev = self.encode(x, sample_from="fixed")
-        return torch.sum((gc - Gprev) * gamma) / batch_size
-        
-    def update_rho(self, data_loader):
-        """
-        trying exponentiated gradient descent or projected
-        """
-        if self.learner > 0:
-            init = 1.0 / self.num_learners
-            step_size = 0.005
-            num_iters = 50
-
-            rho_c = init
-            for batch_id, (x, _) in enumerate(data_loader):
-                gradient = self._gradient_rho(x)
-                #rho_c = rho_c * torch.exp(step_size * gradient)
-                rho_c = torch.clamp(rho_c - step_size * gradient, min=0.0, max=1.0)
-                self.rho[self.learner] = rho_c
-                
-                if batch_id > num_iters:
-                    break
-
+        return z[0], z[-1]
 
     def forward(self, x, sample_from="fixed"):
         """
         Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
         Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
         """
-        z_mu, z_var, z0, zk = self.encode(x, sample_from)
+        h, z_mu, z_var = self.encode(x)
+        z0, zk = self.gradient_boosted_flow(h, z_mu, z_var, sample_from)
         x_recon = self.decode(zk)
 
         return x_recon, z_mu, z_var, self.log_det_j, z0, zk

@@ -7,7 +7,7 @@ from utils.utilities import safe_log
 
 
 
-def binary_neg_elbo(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
+def binary_neg_elbo(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.0):
     """
     Computes the binary loss function while summing over batch dimension, not averaged!
     :param recon_x: shape: (batch_size, num_channels, pixel_width, pixel_height), bernoulli parameters p(x=1)
@@ -44,6 +44,36 @@ def binary_neg_elbo(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
     kl = kl / float(batch_size)
 
     return loss, recon_loss, kl
+
+
+def boosted_regularizer(z_mu, z_var, z_0, ldj):
+    """
+    Computes the binary loss function while summing over batch dimension, not averaged!
+    :param recon_x: shape: (batch_size, num_channels, pixel_width, pixel_height), bernoulli parameters p(x=1)
+    :param x: shape (batchsize, num_channels, pixel_width, pixel_height), pixel values rescaled between [0, 1].
+    :param z_mu: mean of z_0
+    :param z_var: variance of z_0
+    :param z_0: first stochastic latent variable
+    :param z_k: last stochastic latent variable
+    :param ldj: log det jacobian
+    :param beta: beta for kl loss
+    :return: loss, ce, kl
+    """
+    # ln g(z_0)  (not averaged)
+    log_g_z0 = log_normal_diag(z_0, mean=z_mu, log_var=safe_log(z_var), dim=1)
+    
+    # N E_q0[ ln g(z_0) ]
+    summed_logs = torch.sum(log_g_z0) 
+
+    # ldj = -N E_q_z0[\sum_k log |det dz_k/dz_k-1| ]
+    # sum over batches
+    summed_ldj = torch.sum(ldj)
+
+    g_entropy = summed_logs - summed_ldj
+
+    batch_size = z_0.size(0)
+    rval = g_entropy / float(batch_size)
+    return rval
 
 
 def multinomial_neg_elbo(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):
