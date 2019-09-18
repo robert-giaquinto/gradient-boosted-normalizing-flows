@@ -13,7 +13,8 @@ from models.boosted_vae import BoostedVAE
 from models.bagged_vae import BaggedVAE
 from models.planar_vae import PlanarVAE
 from models.radial_vae import RadialVAE
-from optimization.training import train, evaluate, evaluate_likelihood
+from optimization.training import train
+from optimization.evaluation import evaluate, evaluate_likelihood
 from utils.load_data import load_dataset
 
 

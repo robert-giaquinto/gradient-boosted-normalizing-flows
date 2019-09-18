@@ -12,7 +12,7 @@ exp_name=num_components
 annealing_schedule=50
 burnin=100
 regularization=0.1
-
+flow_length=2
 
 
 # 1 component
