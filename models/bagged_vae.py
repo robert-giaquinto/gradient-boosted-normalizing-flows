@@ -1,0 +1,160 @@
+import numpy as np
+import torch
+import torch.nn as nn
+import random
+
+from models.vae import VAE
+import models.flows as flows
+
+
+class BaggedVAE(VAE):
+    """
+    Variational auto-encoder with bagged planar flows in the encoder.
+
+    """
+
+    def __init__(self, args):
+        super(BaggedVAE, self).__init__(args)
+
+        # bagging parameters
+        self.component_type = args.component_type
+        self.num_components = args.num_components
+        self.last_component_trained = None
+        self.num_flows = args.num_flows
+
+        # Initialize log-det-jacobian to zero
+        self.log_det_j = self.FloatTensor(1, 1).fill_(0.0)
+
+        # Flow parameters
+        if self.component_type == "planar":
+            self.flow = flows.Planar()
+            # Amortized flow parameters for each weak component
+            for c in range(self.num_components):
+                amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+                amor_w = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+                amor_b = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
+                self.add_module('amor_u_' + str(c), amor_u)
+                self.add_module('amor_w_' + str(c), amor_w)
+                self.add_module('amor_b_' + str(c), amor_b)
+
+        elif self.component_type == "radial":
+            self.flow = flows.Radial
+            for c in range(self.num_components):
+                amor_alpha = nn.Sequential(
+                    nn.Linear(self.q_z_nn_output_dim, self.num_flows),
+                    nn.Softplus(),
+                    nn.Hardtanh(min_val=0.01, max_val=7.)
+                )
+                amor_beta = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
+                amor_zref = nn.Linear(self.q_z_nn_output_dim, self.z_size)
+                self.add_module('amor_a_' + str(c), amor_alpha)
+                self.add_module('amor_b_' + str(c), amor_beta)
+                self.add_module('amor_z_' + str(c), amor_zref)
+
+        else:
+            raise ValueError("Only radial or planar weak components allowed for now.")
+
+    def encode(self, x):
+        """
+        Encoder that ouputs parameters for base distribution of z and flow parameters.
+        """
+
+        batch_size = x.size(0)
+
+        h = self.q_z_nn(x)
+        h = h.view(-1, self.q_z_nn_output_dim)
+        mean_z = self.q_z_mean(h)
+        var_z = self.q_z_var(h)
+
+        # return amortized flow parameters for all flows
+
+        flow_params = []
+        if self.component_type == "planar":
+            for c in range(self.num_components):
+                amor_u = getattr(self, 'amor_u_' + str(c))
+                amor_w = getattr(self, 'amor_w_' + str(c))
+                amor_b = getattr(self, 'amor_b_' + str(c))
+                u = amor_u(h).view(batch_size, self.num_flows, self.z_size, 1)
+                w = amor_w(h).view(batch_size, self.num_flows, 1, self.z_size)
+                b = amor_b(h).view(batch_size, self.num_flows, 1, 1)
+                flow_params.append([u, w, b])
+
+        elif self.component_type == "radial":
+            for c in range(self.num_components):
+                amor_alpha = getattr(self, 'amor_a_' + str(c))
+                amor_beta = getattr(self, 'amor_b_' + str(c))
+                amor_zref = getattr(self, 'amor_z_' + str(c))
+                alpha = amor_alpha(h).view(batch_size, self.num_flows, 1, 1)
+                beta = amor_beta(h).view(batch_size, self.num_flows, 1, 1)
+                z_ref = amor_zref(h).view(batch_size, self.z_size)
+
+                flow_params.append([alpha, beta, z_ref])
+
+        else:
+            raise ValueError("Only radial or planar weak components allowed for now.")
+
+        return mean_z, var_z, flow_params
+
+    def forward(self, x):
+        """
+        Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
+        Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
+        """
+        z_mu, z_var, flow_params = self.encode(x)
+        z_0 = self.reparameterize(z_mu, z_var)
+        self.log_det_j = self.FloatTensor(x.size(0)).fill_(0.0)
+        rho = (1.0 / self.num_components)
+
+        if self.training:
+            # Normalizing flows for training: train one weak component at a time
+            c = random.randint(0, self.num_components - 1)
+
+            Z_arr = [z_0]
+            # apply flow transformations
+            for k in range(self.num_flows):
+                if self.component_type == "planar":
+                    u, w, b = flow_params[c]
+                    z_k, ldj = self.flow(Z_arr[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
+                elif self.component_type == "radial":
+                    alpha, beta, z_ref = flow_params[c]
+                    z_k, ldj = self.flow(Z_arr[k], z_ref, alpha[:, k, :, :], beta[:, k, :, :])
+
+                Z_arr.append(z_k)
+                self.log_det_j += ldj
+
+            z_out = Z_arr[-1]
+            self.last_component_trained = c
+
+        else:
+            # Normalizing flows for prediction: aggregate over all components
+            z_out = torch.zeros_like(z_0)  # defaults to device of z_0
+
+            Z_arr = [[z_0] for i in range(self.num_components)]
+            for k in range(self.num_flows):
+
+                jacobian_k = 0.0
+                for c in range(self.num_components):
+
+                    # get this components flow
+                    flow_c_k = getattr(self, 'flow_' + str(c) + '_' + str(k))
+
+                    if self.component_type == "planar":
+                        u, w, b = flow_params[c]
+                        z_ck, ldj = flow_c_k(Z_arr[c][k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
+                    elif self.component_type == "radial":
+                        alpha, beta, z_ref = flow_params[c]
+                        z_ck, ldj = flow_c_k(Z_arr[c][k], z_ref, alpha[:, k, :, :], beta[:, k, :, :])
+
+                    Z_arr[c].append(z_ck)
+                    jacobian_k += rho * torch.exp(ldj)
+
+                self.log_det_j += safe_log(jacobian_k)
+
+            # accumulate components
+            for c in range(self.num_components):
+                z_out = z_out + rho * Z_arr[c][-1]
+
+        # decode aggregated output of weak components
+        x_mean = self.decode(z_out)
+
+        return x_mean, z_mu, z_var, self.log_det_j, z_0, z_out

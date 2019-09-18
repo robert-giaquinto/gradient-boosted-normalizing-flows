@@ -8,10 +8,13 @@ import math
 import random
 import os
 
-import models.VAE as VAE
+from models.vae import VAE, IAFVAE, OrthogonalSylvesterVAE, HouseholderSylvesterVAE, TriangularSylvesterVAE
+from models.boosted_vae import BoostedVAE
+from models.bagged_vae import BaggedVAE
+from models.planar_vae import PlanarVAE
+from models.radial_vae import RadialVAE
 from optimization.training import train, evaluate, evaluate_likelihood
 from utils.load_data import load_dataset
-from utils.plotting import plot_training_curve, plot_decoded_manifold, plot_data_manifold, plot_decoded_random_sample
 
 
 parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')
@@ -53,7 +56,6 @@ sr.add_argument('--save_results', action='store_true', dest='save_results', help
 sr.add_argument('--discard_results', action='store_false', dest='save_results', help='Do NOT save results from experiments.')
 parser.set_defaults(save_results=True)
 
-
 # testing vs. just validation
 fp = parser.add_mutually_exclusive_group(required=False)
 fp.add_argument('-te', '--testing', action='store_true', dest='testing',
@@ -74,16 +76,14 @@ parser.add_argument('-lr', '--learning_rate', type=float, default=0.0005,
 					help='learning rate')
 parser.add_argument('--regularization_rate', type=float, default=0.01, help='Regularization penalty for boosting.')
 
-
-parser.add_argument('-w', '--warmup', type=int, default=100,
-					help='number of epochs for warm-up. Set to 0 to turn warmup off.')
+parser.add_argument('--annealing_schedule', type=int, default=100,
+					help='number of epochs for warm-up. Set to 0 to turn beta annealing off.')
 parser.add_argument('--max_beta', type=float, default=1.0,
 					help='max beta for warm-up')
 parser.add_argument('--min_beta', type=float, default=0.0,
 					help='min beta for warm-up')
 parser.add_argument('--burnin', type=int, default=3,
-					help='number of epochs to run with no kl term.')
-
+					help='number of extra epochs to run the first component of a boosted model.')
 
 # flow parameters
 parser.add_argument('-f', '--flow', type=str, default='no_flow',
@@ -102,11 +102,11 @@ parser.add_argument('-mhs', '--made_h_size', type=int, default=320,
 parser.add_argument('--z_size', type=int, default=64, help='how many stochastic hidden units')
 
 # Bagging/Boosting parameters
-parser.add_argument('--num_learners', type=int, default=8,
-					help='How many weak learners are combined to form the flow')
-parser.add_argument('-l', '--learner_type', type=str, default='planar',
+parser.add_argument('--num_components', type=int, default=8,
+					help='How many components are combined to form the flow')
+parser.add_argument('-l', '--component_type', type=str, default='planar',
 					choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', 'random'],
-					help='When flow is bagged or boosted -- what type of flow should each weak learner implement.')
+					help='When flow is bagged or boosted -- what type of flow should each component implement.')
 
 
 
@@ -122,7 +122,6 @@ def parse_args(main_args=None):
 	if args.manual_seed is None:
 		args.manual_seed = random.randint(1, 100000)
 
-		
 	random.seed(args.manual_seed)
 	torch.manual_seed(args.manual_seed)
 	np.random.seed(args.manual_seed)
@@ -150,17 +149,18 @@ def parse_args(main_args=None):
 	args.snap_dir = os.path.join(args.out_dir, args.experiment_name + args.flow + '_')
 
 	if args.flow != 'no_flow':
-		args.snap_dir += 'num_flows_' + str(args.num_flows) + '_'
+		args.snap_dir += 'flow_length_' + str(args.num_flows)
+        
 	if args.flow == 'orthogonal':
-		args.snap_dir += 'num_vectors_' + str(args.num_ortho_vecs)
+		args.snap_dir += '_num_vectors_' + str(args.num_ortho_vecs)
 	elif args.flow == 'householder':
-		args.snap_dir += 'num_householder_' + str(args.num_householder)
+		args.snap_dir += '_num_householder_' + str(args.num_householder)
 	elif args.flow == 'iaf':
-		args.snap_dir += 'madehsize_' + str(args.made_h_size)
+		args.snap_dir += '_madehsize_' + str(args.made_h_size)
 	elif args.flow in ['boosted', 'bagged']:
-		args.snap_dir += args.learner_type + '_num_learners_' + str(args.num_learners)
+		args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components)
 
-	args.snap_dir += args.model_signature + '/'
+	args.snap_dir += '_on_' + args.model_signature + '/'
 
 	kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
 	return args, kwargs
@@ -168,23 +168,23 @@ def parse_args(main_args=None):
 
 def init_model(args):
 	if args.flow == 'no_flow':
-		model = VAE.VAE(args).to(args.device)
+		model = VAE(args).to(args.device)
 	elif args.flow == 'boosted':
-		model = VAE.BoostedVAE(args).to(args.device)
+		model = BoostedVAE(args).to(args.device)
 	elif args.flow == 'bagged':
-		model = VAE.BaggedVAE(args).to(args.device)
+		model = BaggedVAE(args).to(args.device)
 	elif args.flow == 'planar':
-		model = VAE.PlanarVAE(args).to(args.device)
+		model = PlanarVAE(args).to(args.device)
 	elif args.flow == 'radial':
-		model = VAE.RadialVAE(args).to(args.device)
+		model = RadialVAE(args).to(args.device)
 	elif args.flow == 'iaf':
-		model = VAE.IAFVAE(args).to(args.device)
+		model = IAFVAE(args).to(args.device)
 	elif args.flow == 'orthogonal':
-		model = VAE.OrthogonalSylvesterVAE(args).to(args.device)
+		model = OrthogonalSylvesterVAE(args).to(args.device)
 	elif args.flow == 'householder':
-		model = VAE.HouseholderSylvesterVAE(args).to(args.device)
+		model = HouseholderSylvesterVAE(args).to(args.device)
 	elif args.flow == 'triangular':
-		model = VAE.TriangularSylvesterVAE(args).to(args.device)
+		model = TriangularSylvesterVAE(args).to(args.device)
 	else:
 		raise ValueError('Invalid flow choice')
 
@@ -193,46 +193,46 @@ def init_model(args):
 
 def init_optimizer(model, args, debug_param_groups=False):
 	"""
-	group model parameters to more easily modify learning rates of weak learners (flow parameters)
+	group model parameters to more easily modify learning rates of components (flow parameters)
 	"""
 	if args.flow in ['boosted', 'bagged']:
 		param_labels = []
 		debug_arr = []
-		previous_learner_id = "0"
+		previous_component_id = "0"
 		vae_params = torch.nn.ParameterList()
-		learner_params = torch.nn.ParameterList()
-		all_params = []	 # contains both vae and flow learner parameters
+		component_params = torch.nn.ParameterList()
+		all_params = []	 # contains both vae and flow component parameters
 
 		for name, param in model.named_parameters():
 			if name.startswith("amor_u") or name.startswith("amor_w") or name.startswith("amor_b"):
-				learner_id = name[7:name.find(".")]
+				component_id = name[7:name.find(".")]
 
-				if learner_id != previous_learner_id:
-					# save parameters for this learner to the collection
-					all_params.append(learner_params)
-					param_labels.append("Weak Learner {}".format(previous_learner_id))
+				if component_id != previous_component_id:
+					# save parameters for this component to the collection
+					all_params.append(component_params)
+					param_labels.append("Component {}".format(previous_component_id))
 					if debug_param_groups:
-						print("Appending layers [{}] to group for Weak Learner {}".format(
-							', '.join(debug_arr), previous_learner_id))
+						print("Appending layers [{}] to group for Component {}".format(
+							', '.join(debug_arr), previous_component_id))
 
-				# re-init params for the next weak learner
-				learner_params = torch.nn.ParameterList()
+				# re-init params for the next component
+				component_params = torch.nn.ParameterList()
 				debug_arr = []
 
-				# else: accumulate the remaining u, w, or b terms for this learner
-				learner_params.append(param)
+				# else: accumulate the remaining u, w, or b terms for this component
+				component_params.append(param)
 				debug_arr.append(name)
 
-				previous_learner_id = learner_id
+				previous_component_id = component_id
 			else:
 				vae_params.append(param)
 
-		all_params.append(learner_params)
-		param_labels.append(previous_learner_id)
+		all_params.append(component_params)
+		param_labels.append(previous_component_id)
 
 		if debug_param_groups:
-			print("Appending layers [{}] to group for Weak Learner {}".format(
-				', '.join(debug_arr), previous_learner_id))
+			print("Appending layers [{}] to group for Component {}".format(
+				', '.join(debug_arr), previous_component_id))
 
 		all_params.append(vae_params)
 		param_labels.append("VAE")
@@ -257,19 +257,16 @@ def main(main_args=None):
 	if not os.path.exists(args.snap_dir):
 		os.makedirs(args.snap_dir)
 
-
 	# =========================================================================
 	# LOAD DATA
 	# =========================================================================
 	train_loader, val_loader, test_loader, args = load_dataset(args, **kwargs)
-
 
 	# =========================================================================
 	# SAVE EXPERIMENT SETTINGS
 	# =========================================================================
 	print('\nEXPERIMENT SETTINGS: \n', args)
 	torch.save(args, os.path.join(args.snap_dir, 'config.pt'))
-
 
 	# =========================================================================
 	# INITIALIZE MODEL AND OPTIMIZATION
@@ -279,51 +276,25 @@ def main(main_args=None):
 	num_params = sum([param.nelement() for param in model.parameters()])
 	print(f"\nMODEL:\nNumber of model parameters={num_params}\n", model)
 
-
 	# =========================================================================
 	# TRAINING
 	# =========================================================================
 	print('\nTRAINING:\n')
 	train_loss, val_loss = train(train_loader, val_loader, model, optimizer, args)
-	plot_training_curve(train_loss, val_loss, fname=args.snap_dir + 'training_curve.pdf')
-
 
 	# =========================================================================
 	# VALIDATION
 	# =========================================================================
 	print('\nVALIDATION:\n')
 	final_model = torch.load(args.snap_dir + 'model.pt')
-	plot_decoded_random_sample(args, final_model, size_x=5, size_y=5)
-
-	if final_model.z_size == 2:
-		plot_decoded_manifold(final_model, args)
-		plot_data_manifold(final_model, test_loader, args)
-
-	# Compute losses on validaion set
-	validation_loss, validation_rec, validation_kl = evaluate(val_loader, final_model, args, save_plots=True)
-	with open('experiment_log.txt', 'a') as ff:
-		print('FINAL EVALUATION ON VALIDATION SET', file=ff)
-		print('ELBO (VAL): {:.4f}\n'.format(validation_loss), file=ff)
-		print('RECON (VAL): {:.4f}\n'.format(validation_rec), file=ff)
-		print('KL (VAL): {:.4f}\n'.format(validation_kl), file=ff)
-		if args.input_type != 'binary':
-			validation_bpd = (validation_loss / (np.prod(args.input_size) * np.log(2.))) / len(val_loader)
-			print('ELBO (VAL) BPD : {:.4f}\n'.format(validation_bpd), file=ff)
-
+	val_loss, val_rec, val_kl = evaluate(val_loader, final_model, args, results_type='Validation')
 
 	# =========================================================================
 	# TESTING
 	# =========================================================================
 	if args.testing:
 		print("\nTESTING:")
-		test_nll = evaluate_likelihood(test_loader, final_model, args)
-
-		with open('experiment_log.txt', 'a') as ff:
-			print('FINAL EVALUATION ON TEST SET', file=ff)
-			print('NLL (TEST): {:.4f}\n'.format(test_nll), file=ff)
-			if args.input_type != 'binary':
-				test_bpd = test_nll / (np.prod(args.input_size) * np.log(2.))
-				print('NLL (TEST) BPD: {:.4f}\n'.format(test_bpd), file=ff)
+		test_nll = evaluate_likelihood(test_loader, final_model, args, results_type='Test')
 
 
 if __name__ == "__main__":

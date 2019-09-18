@@ -1,0 +1,143 @@
+import numpy as np
+import torch
+import torch.nn as nn
+import random
+
+from models.vae import VAE
+import models.flows as flows
+from optimization.loss import calculate_loss
+
+
+class BoostedVAE(VAE):
+    """
+    Variational auto-encoder with boosted flows.
+
+    """
+
+    def __init__(self, args):
+        super(BoostedVAE, self).__init__(args)
+
+        self.args = args
+        
+        # boosting parameters
+        self.num_components = args.num_components
+        self.num_flows = args.num_flows
+        self.component = 0  # current component being trained / number of components trained thus far
+        self.rho = self.FloatTensor(self.num_components).fill_(1.0)  # mixing weights for components
+
+        # Initialize log-det-jacobian to zero
+        self.log_det_j = self.FloatTensor(1, 1).fill_(0.0)
+
+        # Flow parameters
+        if args.component_type == "planar":
+            self.flow = flows.Planar()
+        else:
+            raise ValueError("Lets keep it simple for now and only implement planar components")
+
+        # Amortized flow parameters for each component
+        for c in range(self.num_components):
+            amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+            amor_w = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+            amor_b = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
+            self.add_module('amor_u_' + str(c), amor_u)
+            self.add_module('amor_w_' + str(c), amor_w)
+            self.add_module('amor_b_' + str(c), amor_b)
+
+    def _rho_gradient(self, x):
+        """
+        Estimate gradient with Monte Carlo by drawing samples from g_K^c and G_K^(c-1)
+        """
+        # monto carlo sample from g_K^c
+        new_x, new_mu, new_var, new_ldj, new_z0, new_zk = self.forward(x, sample_from="new")
+        new_gamma, _, _ = calculate_loss(new_x, x, new_mu, new_var, new_z0, new_zk, new_ldj, self.args, beta=1.0)
+
+        # monte carlo sample from G_K^(c-1)
+        fix_x, fix_mu, fix_var, fix_ldj, fix_z0, fix_zk = self.forward(x, sample_from="fixed")
+        fix_gamma, _, _ = calculate_loss(fix_x, x, fix_mu, fix_var, fix_z0, fix_zk, fix_ldj, self.args, beta=1.0)
+        return new_gamma, fix_gamma
+        
+    def update_rho(self, data_loader):
+        """
+        trying exponentiated gradient descent or projected
+
+        try a decaying step size as in Guo
+        """
+        if self.component > 0:
+            grad_log = open(self.args.snap_dir + '/gradient.log', 'a')
+            print('\n\nInitial Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=grad_log)
+            
+            step_size = 0.01
+            tolerance = 0.001
+            max_iters = 250
+            prev_rho_j = 1.0
+
+            for batch_id, (x, _) in enumerate(data_loader):
+                x.to(self.args.device).detach()
+
+                new_gamma, fix_gamma = self._rho_gradient(x)
+                gradient = torch.sum(new_gamma - fix_gamma) / x.size(0)
+                #rho_j = prev_rho_j * torch.exp(step_size * gradient)
+                rho_j = torch.clamp(prev_rho_j - (step_size / (batch_id*0.1 + 1)) * gradient, min=0.05, max=1.0)
+
+                print(f'{batch_id}: gradient={gradient:8.3f}\tstep_size={step_size / (batch_id * 0.5 + 1):6.3f}\trho_j={rho_j:6.3f}\tnew_gamma={new_gamma:8.1f}\tfix_gamma={fix_gamma:8.1f}', file=grad_log)
+                
+                self.rho[self.component] = rho_j
+                dif = abs(prev_rho_j - rho_j)
+                prev_rho_j = rho_j
+
+                if batch_id > max_iters or dif < tolerance:
+                    break
+
+            print('New Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=grad_log)
+            grad_log.close()
+                
+    def encode(self, x):
+        """
+        Encoder that ouputs parameters for base distribution of z and flow parameters.
+        """        
+        h = self.q_z_nn(x).view(-1, self.q_z_nn_output_dim)
+        z_mu = self.q_z_mean(h)
+        z_var = self.q_z_var(h)
+        return h, z_mu, z_var
+
+    def gradient_boosted_flow(self, h, z_mu, z_var, sample_from):
+        batch_size = h.size(0)
+        self.log_det_j = self.FloatTensor(batch_size).fill_(0.0)
+        
+        z = [self.reparameterize(z_mu, z_var)]
+        
+        # draw a component flow.
+        # option (b) draw from G_K^(c-1), do not draw from g_K^c
+        # ideally, would sample a different flow for each observation.
+        # instead, for efficiency/simplicity just sample a flow PER BATCH
+        if sample_from == "new":
+            j = min(self.component, self.num_components - 1)
+        else:
+            num_components = min(max(self.component, 1), self.num_components)
+            rho_simplex = self.rho[0:num_components] / torch.sum(self.rho[0:num_components])
+            j = torch.multinomial(rho_simplex, 1, replacement=True).item()
+
+        amor_u = getattr(self, 'amor_u_' + str(j))
+        amor_w = getattr(self, 'amor_w_' + str(j))
+        amor_b = getattr(self, 'amor_b_' + str(j))
+        u = amor_u(h).view(batch_size, self.num_flows, self.z_size, 1)
+        w = amor_w(h).view(batch_size, self.num_flows, 1, self.z_size)
+        b = amor_b(h).view(batch_size, self.num_flows, 1, 1)
+
+        for k in range(self.num_flows):
+            z_jk, ldj = self.flow(z[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
+            z.append(z_jk)
+            self.log_det_j += ldj
+
+        return z[0], z[-1]
+
+    def forward(self, x, sample_from="fixed"):
+        """
+        Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
+        Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
+        """
+        h, z_mu, z_var = self.encode(x)
+        z0, zk = self.gradient_boosted_flow(h, z_mu, z_var, sample_from)
+        x_recon = self.decode(zk)
+
+        return x_recon, z_mu, z_var, self.log_det_j, z0, zk

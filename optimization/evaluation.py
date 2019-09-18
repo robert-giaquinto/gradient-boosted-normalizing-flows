@@ -4,13 +4,22 @@ import numpy as np
 import random
 import datetime
 import time
-
-from optimization.loss import calculate_loss, calculate_loss_array
-from utils.plotting import plot_reconstructions
 from scipy.misc import logsumexp
 
+from optimization.loss import calculate_loss, calculate_loss_array
+from utils.plotting import plot_reconstructions, plot_decoded_random_sample, plot_decoded_manifold, plot_data_manifold
 
-def evaluate(data_loader, model, args, save_plots=True, epoch=None):
+
+def evaluate(data_loader, model, args, epoch=None, results_type=None):
+    """
+    data_loader:  pytorch data loader
+    model:        a pytorch model
+    args:         command line arguments
+    epoch:        Current epoch in training, used to control how often plots of reconstructions are saved
+    results_type: String describing the type of results (e.g. 'Valdiation' or 'Test'). The final
+                  validation loss computed will only be printed if results_type is not None, similarly
+                  plots and evaluation information is only created if results_type is not None.
+    """
     model.eval()
 
     loss = 0.0
@@ -20,30 +29,40 @@ def evaluate(data_loader, model, args, save_plots=True, epoch=None):
     for batch_id, (data, _) in enumerate(data_loader):
         data = data.to(args.device)
 
-        if args.flow == 'boosted':
-            x_mean, z_mu, z_var, ldj, z0, zk = model(data, sample_from='new')
-        else:
-            x_mean, z_mu, z_var, ldj, z0, zk = model(data)
+        x_mean, z_mu, z_var, ldj, z0, zk = model(data)
 
         batch_loss, batch_rec, batch_kl = calculate_loss(x_mean, data, z_mu, z_var, z0, zk, ldj, args)
         loss += batch_loss.item()
         rec += batch_rec.item()
         kl += batch_kl.item()
 
-        # PRINT RECONSTRUCTIONS
-        save_this_epoch = epoch is None or epoch==1 or \
-            (args.plot_interval > 0 and epoch % args.plot_interval == 0)
-        if batch_id == 0 and save_plots and save_this_epoch:
+        # Plots reconstructions
+        save_this_epoch = epoch is None or epoch==1 or (args.plot_interval > 0 and epoch % args.plot_interval == 0)
+        if batch_id == 0 and save_this_epoch and args.save_results:
             plot_reconstructions(data=data, recon_mean=x_mean, loss=batch_loss, args=args, epoch=epoch)
 
     avg_loss = loss / len(data_loader)
     avg_rec = rec / len(data_loader)
     avg_kl = kl / len(data_loader)
 
+    if results_type is not None:
+        # plots of the model
+        plot_decoded_random_sample(args, model, size_x=5, size_y=5)
+        if model.z_size == 2:
+            plot_decoded_manifold(model, args)
+            plot_data_manifold(model, data_loader, args)
+
+        results_msg = f'{results_type} set loss: {avg_loss:.4f}, Reconstruction: {avg_rec:.4f}, KL-Divergence: {avg_kl:.4f}'
+        print(results_msg)
+
+        if args.save_results:
+            with open(args.exp_log, 'a') as ff:
+                print(results_msg, file=ff)
+
     return avg_loss, avg_rec, avg_kl
 
 
-def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000):
+def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000, results_type=None):
     """
     Calculate negative log likelihood using importance sampling
     """
@@ -86,4 +105,14 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000):
 
     likelihood_test = np.array(likelihood_test)
     nll = -np.mean(likelihood_test)
+
+    if args.save_results:
+        results_msg = f'{results_type} set NLL: {nll:.4f}'
+        if args.input_type != 'binary':
+            bpd = nll / (np.prod(args.input_size) * np.log(2.))
+            results_msg += f', NLL BPD: {bpd:.4f}'
+
+        with open(args.exp_log, 'a') as ff:
+            print(results_msg, file=ff)
+
     return nll

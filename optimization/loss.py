@@ -6,7 +6,6 @@ import torch.nn.functional as F
 from utils.utilities import safe_log
 
 
-
 def binary_neg_elbo(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.0):
     """
     Computes the binary loss function while summing over batch dimension, not averaged!
@@ -46,18 +45,9 @@ def binary_neg_elbo(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.0):
     return loss, recon_loss, kl
 
 
-def boosted_regularizer(z_mu, z_var, z_0, ldj):
+def variational_loss(z_mu, z_var, z_0, ldj):
     """
-    Computes the binary loss function while summing over batch dimension, not averaged!
-    :param recon_x: shape: (batch_size, num_channels, pixel_width, pixel_height), bernoulli parameters p(x=1)
-    :param x: shape (batchsize, num_channels, pixel_width, pixel_height), pixel values rescaled between [0, 1].
-    :param z_mu: mean of z_0
-    :param z_var: variance of z_0
-    :param z_0: first stochastic latent variable
-    :param z_k: last stochastic latent variable
-    :param ldj: log det jacobian
-    :param beta: beta for kl loss
-    :return: loss, ce, kl
+    Compute the loss for just the variational posterior terms in the negative elbo
     """
     # ln g(z_0)  (not averaged)
     log_g_z0 = log_normal_diag(z_0, mean=z_mu, log_var=safe_log(z_var), dim=1)
