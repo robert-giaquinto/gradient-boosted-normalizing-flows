@@ -9,8 +9,8 @@ source ./venv/bin/activate
 
 # define variable specific to this experiment
 exp_name=num_components
-annealing_schedule=50
-burnin=100
+annealing_schedule=25
+burnin=50
 regularization=0.1
 flow_length=2
 
@@ -33,7 +33,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 
 # 2 component
@@ -54,7 +54,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 
 # 3 component
@@ -75,7 +75,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 
 # 4 component
@@ -96,7 +96,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 # 5 component
 python main_experiment.py --dataset ${dataset} \
@@ -116,7 +116,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 
 # 6 component

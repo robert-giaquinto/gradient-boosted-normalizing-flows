@@ -4,20 +4,23 @@ import numpy as np
 import random
 import datetime
 import time
+import logging
 
 from optimization.loss import calculate_loss, calculate_loss_array, variational_loss
 from utils.plotting import plot_training_curve
-from scipy.misc import logsumexp
+from scipy.special import logsumexp
 from optimization.evaluation import evaluate
+
+logger = logging.getLogger(__name__)
 
 
 def train(train_loader, val_loader, model, optimizer, args):
     header_msg = f'| Epoch |  TRAIN{"Loss": >12}{"Reconstruction": >18}{"KL": >12}'
-    header_msg += f'{"Log g": >12}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
-    header_msg += f'{"VALIDATION": >11}{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"|": >3}'
-    print('|' + "-"*(len(header_msg)-2) + '|')
-    print(header_msg)
-    print('|' + "-"*(len(header_msg)-2) + '|')
+    header_msg += f'{"Log g": >12}{"Converged": >12}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
+    header_msg += f'{"VALIDATION": >11}{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"| ": >4}{"Annealing": >12}{"|": >3}'
+    logger.info('|' + "-"*(len(header_msg)-2) + '|')
+    logger.info(header_msg)
+    logger.info('|' + "-"*(len(header_msg)-2) + '|')
 
     if args.flow == "boosted":
         t_loss, t_rec, t_kl, v_loss, v_rec, v_kl, t_times  = train_boosted(
@@ -27,10 +30,10 @@ def train(train_loader, val_loader, model, optimizer, args):
             train_loader, val_loader, model, optimizer, args)
 
     # save training and validation results
-    print('|' + "-"*(len(header_msg)-2) + '|')
-    timing_msg = f"\nStopped after {t_times.shape[0]} epochs\n"
-    timing_msg += f"Average train time per epoch: {np.mean(t_times):.2f} +/- {np.std(t_times, ddof=1):.2f}"
-    print(timing_msg)
+    logger.info('|' + "-"*(len(header_msg)-2) + '|')
+    timing_msg = f"\nStopped after {t_times.shape[0]} epochs"
+    timing_msg += f"\nAverage train time per epoch: {np.mean(t_times):.2f} +/- {np.std(t_times, ddof=1):.2f}\n"
+    logger.info(timing_msg)
 
     if args.save_results:
         np.savetxt(args.snap_dir + '/train_loss.csv', t_loss, fmt='%f', delimiter=',')
@@ -80,7 +83,7 @@ def train_vae(train_loader, val_loader, model, optimizer, args):
 
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}'
         epoch_msg += f'{"| ": >4}{v_loss:22.3f}{v_rec:19.3f}{v_kl:12.3f}'
-        print(epoch_msg + f'{"| ": >4}')
+        logger.info(epoch_msg + f'{"| ": >4}')
 
         # early-stopping: does adding a new component help?
         if v_loss < best_loss:
@@ -140,12 +143,12 @@ def train_epoch_vae(epoch, train_loader, model, opt, args):
             msg = 'Epoch: {:3d} [{:5d}/{:5d} ({:2.0f}%)]   \tLoss: {:11.6f}\trec: {:11.3f}\tkl: {:11.6f}'
 
             if args.input_type == 'binary':
-                print(msg.format(
+                logger.info(msg.format(
                     epoch, num_trained, total_data, pct_complete, loss.item(), rec.item(), kl.item()))
             else:
                 msg += '\tbpd: {:8.6f}'
                 bpd = loss.item() / (np.prod(args.input_size) * np.log(2.))
-                print(msg.format(
+                logger.info(msg.format(
                     epoch, num_trained, total_data, pct_complete,loss.item(), rec.item(), kl.item(), bpd))
 
     return train_loss, train_rec, train_kl
@@ -163,7 +166,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
     best_loss = np.inf
     best_bpd = np.inf
     prev_tr_reg = np.inf
-    component_threshold = 0.01 if args.experiment_name != "debug" else 0.5
+    component_threshold = 0.05
     e = 0
     epoch = 0
     converged_epoch = 0
@@ -196,8 +199,8 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
             # save this epoch to correct the annealing schedule when a component converges early
             converged_epoch = epoch
 
-        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_reg.mean():12.3f}'
-        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f} {beta:8.3f} {converged}'
+        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_reg.mean():12.3f}{str(converged): >12}'
+        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}'
         
         # update rho weights if appropriate
         annealing_schedule = args.annealing_schedule
@@ -218,7 +221,8 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
             for c in range(args.num_components):
                 optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component or model.component == model.num_components else 0.0
 
-        print(epoch_msg + f'{"| ": >4}')
+        logger.info(epoch_msg + f'{"| ": >4}')
+
         # early-stopping: does adding a new component help?
         if v_loss < best_loss:
             e = 0
@@ -285,12 +289,12 @@ def train_epoch_boosted(epoch, train_loader, model, opt, beta, args):
             msg = 'Epoch: {:3d} [{:5d}/{:5d} ({:2.0f}%)]   \tLoss: {:11.6f}\trec: {:11.3f}\tkl: {:11.6f}\tregularizer: {:11.6f}'
 
             if args.input_type == 'binary':
-                print(msg.format(
+                logger.info(msg.format(
                     epoch, num_trained, total_data, pct_complete, loss.item(), rec.item(), kl.item(), regularizer.item() * args.regularization_rate))
             else:
                 msg += '\tbpd: {:8.6f}'
                 bpd = loss.item() / (np.prod(args.input_size) * np.log(2.))
-                print(msg.format(
+                logger.info(msg.format(
                     epoch, num_trained, total_data, pct_complete,loss.item(), rec.item(), kl.item(), bpd))
 
     return train_loss, train_rec, train_kl, train_reg

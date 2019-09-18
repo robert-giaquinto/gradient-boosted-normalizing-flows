@@ -299,10 +299,7 @@ class OrthogonalSylvesterVAE(VAE):
                 break
 
         if max_norm > self.cond:
-            print('\nWARNING WARNING WARNING: orthogonalization not complete')
-            print('\t Final max norm =', max_norm)
-
-            print()
+            raise ValueError(f"WARNING: orthogonalization not complete. Final max norm = {max_norm}") 
 
         # Reshaping: first dimension is batch_size
         amat = amat.view(-1, self.num_flows, self.z_size, self.num_ortho_vecs)

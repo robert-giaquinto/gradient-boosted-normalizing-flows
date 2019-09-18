@@ -4,10 +4,13 @@ import numpy as np
 import random
 import datetime
 import time
-from scipy.misc import logsumexp
+from scipy.special import logsumexp
+import logging
 
 from optimization.loss import calculate_loss, calculate_loss_array
 from utils.plotting import plot_reconstructions, plot_decoded_random_sample, plot_decoded_manifold, plot_data_manifold
+
+logger = logging.getLogger(__name__)
 
 
 def evaluate(data_loader, model, args, epoch=None, results_type=None):
@@ -52,8 +55,8 @@ def evaluate(data_loader, model, args, epoch=None, results_type=None):
             plot_decoded_manifold(model, args)
             plot_data_manifold(model, data_loader, args)
 
-        results_msg = f'{results_type} set loss: {avg_loss:.4f}, Reconstruction: {avg_rec:.4f}, KL-Divergence: {avg_kl:.4f}'
-        print(results_msg)
+        results_msg = f'{results_type} set loss: {avg_loss:.4f}, Reconstruction: {avg_rec:.4f}, KL-Divergence: {avg_kl:.4f}\n'
+        logger.info(results_msg)
 
         if args.save_results:
             with open(args.exp_log, 'a') as ff:
@@ -111,6 +114,9 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000, results_type=
         if args.input_type != 'binary':
             bpd = nll / (np.prod(args.input_size) * np.log(2.))
             results_msg += f', NLL BPD: {bpd:.4f}'
+        results_msg += '\n'
+
+        logger.info(results_msg)
 
         with open(args.exp_log, 'a') as ff:
             print(results_msg, file=ff)
