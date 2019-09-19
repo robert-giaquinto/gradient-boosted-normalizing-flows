@@ -216,6 +216,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
             model.update_rho(train_loader)
             epoch_msg += f'  | Rho: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]) 
             model.component += 1
+            converged_epoch = epoch # or 0
 
             # set the learning rate of all but one component to zero
             for c in range(args.num_components):
