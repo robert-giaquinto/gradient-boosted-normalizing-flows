@@ -8,5 +8,9 @@ data/Freyfaces/
 data/MNIST_static/
 data/Caltech101Silhouettes/
 data/OMNIGLOT/
-snapshots/
+results/snapshots/
+results/orinjade
+results/codefix
+results/fulliautomatix
+results/remote_snapshots
 scripts/test*
