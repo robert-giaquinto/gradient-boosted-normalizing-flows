@@ -194,9 +194,12 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
 
         # new component performance converged?
         avg_tr_reg = tr_reg.mean()
-        converged = abs(avg_tr_reg - prev_tr_reg) < component_threshold and prev_tr_reg > avg_tr_reg and model.component < model.num_components
-        if converged:
+        converged = abs(avg_tr_reg - prev_tr_reg) < component_threshold and prev_tr_reg > avg_tr_reg
+        not_last_component = model.component < (model.num_components - 1)
+        past_burnin = epoch > args.burnin
+        if converged and not_last_component and past_burnin:
             # save this epoch to correct the annealing schedule when a component converges early
+            # don't worry about convergence on the last component, we'll just let that one finish the annealing cycle
             converged_epoch = epoch
 
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_reg.mean():12.3f}{str(converged): >12}'
@@ -216,7 +219,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
             model.update_rho(train_loader)
             epoch_msg += f'  | Rho: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]) 
             model.component += 1
-            converged_epoch = epoch # or 0
+            converged_epoch = epoch  # default convergence due to number of epochs elapsed
 
             # set the learning rate of all but one component to zero
             for c in range(args.num_components):
