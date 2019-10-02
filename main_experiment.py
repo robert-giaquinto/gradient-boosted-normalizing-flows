@@ -135,6 +135,8 @@ def parse_args(main_args=None):
     np.random.seed(args.manual_seed)
     logger.info(f"Random Seed: {args.manual_seed}\n")
 
+    args.shuffle = args.flow != "bagged"
+
     # Set up multiple CPU/GPUs
     logger.info("COMPUTATION SETTINGS:")
     if args.cuda:
@@ -203,47 +205,50 @@ def init_optimizer(model, args, debug_param_groups=False):
     """
     group model parameters to more easily modify learning rates of components (flow parameters)
     """
-    if args.flow in ['boosted', 'bagged']:
-        param_labels = []
-        debug_arr = []
-        previous_component_id = "0"
+    if args.flow in ['boosted', 'bagged']:        
+        prev_component_id = "0"
         vae_params = torch.nn.ParameterList()
-        component_params = torch.nn.ParameterList()
+        flow_params = torch.nn.ParameterList()
         all_params = []  # contains both vae and flow component parameters
 
-        for name, param in model.named_parameters():
+        debug_flow = []
+        debug_vae = []
+        if debug_param_groups:
+            logger.info('OPTIMIZER:')
+            logger.info("Initializing optimizer for ensemble model, grouping parameters according to VAE and Component Id...")
+
+        for name, param in model.named_parameters():            
             if name.startswith("amor_u") or name.startswith("amor_w") or name.startswith("amor_b"):
                 component_id = name[7:name.find(".")]
 
-                if component_id != previous_component_id:
+                if component_id != prev_component_id:
                     # save parameters for this component to the collection
-                    all_params.append(component_params)
-                    param_labels.append("Component {}".format(previous_component_id))
+                    all_params.append(flow_params)
+
+                    # re-init params for the next component
+                    flow_params = torch.nn.ParameterList()
+                    
                     if debug_param_groups:
-                        logger.info("Appending layers [{}] to group for Component {}".format(
-                            ', '.join(debug_arr), previous_component_id))
+                        logger.info(f"Grouping [{', '.join(debug_flow)}] as Component {prev_component_id}'s parameters")
+                        debug_flow = []
 
-                # re-init params for the next component
-                component_params = torch.nn.ParameterList()
-                debug_arr = []
 
-                # else: accumulate the remaining u, w, or b terms for this component
-                component_params.append(param)
-                debug_arr.append(name)
+                # accumulate the flow terms for this component
+                flow_params.append(param)
+                debug_flow.append(name)
 
-                previous_component_id = component_id
+                prev_component_id = component_id
             else:
+                debug_vae.append(name)
                 vae_params.append(param)
 
-        all_params.append(component_params)
-        param_labels.append(previous_component_id)
+        # save last set of flow parameters, then add vae parameters so that flow parameters are ordered first
+        all_params.append(flow_params)
+        all_params.append(vae_params)
 
         if debug_param_groups:
-            logger.info("Appending layers [{}] to group for Component {}".format(
-                ', '.join(debug_arr), previous_component_id))
-
-        all_params.append(vae_params)
-        param_labels.append("VAE")
+            logger.info(f"Grouping [{', '.join(debug_flow)}] as Component {prev_component_id}'s parameters.")
+            logger.info(f"Grouping [{', '.join(debug_vae)}] as the VAE parameters.\n")
 
         optimizer = optim.Adamax([{'params': p} for p in all_params], lr=args.learning_rate, eps=1.e-7)
     else:
@@ -281,6 +286,7 @@ def main(main_args=None):
     # =========================================================================
     # LOAD DATA
     # =========================================================================
+    logger.info('LOADING DATA:')
     train_loader, val_loader, test_loader, args = load_dataset(args, **kwargs)
 
     # =========================================================================
@@ -293,7 +299,7 @@ def main(main_args=None):
     # INITIALIZE MODEL AND OPTIMIZATION
     # =========================================================================
     model = init_model(args)
-    optimizer = init_optimizer(model, args, debug_param_groups=False)
+    optimizer = init_optimizer(model, args, debug_param_groups=True)
     num_params = sum([param.nelement() for param in model.parameters()])
     logger.info(f"MODEL:\nNumber of model parameters={num_params}\n{model}\n")
 

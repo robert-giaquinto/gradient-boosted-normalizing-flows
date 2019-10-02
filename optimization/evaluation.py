@@ -95,7 +95,13 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000, results_type=
         for r in range(0, R):
             # Repeat it for all training points
             x = x_single.expand(S, *x_single.size()[1:]).contiguous()
-            x_mean, z_mu, z_var, ldj, z0, zk = model(x)
+
+            if args.flow == "boosted":
+                x_mean, z_mu, z_var, _, ldj, z0, zk = model(x, sample_from='all')
+            elif args.flow == "bagged":
+                x_mean, z_mu, z_var, ldj, z0, zk = model(x, batch_id=None)
+            else:
+                x_mean, z_mu, z_var, ldj, z0, zk = model(x)
 
             a_tmp = calculate_loss_array(x_mean, x, z_mu, z_var, z0, zk, ldj, args)
             a.append(-a_tmp.cpu().data.numpy())

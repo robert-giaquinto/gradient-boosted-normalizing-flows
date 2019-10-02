@@ -39,7 +39,7 @@ def load_cifar10(args, **kwargs):
     valid_sampler = data_utils.sampler.SubsetRandomSampler(valid_idx)
 
     train_loader = data_utils.DataLoader(train_data, batch_size=args.batch_size,
-        sampler=train_sampler, shuffle=False, **kwargs)
+        sampler=train_sampler, shuffle=args.shuffle, **kwargs)
     val_loader = data_utils.DataLoader(val_data, batch_size=args.batch_size,
         sampler=valid_sampler, shuffle=False, **kwargs)
     test_loader = data_utils.DataLoader(test_data, batch_size=args.batch_size,
@@ -63,9 +63,11 @@ def load_static_mnist(args, **kwargs):
     with open(os.path.join('data', 'MNIST_static', 'binarized_mnist_train.amat')) as f:
         lines = f.readlines()
     x_train = lines_to_np_array(lines).astype('float32')
+    
     with open(os.path.join('data', 'MNIST_static', 'binarized_mnist_valid.amat')) as f:
         lines = f.readlines()
     x_val = lines_to_np_array(lines).astype('float32')
+    
     with open(os.path.join('data', 'MNIST_static', 'binarized_mnist_test.amat')) as f:
         lines = f.readlines()
     x_test = lines_to_np_array(lines).astype('float32')
@@ -80,7 +82,7 @@ def load_static_mnist(args, **kwargs):
 
     # pytorch data loader
     train = data_utils.TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train))
-    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=True, **kwargs)
+    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=args.shuffle, **kwargs)
 
     validation = data_utils.TensorDataset(torch.from_numpy(x_val).float(), torch.from_numpy(y_val))
     val_loader = data_utils.DataLoader(validation, batch_size=args.batch_size, shuffle=False, **kwargs)
@@ -127,7 +129,7 @@ def load_freyfaces(args, **kwargs):
 
     # pytorch data loader
     train = data_utils.TensorDataset(torch.from_numpy(x_train).float(), torch.from_numpy(y_train))
-    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=True, **kwargs)
+    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=args.shuffle, **kwargs)
 
     validation = data_utils.TensorDataset(torch.from_numpy(x_val).float(), torch.from_numpy(y_val))
     val_loader = data_utils.DataLoader(validation, batch_size=args.batch_size, shuffle=False, **kwargs)
@@ -179,7 +181,7 @@ def load_omniglot(args, **kwargs):
 
     # pytorch data loader
     train = data_utils.TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train))
-    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=True, **kwargs)
+    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=args.shuffle, **kwargs)
 
     validation = data_utils.TensorDataset(torch.from_numpy(x_val).float(), torch.from_numpy(y_val))
     val_loader = data_utils.DataLoader(validation, batch_size=args.batch_size, shuffle=False, **kwargs)
@@ -215,7 +217,7 @@ def load_caltech101silhouettes(args, **kwargs):
 
     # pytorch data loader
     train = data_utils.TensorDataset(torch.from_numpy(x_train), torch.from_numpy(y_train))
-    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=True, **kwargs)
+    train_loader = data_utils.DataLoader(train, batch_size=args.batch_size, shuffle=args.shuffle, **kwargs)
 
     validation = data_utils.TensorDataset(torch.from_numpy(x_val).float(), torch.from_numpy(y_val))
     val_loader = data_utils.DataLoader(validation, batch_size=args.batch_size, shuffle=False, **kwargs)
@@ -241,4 +243,6 @@ def load_dataset(args, **kwargs):
     else:
         raise Exception('Wrong name of the dataset!')
 
+    logger.info(f"Dataset: {args.dataset} has {len(train_loader)}, {len(val_loader)}, and {len(test_loader)} minibatches of size {args.batch_size} in train, validation, and test sets.")
+    logger.info(f"Total samples: {len(train_loader.sampler)}, {len(val_loader.sampler)}, and {len(test_loader.sampler)} in train, validation, and test sets.\n")
     return train_loader, val_loader, test_loader, args

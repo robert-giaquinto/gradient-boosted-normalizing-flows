@@ -49,21 +49,18 @@ def variational_loss(z_mu, z_var, z_0, ldj):
     """
     Compute the loss for just the variational posterior terms in the negative elbo
     """
-    # ln g(z_0)  (not averaged)
-    log_g_z0 = log_normal_diag(z_0, mean=z_mu, log_var=safe_log(z_var), dim=1)
-    
-    # N E_q0[ ln g(z_0) ]
-    summed_logs = torch.sum(log_g_z0) 
+    # N E_g0 [ln g(z_0)]
+    log_g_z0 = log_normal_diag(z_0, mean=z_mu, log_var=safe_log(z_var), dim=1).sum()
 
     # ldj = -N E_q_z0[\sum_k log |det dz_k/dz_k-1| ]
     # sum over batches
-    summed_ldj = torch.sum(ldj)
+    log_det_jacobian = torch.sum(ldj)
 
-    g_entropy = summed_logs - summed_ldj
+    loss = log_g_z0 - log_det_jacobian
 
     batch_size = z_0.size(0)
-    rval = g_entropy / float(batch_size)
-    return rval
+    loss = loss / float(batch_size)
+    return loss
 
 
 def multinomial_neg_elbo(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):

@@ -16,7 +16,8 @@ logger = logging.getLogger(__name__)
 
 def train(train_loader, val_loader, model, optimizer, args):
     header_msg = f'| Epoch |  TRAIN{"Loss": >12}{"Reconstruction": >18}{"KL": >12}'
-    header_msg += f'{"Log g": >12}{"Converged": >12}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
+    #header_msg += f'{"Entropy": >12}{"Converged": >12}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
+    header_msg += f'{"Entropy": >12}{"P(sample all)": >16}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
     header_msg += f'{"VALIDATION": >11}{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"| ": >4}{"Annealing": >12}{"|": >3}'
     logger.info('|' + "-"*(len(header_msg)-2) + '|')
     logger.info(header_msg)
@@ -70,7 +71,10 @@ def train_vae(train_loader, val_loader, model, optimizer, args):
 
     for epoch in range(1, args.epochs + 1):
         t_start = time.time()
-        tr_loss, tr_rec, tr_kl = train_epoch_vae(epoch, train_loader, model, optimizer, args)
+        if args.flow == "bagged":
+            tr_loss, tr_rec, tr_kl, component_loss = train_epoch_vae(epoch, train_loader, model, optimizer, args)
+        else:
+            tr_loss, tr_rec, tr_kl = train_epoch_vae(epoch, train_loader, model, optimizer, args)
         train_times.append(time.time() - t_start)
         train_loss.append(tr_loss)
         train_rec.append(tr_rec)
@@ -81,8 +85,14 @@ def train_vae(train_loader, val_loader, model, optimizer, args):
         val_rec.append(v_rec)
         val_kl.append(v_kl)
 
+        beta = min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta])
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}'
-        epoch_msg += f'{"| ": >4}{v_loss:22.3f}{v_rec:19.3f}{v_kl:12.3f}'
+        epoch_msg += f'{"| ": >4}{v_loss:22.3f}{v_rec:19.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}'
+
+        if args.flow == "bagged":
+            model.update_rho(component_loss)
+            epoch_msg += '  | Rho: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]) 
+
         logger.info(epoch_msg + f'{"| ": >4}')
 
         # early-stopping: does adding a new component help?
@@ -117,6 +127,9 @@ def train_epoch_vae(epoch, train_loader, model, opt, args):
     train_rec = np.zeros(total_batches)
     train_kl = np.zeros(total_batches)
 
+    if args.flow == "bagged":
+        component_loss = np.zeros((2, args.num_components))
+
     # set beta annealing coefficient
     beta = min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta])
 
@@ -127,9 +140,20 @@ def train_epoch_vae(epoch, train_loader, model, opt, args):
             data = torch.bernoulli(data)
 
         opt.zero_grad()
-        x_mean, z_mu, z_var, ldj, z0, zk = model(data)
+
+        if args.flow == "bagged":
+            x_mean, z_mu, z_var, ldj, z0, zk = model(data, batch_id)
+        else:
+            x_mean, z_mu, z_var, ldj, z0, zk = model(data)
 
         loss, rec, kl = calculate_loss(x_mean, data, z_mu, z_var, z0, zk, ldj, args, beta=beta)
+
+        if args.flow == "bagged":
+            component_loss[0, model.component] += rec.item() + kl.item()
+            component_loss[1, model.component] += data.size(0)
+            #for c in range(args.num_components):
+            #    opt.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
+        
         loss.backward()
         opt.step()
 
@@ -151,7 +175,10 @@ def train_epoch_vae(epoch, train_loader, model, opt, args):
                 logger.info(msg.format(
                     epoch, num_trained, total_data, pct_complete,loss.item(), rec.item(), kl.item(), bpd))
 
-    return train_loss, train_rec, train_kl
+    if args.flow == "bagged":
+        return train_loss, train_rec, train_kl, component_loss
+    else:
+        return train_loss, train_rec, train_kl
 
 
 def train_boosted(train_loader, val_loader, model, optimizer, args):
@@ -165,11 +192,11 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
     # for early stopping
     best_loss = np.inf
     best_bpd = np.inf
-    prev_tr_reg = np.inf
-    component_threshold = 0.05
+    prev_tr_entropy = np.inf
+    component_threshold = 0.0 #0.0001
     e = 0
     epoch = 0
-    converged_epoch = 0
+    converged_epoch = 0  # corrects the annealing schedule when a component converges early
     converged = False
     train_times = []
 
@@ -178,10 +205,15 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
         optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
 
     for epoch in range(1, args.epochs + 1):
-        beta = boosted_annealing_schedule(epoch, converged_epoch, model.component, model.num_components, args)
-        
+
+        # compute annealing rate for KL loss term
+        beta = kl_annealing_rate(epoch, model.component, args)
+
+        # occasionally sample from all components to keep decoder from focusing solely on new component
+        prob_all = sample_from_all_prob(epoch, converged_epoch, model.component, args)
+            
         t_start = time.time()
-        tr_loss, tr_rec, tr_kl, tr_reg = train_epoch_boosted(epoch, train_loader, model, optimizer, beta, args)
+        tr_loss, tr_rec, tr_kl, tr_entropy = train_epoch_boosted(epoch, train_loader, model, optimizer, beta, prob_all, args)
         train_times.append(time.time() - t_start)
         train_loss.append(tr_loss)
         train_rec.append(tr_rec)
@@ -193,41 +225,30 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
         val_kl.append(v_kl)
 
         # new component performance converged?
-        avg_tr_reg = tr_reg.mean()
-        converged = abs(avg_tr_reg - prev_tr_reg) < component_threshold and prev_tr_reg > avg_tr_reg
-        not_last_component = model.component < (model.num_components - 1)
-        past_burnin = epoch > args.burnin
-        if converged and not_last_component and past_burnin:
-            # save this epoch to correct the annealing schedule when a component converges early
-            # don't worry about convergence on the last component, we'll just let that one finish the annealing cycle
+        converged = check_convergence(tr_entropy, prev_tr_entropy, component_threshold, model.component, model.num_components, epoch, args.burnin)
+        if converged:
             converged_epoch = epoch
 
-        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_reg.mean():12.3f}{str(converged): >12}'
+        #epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_entropy:12.3f}{str(converged): >12}'
+        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_entropy:12.3f}{prob_all:16.2f}'
         epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}'
-        
-        # update rho weights if appropriate
-        annealing_schedule = args.annealing_schedule
-        if model.component == 0:
-            annealing_schedule += args.burnin
-            offset = 0
-        else:
-            offset = args.burnin if converged_epoch == 0 else converged_epoch
-        
-        time_to_update = converged or (epoch - offset) % annealing_schedule == 0
+
+        # is it time to update rho?
+        time_to_update = check_time_to_update(epoch, args.annealing_schedule, args.burnin, model.component, converged_epoch)
         currently_in_training = model.component < model.num_components and epoch > args.burnin
-        if currently_in_training and time_to_update:
+        if currently_in_training and (time_to_update or converged):
             model.update_rho(train_loader)
-            epoch_msg += f'  | Rho: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]) 
+            epoch_msg += '  | Rho: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]) 
             model.component += 1
             converged_epoch = epoch  # default convergence due to number of epochs elapsed
 
             # set the learning rate of all but one component to zero
             for c in range(args.num_components):
-                optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component or model.component == model.num_components else 0.0
+                optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
 
         logger.info(epoch_msg + f'{"| ": >4}')
 
-        # early-stopping: does adding a new component help?
+        # early-stopping only after all components have been trained
         if v_loss < best_loss:
             e = 0
             best_loss = v_loss
@@ -238,7 +259,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
                 break
 
         # save log g(z|x) to check for convergence of new component
-        prev_tr_reg = avg_tr_reg
+        prev_tr_entropy = tr_entropy
 
     train_loss = np.hstack(train_loss)
     train_rec = np.hstack(train_rec)
@@ -250,35 +271,34 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
     return train_loss, train_rec, train_kl, val_loss, val_rec, val_kl, train_times
 
 
-def train_epoch_boosted(epoch, train_loader, model, opt, beta, args):
+def train_epoch_boosted(epoch, train_loader, model, opt, beta, prob_all, args):
     model.train()
 
-    num_trained = 0
-    total_data = len(train_loader.sampler)
     total_batches = len(train_loader)
-
     train_loss = np.zeros(total_batches)
     train_bpd = np.zeros(total_batches)
     train_rec = np.zeros(total_batches)
     train_kl = np.zeros(total_batches)
-    train_reg = np.zeros(total_batches)
+    train_entropy = np.zeros(total_batches)
 
     for batch_id, (data, _) in enumerate(train_loader):
+
         data = data.to(args.device)
 
         if args.dynamic_binarization:
             data = torch.bernoulli(data)
 
         opt.zero_grad()
-        x_recon, z_mu, z_var, ldj, z0, zk = model(data, sample_from="fixed")
-        loss, rec, kl = calculate_loss(x_recon, data, z_mu, z_var, z0, zk, ldj, args, beta=beta)
+        
+        x_recon, z_mu, z_var, log_det_jacobians, z0, zk = model(data, prob_all)
+        g_ldj, G_ldj = log_det_jacobians
+        loss, rec, kl = calculate_loss(x_recon, data, z_mu, z_var, z0, zk, G_ldj, args, beta=beta)
 
-        if args.regularization_rate > 0:
+        if args.regularization_rate > 0 and model.component < model.num_components and model.component > 0:
             # compute regularization terms
-            _, g_z_mu, g_z_var, g_ldj, g_z0, _ = model(data, sample_from="new")
-            regularizer = variational_loss(g_z_mu, g_z_var, g_z0, g_ldj)
-            loss = loss + args.regularization_rate * regularizer
-            train_reg[batch_id] = regularizer.item()
+            regularizer = variational_loss(z_mu, z_var, z0, g_ldj)
+            loss = loss + args.regularization_rate * regularizer * beta
+            train_entropy[batch_id] = regularizer.item()
         
         loss.backward()
         opt.step()
@@ -287,29 +307,24 @@ def train_epoch_boosted(epoch, train_loader, model, opt, beta, args):
         train_rec[batch_id] = rec.item()
         train_kl[batch_id] = kl.item()
 
-        num_trained += len(data)
-        pct_complete = 100. * batch_id / total_batches
-        if args.log_interval > 0 and batch_id % args.log_interval == 0:
-            msg = 'Epoch: {:3d} [{:5d}/{:5d} ({:2.0f}%)]   \tLoss: {:11.6f}\trec: {:11.3f}\tkl: {:11.6f}\tregularizer: {:11.6f}'
-
-            if args.input_type == 'binary':
-                logger.info(msg.format(
-                    epoch, num_trained, total_data, pct_complete, loss.item(), rec.item(), kl.item(), regularizer.item() * args.regularization_rate))
-            else:
-                msg += '\tbpd: {:8.6f}'
-                bpd = loss.item() / (np.prod(args.input_size) * np.log(2.))
-                logger.info(msg.format(
-                    epoch, num_trained, total_data, pct_complete,loss.item(), rec.item(), kl.item(), bpd))
-
-    return train_loss, train_rec, train_kl, train_reg
+    return train_loss, train_rec, train_kl, train_entropy.mean()
 
 
-def boosted_annealing_schedule(epoch, converged_epoch, current_component, total_components, args):
+def kl_annealing_rate(epoch, component, args):
+    if component == 0:
+        epochs_per_component = max(args.annealing_schedule + args.burnin, 1)
+        zero_offset = 1.0 / epochs_per_component  # don't want annealing rate to start at zero
+        beta = (((epoch - 1) % epochs_per_component) / epochs_per_component) + zero_offset
+        beta = min(beta, args.max_beta)
+    else:
+        beta = 1.0
+
+    return beta
+
+
+def sample_from_all_prob(epoch, converged_epoch, current_component, args):
     """
-    Annealing schedule for boosting will:
-    1. Reset with each new component trained.
-    2. Have a first component with a seperate, longer cycle because of the added "burnin" epochs
-    3. One the last component, finish the annealing schedule even if the new component converged and then keep beta=1.0
+    Want to occasionally sample from all components so decoder doesn't solely focus on new component
     """
     if current_component == 0:
         # first component runs longer than the rest
@@ -318,13 +333,40 @@ def boosted_annealing_schedule(epoch, converged_epoch, current_component, total_
     else:
         epochs_per_component = max(args.annealing_schedule, 1)
         epoch_offset = (args.burnin if converged_epoch == 0 else converged_epoch) + 1
-
+        
     non_zero_offset = 1.0 / epochs_per_component
-    beta = min((((epoch - epoch_offset) % epochs_per_component) / epochs_per_component) + non_zero_offset, args.max_beta)
+    max_prob_all = 1.0 - (1.0 / (current_component + 1.0))
     
-    if current_component == total_components and (epoch - epoch_offset) >= args.annealing_schedule:
+    prob_all = (((epoch - epoch_offset) % epochs_per_component) / epochs_per_component) + non_zero_offset
+    prob_all = min(prob_all, max_prob_all)
+
+    if current_component == args.num_components:
         # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
-        beta = 1.0
+        prob_all = 1.0
+
+    return prob_all
 
 
-    return beta
+def check_convergence(tr_entropy, prev_tr_entropy, component_threshold, current_component, num_components, epoch, burnin):
+    converged = abs(tr_entropy - prev_tr_entropy) < component_threshold
+    performance_improved = prev_tr_entropy > tr_entropy
+    
+    # don't worry about convergence on the last component, we'll just let that one finish the annealing cycle
+    not_last_component = current_component < (num_components - 1)
+
+    # must be past to the burnin period to be considered converged
+    past_burnin = epoch > burnin
+    return converged and performance_improved and not_last_component and past_burnin
+
+
+def check_time_to_update(epoch, annealing_schedule, burnin, current_component, converged_epoch):
+    # has the anneal schedule concluded for this component
+    if current_component == 0:
+        annealing_schedule += burnin
+        offset = 0
+    else:
+        offset = burnin if converged_epoch == 0 else converged_epoch
+
+    time_to_update = (epoch - offset) % annealing_schedule == 0
+    return time_to_update
+

@@ -9,8 +9,6 @@ source ./venv/bin/activate
 
 # define variable specific to this experiment
 exp_name=num_components
-annealing_schedule=50
-burnin=50
 regularization=0.1
 flow_length=2
 

@@ -11,8 +11,6 @@ source ./venv/bin/activate
 exp_name=regularization
 num_components=6
 flow_length=2
-annealing_schedule=50
-burnin=50
 
 
 # regularization = 0.01
