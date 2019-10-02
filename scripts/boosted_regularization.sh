@@ -31,7 +31,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 # regularization = 0.1
 python main_experiment.py --dataset ${dataset} \
@@ -51,7 +51,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 # regularization = 0.25
 python main_experiment.py --dataset ${dataset} \
@@ -71,7 +71,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 # regularization = 0.5
 python main_experiment.py --dataset ${dataset} \
@@ -91,7 +91,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 # regularization = 1.0
 python main_experiment.py --dataset ${dataset} \
@@ -111,7 +111,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 # regularization = 2.0
 python main_experiment.py --dataset ${dataset} \
