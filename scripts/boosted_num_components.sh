@@ -33,7 +33,6 @@ python main_experiment.py --dataset ${dataset} \
        --log_interval ${log} \
        --plot_interval ${plot} &
 
-
 # 2 component
 python main_experiment.py --dataset ${dataset} \
        --validation \
@@ -54,7 +53,6 @@ python main_experiment.py --dataset ${dataset} \
        --log_interval ${log} \
        --plot_interval ${plot} &
 
-
 # 3 component
 python main_experiment.py --dataset ${dataset} \
        --validation \
@@ -74,7 +72,6 @@ python main_experiment.py --dataset ${dataset} \
        --manual_seed ${seed} \
        --log_interval ${log} \
        --plot_interval ${plot} &
-
 
 # 4 component
 python main_experiment.py --dataset ${dataset} \
@@ -115,7 +112,6 @@ python main_experiment.py --dataset ${dataset} \
        --manual_seed ${seed} \
        --log_interval ${log} \
        --plot_interval ${plot} &
-
 
 # 6 component
 python main_experiment.py --dataset ${dataset} \

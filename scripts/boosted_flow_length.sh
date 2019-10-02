@@ -31,7 +31,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 # flow length: 2
 python main_experiment.py --dataset ${dataset} \
@@ -51,7 +51,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 # flow length: 4
 python main_experiment.py --dataset ${dataset} \
@@ -71,7 +71,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 # flow length: 8
 python main_experiment.py --dataset ${dataset} \
@@ -91,7 +91,7 @@ python main_experiment.py --dataset ${dataset} \
        --batch_size ${batch_size} \
        --manual_seed ${seed} \
        --log_interval ${log} \
-       --plot_interval ${plot} ;
+       --plot_interval ${plot} &
 
 # flow length: 16
 python main_experiment.py --dataset ${dataset} \
