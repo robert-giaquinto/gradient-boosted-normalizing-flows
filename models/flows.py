@@ -21,6 +21,30 @@ class Planar(nn.Module):
         """ Derivative of tanh """
         return 1 - self.h(x) ** 2
 
+    def transform(self, zk, u, w, b):
+        """
+        non batched version of the forward step (may be faster for density estimation)
+        """
+        #zk = zk.unsqueeze(2)
+
+        # reparameterize u such that the flow becomes invertible (see appendix paper)
+        uw = w @ u
+        m_uw = -1. + self.softplus(uw)
+        #w_norm_sq = torch.sum(w ** 2, dim=2, keepdim=True)
+        w_norm_sq = w @ w.t()
+        u_hat = u + ((m_uw - uw) * w.t() / w_norm_sq)
+
+        # compute flow with u_hat
+        wzb = zk @ w.t() + b
+        z = zk + u_hat.t() * self.h(wzb)
+
+        # compute logdetJ
+        psi = w * self.der_h(wzb)
+        log_det_jacobian = safe_log(torch.abs(1 + psi @ u_hat))
+        log_det_jacobian = log_det_jacobian.squeeze()
+
+        return z, log_det_jacobian        
+        
     def forward(self, zk, u, w, b):
         """
         Forward pass. Assumes amortized u, w and b. Conditions on diagonals of u and w for invertibility

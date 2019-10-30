@@ -1,6 +1,8 @@
 import numpy as np
 import torch
 import torch.nn as nn
+import torch.distributions as D
+
 import models.flows as flows
 from models.layers import GatedConv2d, GatedConvTranspose2d
 from utils.distributions import log_normal_standard, log_normal_diag
@@ -20,25 +22,30 @@ class VAE(nn.Module):
 
         # extract model settings from args
         self.z_size = args.z_size
-        self.input_size = args.input_size
         self.input_type = args.input_type
 
-        self.q_z_nn_output_dim = 256
-        self.q_z_nn_hidden_dim = 128
-        self.simple = True
-
-        if self.input_size == [1, 28, 20]:
+        if args.input_size == [1, 28, 20]:
             self.last_kernel_size = (7, 5)
             self.last_pad = 2
-        elif self.input_size == [3, 32, 32]:
+        elif args.input_size == [3, 32, 32]:
             self.last_kernel_size = 7
             self.last_pad = 1
         else:
             self.last_kernel_size = 7
             self.last_pad = 2
+        
+        self.simple = True
+        if self.simple:
+            self.input_size = np.prod(args.input_size)
+        else:
+            self.input_size = args.input_size[0]
+            
+        self.q_z_nn_output_dim = 256
+        self.q_z_nn_hidden_dim = 128
 
-        self.q_z_nn, self.q_z_mean, self.q_z_var = self.create_encoder()
-        self.p_x_nn, self.p_x_mean = self.create_decoder()
+        if not args.density_evaluation:
+            self.q_z_nn, self.q_z_mean, self.q_z_var = self.create_encoder()
+            self.p_x_nn, self.p_x_mean = self.create_decoder()
 
         # auxiliary
         if args.cuda:
@@ -49,6 +56,17 @@ class VAE(nn.Module):
         # log-det-jacobian = 0 without flows
         self.log_det_j = self.FloatTensor(1).zero_()
 
+        # base distribution for calculation of log prob under the model
+        self.register_buffer('base_dist_mean', torch.ones(self.z_size, device=args.device))
+        #self.register_buffer('base_dist_var', 4.0 * torch.eye(self.z_size, device=args.device))
+        self.register_buffer('base_dist_var', 3.0 * torch.ones(self.z_size, device=args.device))
+
+    @property
+    def base_dist(self):
+        #rval = D.MultivariateNormal(self.base_dist_mean, self.base_dist_var)
+        rval = D.Normal(self.base_dist_mean, self.base_dist_var)
+        return rval
+    
     def create_encoder(self):
         """
         Helper function to create the elemental blocks for the encoder. Creates a gated convnet encoder.
@@ -57,7 +75,7 @@ class VAE(nn.Module):
         if self.input_type == 'binary':
             if self.simple:
                 q_z_nn = nn.Sequential(
-                    nn.Linear(np.prod(self.input_size), self.q_z_nn_hidden_dim),
+                    nn.Linear(self.input_size, self.q_z_nn_hidden_dim),
                     nn.ReLU(),
                     nn.Linear(self.q_z_nn_hidden_dim, self.q_z_nn_output_dim),
                     nn.Softplus(),
@@ -69,7 +87,7 @@ class VAE(nn.Module):
                 )
             else:
                 q_z_nn = nn.Sequential(
-                    GatedConv2d(self.input_size[0], 32, 5, 1, 2),
+                    GatedConv2d(self.input_size, 32, 5, 1, 2),
                     GatedConv2d(32, 32, 5, 2, 2),
                     GatedConv2d(32, 64, 5, 1, 2),
                     GatedConv2d(64, 64, 5, 2, self.last_pad),
@@ -86,7 +104,7 @@ class VAE(nn.Module):
         elif self.input_type == 'multinomial':
             act = None
             q_z_nn = nn.Sequential(
-                GatedConv2d(self.input_size[0], 32, 5, 1, 2, activation=act),
+                GatedConv2d(self.input_size, 32, 5, 1, 2, activation=act),
                 GatedConv2d(32, 32, 5, 2, 2, activation=act),
                 GatedConv2d(32, 64, 5, 1, 2, activation=act),
                 GatedConv2d(64, 64, 5, 2, self.last_pad, activation=act),
@@ -118,7 +136,7 @@ class VAE(nn.Module):
                     nn.Softplus(),
                 )
                 p_x_mean = nn.Sequential(
-                    nn.Linear(self.q_z_nn_output_dim, np.prod(self.input_size)),
+                    nn.Linear(self.q_z_nn_output_dim, self.input_size),
                     nn.Sigmoid()
                 )
             else:
@@ -131,7 +149,7 @@ class VAE(nn.Module):
                     GatedConvTranspose2d(32, 32, 5, 1, 2)
                 )
                 p_x_mean = nn.Sequential(
-                    nn.Conv2d(32, self.input_size[0], 1, 1, 0),
+                    nn.Conv2d(32, self.input_size, 1, 1, 0),
                     nn.Sigmoid()
                 )
             return p_x_nn, p_x_mean
@@ -148,7 +166,7 @@ class VAE(nn.Module):
             )
             p_x_mean = nn.Sequential(
                 nn.Conv2d(32, 256, 5, 1, 2),
-                nn.Conv2d(256, self.input_size[0] * num_classes, 1, 1, 0),
+                nn.Conv2d(256, self.input_size * num_classes, 1, 1, 0),
                 # output shape: batch_size, num_channels * num_classes, pixel_width, pixel_height
             )
 
@@ -160,9 +178,9 @@ class VAE(nn.Module):
     def reparameterize(self, mu, var):
         """
         Samples z from a multivariate Gaussian with diagonal covariance matrix using the
-         reparameterization trick.
+        reparameterization trick.
         """
-        std = var.sqrt() # multiply by 2?
+        std = var.sqrt()
         eps = self.FloatTensor(std.size()).normal_()
         z = eps.mul(std).add_(mu)
         return z

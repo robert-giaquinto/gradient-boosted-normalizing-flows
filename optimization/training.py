@@ -75,6 +75,7 @@ def train_vae(train_loader, val_loader, model, optimizer, args):
             tr_loss, tr_rec, tr_kl, component_loss = train_epoch_vae(epoch, train_loader, model, optimizer, args)
         else:
             tr_loss, tr_rec, tr_kl = train_epoch_vae(epoch, train_loader, model, optimizer, args)
+            
         train_times.append(time.time() - t_start)
         train_loss.append(tr_loss)
         train_rec.append(tr_rec)
@@ -85,7 +86,7 @@ def train_vae(train_loader, val_loader, model, optimizer, args):
         val_rec.append(v_rec)
         val_kl.append(v_kl)
 
-        beta = min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta])
+        beta = max(min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta]), args.min_beta)
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}'
         epoch_msg += f'{"| ": >4}{v_loss:22.3f}{v_rec:19.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}'
 
@@ -131,7 +132,7 @@ def train_epoch_vae(epoch, train_loader, model, opt, args):
         component_loss = np.zeros((2, args.num_components))
 
     # set beta annealing coefficient
-    beta = min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta])
+    beta = max(min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta]), args.min_beta)
 
     for batch_id, (data, _) in enumerate(train_loader):
         data = data.to(args.device)
@@ -244,7 +245,9 @@ def train_boosted(train_loader, val_loader, model, optimizer, args):
 
             # set the learning rate of all but one component to zero
             for c in range(args.num_components):
-                optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
+                optimizer.param_groups[c]['lr'] = args.learning_rate if (c == model.component or model.component == model.num_components) else 0.0
+
+            epoch_msg += '  | LR: ' + ' '.join([f"{optimizer.param_groups[c]['lr']:1.5f}" for c in range(args.num_components)])
 
         logger.info(epoch_msg + f'{"| ": >4}')
 
@@ -316,6 +319,7 @@ def kl_annealing_rate(epoch, component, args):
         zero_offset = 1.0 / epochs_per_component  # don't want annealing rate to start at zero
         beta = (((epoch - 1) % epochs_per_component) / epochs_per_component) + zero_offset
         beta = min(beta, args.max_beta)
+        beta = max(beta, args.min_beta)
     else:
         beta = 1.0
 
@@ -356,7 +360,12 @@ def check_convergence(tr_entropy, prev_tr_entropy, component_threshold, current_
 
     # must be past to the burnin period to be considered converged
     past_burnin = epoch > burnin
-    return converged and performance_improved and not_last_component and past_burnin
+
+    converged_flag = converged and performance_improved and not_last_component and past_burnin
+    if converged_flag:
+        logger.info(f"\tComponent {current_component} (out of {num_components}) converged at epoch {epoch} ({abs(tr_entropy - prev_tr_entropy)} < {component_threshold}).")
+        
+    return converged_flag
 
 
 def check_time_to_update(epoch, annealing_schedule, burnin, current_component, converged_epoch):

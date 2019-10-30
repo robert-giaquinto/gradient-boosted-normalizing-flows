@@ -52,7 +52,7 @@ class BaggedVAE(VAE):
 
         # Flow parameters
         if self.component_type == "planar":
-            self.flow = flows.Planar()
+            self.flow_transformation = flows.Planar()
             # Amortized flow parameters for each weak component
             for c in range(self.num_components):
                 amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
@@ -63,7 +63,7 @@ class BaggedVAE(VAE):
                 self.add_module('amor_b_' + str(c), amor_b)
 
         elif self.component_type == "radial":
-            self.flow = flows.Radial
+            self.flow_transformation = flows.Radial
             for c in range(self.num_components):
                 amor_alpha = nn.Sequential(
                     nn.Linear(self.q_z_nn_output_dim, self.num_flows),
@@ -79,11 +79,23 @@ class BaggedVAE(VAE):
         else:
             raise ValueError("Only radial or planar weak components allowed for now.")
 
+    def sample_component(self, batch_id):
+        # only allow the component to be sampled from 2/3 of the data
+        rho_hat = self.rho + 0.001
+        if batch_id is not None:
+            rho_hat = torch.FloatTensor([r if c % 3 != batch_id % 3 else 0.0 for c, r in enumerate(rho_hat)])
+
+        # normalize rho so values representation probability
+        rho_simplex = rho_hat / torch.sum(rho_hat)
+
+        # sample a single component
+        component = torch.multinomial(rho_simplex, 1, replacement=True).item()
+        return component
+
     def encode(self, x):
         """
         Encoder that ouputs parameters for base distribution of z and flow parameters.
         """
-
         batch_size = x.size(0)
 
         h = self.q_z_nn(x)
@@ -91,8 +103,8 @@ class BaggedVAE(VAE):
 
         q_z_mean = getattr(self, 'q_z_mean_' + str(self.component))
         q_z_var = getattr(self, 'q_z_var_' + str(self.component))
-        mean_z = q_z_mean(h)
-        var_z = q_z_var(h)
+        z_mu = q_z_mean(h)
+        z_var = q_z_var(h)
 
         # return amortized flow parameters for all flows
 
@@ -117,7 +129,28 @@ class BaggedVAE(VAE):
         else:
             raise ValueError("Only radial or planar weak components allowed for now.")
 
-        return mean_z, var_z, flow_params
+        return z_mu, z_var, flow_params
+
+    def flow(self, z_0, flow_params):
+        log_det_jacobian = self.FloatTensor(z_0.size(0)).fill_(0.0)
+        Z_arr = [z_0]
+        
+        # apply flow transformations
+        for k in range(self.num_flows):
+            if self.component_type == "planar":
+                u, w, b = flow_params
+                z_k, ldj = self.flow_transformation(Z_arr[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
+                
+            elif self.component_type == "radial":
+                alpha, beta, z_ref = flow_params
+                z_k, ldj = self.flow_transformation(Z_arr[k], z_ref, alpha[:, k, :, :], beta[:, k, :, :])
+
+            Z_arr.append(z_k)
+            log_det_jacobian += ldj
+
+        z_out = Z_arr[-1]
+        return z_out, log_det_jacobian
+
 
     def forward(self, x, batch_id=None):
         """
@@ -125,35 +158,18 @@ class BaggedVAE(VAE):
         Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
         """
         # Normalizing flows selection
-        rho_hat = self.rho + 0.001
-        if batch_id is not None:
-            rho_hat = torch.FloatTensor([r if c % 3 != batch_id % 3 else 0.0 for c, r in enumerate(rho_hat)])
-        rho_simplex = rho_hat / torch.sum(rho_hat)
-        self.component = torch.multinomial(rho_simplex, 1, replacement=True).item()
+        self.component = self.sample_component(batch_id)
         
         z_mu, z_var, flow_params = self.encode(x)
+        
         z_0 = self.reparameterize(z_mu, z_var)
-        self.log_det_j = self.FloatTensor(x.size(0)).fill_(0.0)
 
-        Z_arr = [z_0]
-        # apply flow transformations
-        for k in range(self.num_flows):
-            if self.component_type == "planar":
-                u, w, b = flow_params
-                z_k, ldj = self.flow(Z_arr[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
-            elif self.component_type == "radial":
-                alpha, beta, z_ref = flow_params
-                z_k, ldj = self.flow(Z_arr[k], z_ref, alpha[:, k, :, :], beta[:, k, :, :])
-
-            Z_arr.append(z_k)
-            self.log_det_j += ldj
-
-        z_out = Z_arr[-1]
-
+        z_k, log_det_jacobian = self.flow(z_0, flow_params)
+        
         # decode aggregated output of weak components
-        x_mean = self.decode(z_out)
+        x_mean = self.decode(z_k)
 
-        return x_mean, z_mu, z_var, self.log_det_j, z_0, z_out
+        return x_mean, z_mu, z_var, log_det_jacobian, z_0, z_out
 
     def update_rho(self, component_loss):
         """

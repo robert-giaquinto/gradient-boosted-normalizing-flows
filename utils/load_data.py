@@ -9,6 +9,8 @@ from scipy.io import loadmat
 import numpy as np
 import logging
 import os
+import sklearn
+import sklearn.datasets
 
 logger = logging.getLogger(__name__)
 
@@ -229,7 +231,6 @@ def load_caltech101silhouettes(args, **kwargs):
 
 
 def load_dataset(args, **kwargs):
-
     if args.dataset == 'mnist':
         train_loader, val_loader, test_loader, args = load_static_mnist(args, **kwargs)
     elif args.dataset == 'caltech':

@@ -24,13 +24,14 @@ logger = logging.getLogger(__name__)
 
 parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')
 
-parser.add_argument('-d', '--dataset', type=str, default='mnist', help='Dataset choice.',
+parser.add_argument('--dataset', type=str, default='mnist', help='Dataset choice.',
                     choices=['mnist', 'freyfaces', 'omniglot', 'caltech', 'cifar10'])
+parser.add_argument('--num_toy_samples', type=int, default=1000, help='Number of samples to use for toy datasets')
 
 # seeds
 parser.add_argument('--manual_seed', type=int, default=123,
                     help='manual seed, if not given resorts to random seed.')
-parser.add_argument('-freys', '--freyseed', type=int, default=123,
+parser.add_argument('--freyseed', type=int, default=123,
                     help="Seed for shuffling frey face dataset for test split. Ignored for other datasets.")
 
 # gpu/cpu
@@ -49,14 +50,10 @@ parser.add_argument('--plot_interval', type=int, default=10, metavar='PLOT_INTER
 parser.add_argument('--experiment_name', type=str, default=None,
                     help="A name to help identify the experiment being run when training this model.")
 
-parser.add_argument('--out_dir', type=str, default='./results/snapshots',
-                    help='Output directory for model snapshots etc.')
-parser.add_argument('--data_dir', type=str, default='./data/raw/',
-                    help="Where raw data is saved.")
-parser.add_argument('--exp_log', type=str, default='./results/experiment_log.txt',
-                    help='File to save high-level results from each run of an experiment.')
-parser.add_argument('--print_log', dest="save_log", action="store_false",
-                    help='Add this flag to have progress printed to log (rather than saved to a file).')
+parser.add_argument('--out_dir', type=str, default='./results/snapshots', help='Output directory for model snapshots etc.')
+parser.add_argument('--data_dir', type=str, default='./data/raw/', help="Where raw data is saved.")
+parser.add_argument('--exp_log', type=str, default='./results/experiment_log.txt', help='File to save high-level results from each run of an experiment.')
+parser.add_argument('--print_log', dest="save_log", action="store_false", help='Add this flag to have progress printed to log (rather than saved to a file).')
 parser.set_defaults(save_log=True)
 
 sr = parser.add_mutually_exclusive_group(required=False)
@@ -66,53 +63,42 @@ parser.set_defaults(save_results=True)
 
 # testing vs. just validation
 fp = parser.add_mutually_exclusive_group(required=False)
-fp.add_argument('-te', '--testing', action='store_true', dest='testing',
-                help='evaluate on test set after training')
-fp.add_argument('-va', '--validation', action='store_false', dest='testing',
-                help='only evaluate on validation set')
+fp.add_argument('--testing', action='store_true', dest='testing', help='evaluate on test set after training')
+fp.add_argument('--validation', action='store_false', dest='testing', help='only evaluate on validation set')
 parser.set_defaults(testing=True)
 
 # optimization settings
-parser.add_argument('-e', '--epochs', type=int, default=2000,
-                    help='number of epochs to train (default: 2000)')
-parser.add_argument('-es', '--early_stopping_epochs', type=int, default=20,
-                    help='number of early stopping epochs')
+parser.add_argument('--epochs', type=int, default=100, help='number of epochs to train (default: 100)')
+parser.add_argument('--early_stopping_epochs', type=int, default=20, help='number of early stopping epochs')
 
-parser.add_argument('-bs', '--batch_size', type=int, default=64,
-                    help='input batch size for training (default: 64)')
-parser.add_argument('-lr', '--learning_rate', type=float, default=0.0005,
-                    help='learning rate')
+parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
+parser.add_argument('--learning_rate', type=float, default=0.0005, help='learning rate')
 parser.add_argument('--regularization_rate', type=float, default=0.01, help='Regularization penalty for boosting.')
 
-parser.add_argument('--annealing_schedule', type=int, default=100,
-                    help='number of epochs for warm-up. Set to 0 to turn beta annealing off.')
-parser.add_argument('--max_beta', type=float, default=1.0,
-                    help='max beta for warm-up')
-parser.add_argument('--min_beta', type=float, default=0.0,
-                    help='min beta for warm-up')
-parser.add_argument('--burnin', type=int, default=3,
-                    help='number of extra epochs to run the first component of a boosted model.')
+parser.add_argument('--annealing_schedule', type=int, default=100, help='number of epochs for warm-up. Set to 0 to turn beta annealing off.')
+parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
+parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
+parser.add_argument('--burnin', type=int, default=25, help='number of extra epochs to run the first component of a boosted model.')
 
 # flow parameters
-parser.add_argument('-f', '--flow', type=str, default='no_flow',
+parser.add_argument('--flow', type=str, default='no_flow',
                     choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', 'no_flow', 'boosted', 'bagged'],
                     help="""Type of flows to use, no flows can also be selected""")
-parser.add_argument('-nf', '--num_flows', type=int, default=2,
-                    help='Number of flow layers, ignored in absence of flows')
+parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
 
 # Sylvester parameters
-parser.add_argument('-nv', '--num_ortho_vecs', type=int, default=8,
+parser.add_argument('--num_ortho_vecs', type=int, default=8,
                     help=" For orthogonal flow: How orthogonal vectors per flow do you need. Ignored for other flow types.")
-parser.add_argument('-nh', '--num_householder', type=int, default=8,
+parser.add_argument('--num_householder', type=int, default=8,
                     help="For Householder Sylvester flow: Number of Householder matrices per flow. Ignored for other flow types.")
-parser.add_argument('-mhs', '--made_h_size', type=int, default=320,
+parser.add_argument('--made_h_size', type=int, default=320,
                     help='Width of mades for iaf. Ignored for all other flows.')
 parser.add_argument('--z_size', type=int, default=64, help='how many stochastic hidden units')
 
 # Bagging/Boosting parameters
 parser.add_argument('--num_components', type=int, default=8,
                     help='How many components are combined to form the flow')
-parser.add_argument('-l', '--component_type', type=str, default='planar',
+parser.add_argument('--component_type', type=str, default='planar',
                     choices=['planar', 'radial', 'iaf', 'householder', 'orthogonal', 'triangular', 'random'],
                     help='When flow is bagged or boosted -- what type of flow should each component implement.')
 
@@ -125,6 +111,7 @@ def parse_args(main_args=None):
     args = parser.parse_args(main_args)
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     args.device = torch.device("cuda" if args.cuda else "cpu")
+    args.density_evaluation = False
 
     # Set a random seed if not given one
     if args.manual_seed is None:
@@ -136,7 +123,7 @@ def parse_args(main_args=None):
     logger.info(f"Random Seed: {args.manual_seed}\n")
 
     args.shuffle = args.flow != "bagged"
-
+    
     # Set up multiple CPU/GPUs
     logger.info("COMPUTATION SETTINGS:")
     if args.cuda:
@@ -170,7 +157,7 @@ def parse_args(main_args=None):
     elif args.flow in ['boosted', 'bagged']:
         args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components)
 
-    args.snap_dir += '_on_' + args.model_signature + '/'
+    args.snap_dir += '_on_' + args.dataset + "_" +args.model_signature + '/'
 
     kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
     return args, kwargs
@@ -201,57 +188,45 @@ def init_model(args):
     return model
 
 
-def init_optimizer(model, args, debug_param_groups=False):
+def init_optimizer(model, args):
     """
     group model parameters to more easily modify learning rates of components (flow parameters)
     """
-    if args.flow in ['boosted', 'bagged']:        
-        prev_component_id = "0"
+    logger.info('OPTIMIZER:')
+    if args.flow in ['boosted', 'bagged']:
+        logger.info("Initializing optimizer for ensemble model, grouping parameters according to VAE and Component Id:")
+
+        flow_params = {f"{c}": torch.nn.ParameterList() for c in range(args.num_components)}
+        flow_labels = {f"{c}": [] for c in range(args.num_components)}
         vae_params = torch.nn.ParameterList()
-        flow_params = torch.nn.ParameterList()
-        all_params = []  # contains both vae and flow component parameters
-
-        debug_flow = []
-        debug_vae = []
-        if debug_param_groups:
-            logger.info('OPTIMIZER:')
-            logger.info("Initializing optimizer for ensemble model, grouping parameters according to VAE and Component Id...")
-
+        vae_labels = []
         for name, param in model.named_parameters():            
-            if name.startswith("amor_u") or name.startswith("amor_w") or name.startswith("amor_b"):
-                component_id = name[7:name.find(".")]
+            if name.startswith("amor_u") or name.startswith("amor_w") or name.startswith("amor_b") or args.density_evaluation:
+                if args.density_evaluation:
+                    component_id = name[(name.find(".") + 1):(name.find(".") + 2)]
+                else:
+                    component_id = name[(name.find(".") - 1):name.find(".")]
 
-                if component_id != prev_component_id:
-                    # save parameters for this component to the collection
-                    all_params.append(flow_params)
-
-                    # re-init params for the next component
-                    flow_params = torch.nn.ParameterList()
-                    
-                    if debug_param_groups:
-                        logger.info(f"Grouping [{', '.join(debug_flow)}] as Component {prev_component_id}'s parameters")
-                        debug_flow = []
-
-
-                # accumulate the flow terms for this component
-                flow_params.append(param)
-                debug_flow.append(name)
-
-                prev_component_id = component_id
+                flow_params[component_id].append(param)
+                flow_labels[component_id].append(name)
             else:
-                debug_vae.append(name)
+                vae_labels.append(name)
                 vae_params.append(param)
 
-        # save last set of flow parameters, then add vae parameters so that flow parameters are ordered first
-        all_params.append(flow_params)
+        # collect all parameters into a single list
+        # the first args.num_components elements in the parameters list correspond bagged/boosting parameters
+        all_params = []
+        for c in range(args.num_components):
+            all_params.append(flow_params[f"{c}"])
+            logger.info(f"Grouping [{', '.join(flow_labels[str(c)])}] as Component {c}'s parameters.")
+
+        # vae parameters are at the end of the list
         all_params.append(vae_params)
-
-        if debug_param_groups:
-            logger.info(f"Grouping [{', '.join(debug_flow)}] as Component {prev_component_id}'s parameters.")
-            logger.info(f"Grouping [{', '.join(debug_vae)}] as the VAE parameters.\n")
-
-        optimizer = optim.Adamax([{'params': p} for p in all_params], lr=args.learning_rate, eps=1.e-7)
+        logger.info(f"Grouping [{', '.join(vae_labels)}] as the VAE parameters.\n")
+            
+        optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=args.learning_rate, eps=1.e-7)
     else:
+        logger.info(f"Initializing optimizer for standard models with learning rate={args.learning_rate}.\n")
         optimizer = optim.Adamax(model.parameters(), lr=args.learning_rate, eps=1.e-7)
 
     return optimizer
@@ -266,8 +241,6 @@ def init_log(args):
         logging.basicConfig(filename=filename, format=log_format, datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO)
     else:
         logging.basicConfig(format=log_format, level=logging.INFO)
-
-    logger.info(f"Logging file for: {__file__}\n")
 
 
 def main(main_args=None):
@@ -299,7 +272,7 @@ def main(main_args=None):
     # INITIALIZE MODEL AND OPTIMIZATION
     # =========================================================================
     model = init_model(args)
-    optimizer = init_optimizer(model, args, debug_param_groups=True)
+    optimizer = init_optimizer(model, args)
     num_params = sum([param.nelement() for param in model.parameters()])
     logger.info(f"MODEL:\nNumber of model parameters={num_params}\n{model}\n")
 

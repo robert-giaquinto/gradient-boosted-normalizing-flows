@@ -14,66 +14,85 @@ class PlanarVAE(VAE):
 
     def __init__(self, args):
         super(PlanarVAE, self).__init__(args)
-
-        # Initialize log-det-jacobian to zero
-        self.log_det_j = 0.
-
-        # Flow parameters
         self.num_flows = args.num_flows
+        self.density_evaluation = args.density_evaluation
+        self.component = 0
+        
 
         # Amortized flow parameters
-        self.amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
-        self.amor_w = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
-        self.amor_b = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
+        if args.density_evaluation:
+            # only performing an evaluation of flow, init flow parameters randomly
+            self.u = nn.Parameter(torch.randn(self.num_flows, self.z_size, 1).normal_(0, 0.01))
+            self.w = nn.Parameter(torch.randn(self.num_flows, 1, self.z_size).normal_(0, 0.01))
+            self.b = nn.Parameter(torch.randn(self.num_flows, 1, 1).fill_(0))
+
+        else:
+            # u, w, b learned from encoder neural network
+            self.amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+            self.amor_w = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+            self.amor_b = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
+            self.u, self.w, self.b = None, None, None
 
         # Normalizing flow layers
-        #flow = flows.Planar
-        #for k in range(self.num_flows):
-        #    flow_k = flow()
-        #    self.add_module('flow_' + str(k), flow_k)
-        self.flow = flows.Planar()
+        self.flow_transformation = flows.Planar()
 
     def encode(self, x):
         """
         Encoder that ouputs parameters for base distribution of z and flow parameters.
         """
-
         batch_size = x.size(0)
 
         h = self.q_z_nn(x)
         h = h.view(-1, self.q_z_nn_output_dim)
-        mean_z = self.q_z_mean(h)
-        var_z = self.q_z_var(h)
+        z_mu = self.q_z_mean(h)
+        z_var = self.q_z_var(h)
 
-        # return amortized u an w for all flows
-        u = self.amor_u(h).view(batch_size, self.num_flows, self.z_size, 1)
-        w = self.amor_w(h).view(batch_size, self.num_flows, 1, self.z_size)
-        b = self.amor_b(h).view(batch_size, self.num_flows, 1, 1)
+        # compute amortized (u, w, b) for flows
+        self.u = self.amor_u(h).view(batch_size, self.num_flows, self.z_size, 1)
+        self.w = self.amor_w(h).view(batch_size, self.num_flows, 1, self.z_size)
+        self.b = self.amor_b(h).view(batch_size, self.num_flows, 1, 1)
 
-        return mean_z, var_z, u, w, b
+        return z_mu, z_var
+
+    def flow(self, z_0):
+        # Initialize log-det-jacobian to zero
+        log_det_jacobian = 0.0
+        z = [z_0]
+
+        for k in range(self.num_flows):
+            if self.density_evaluation:
+                # Note: it may be faster to not use the batch-wise default transformation in self.flow_transformation()
+                # but instead create a non-batch-wise version of that forward step.
+                # for now, just expand/repeat the coefficients for each sample
+                bs = z_0.size(0)
+                u, w, b = self.u[k,...].expand(bs, self.z_size, 1), self.w[k,...].expand(bs, 1, self.z_size), self.b[k,...].expand(bs, 1, 1)
+
+                #u, w, b = self.u[k, :, :], self.w[k, :, :], self.b[k, :, :]
+                #z_k, ldj = self.flow_transformation.transform(z[k], u, w, b)
+            else:
+                u, w, b = self.u[:, k, :, :], self.w[:, k, :, :], self.b[:, k, :, :]
+            
+            z_k, ldj = self.flow_transformation(z[k], u, w, b)
+            z.append(z_k)
+            log_det_jacobian += ldj
+        
+        return z[-1], log_det_jacobian
 
     def forward(self, x):
         """
         Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
         Log determinant is computed as log_det_j = N E_q_z0[\sum_k log |det dz_k/dz_k-1| ].
         """
-
-        self.log_det_j = 0.
-
-        z_mu, z_var, u, w, b = self.encode(x)
+        z_mu, z_var = self.encode(x)
 
         # Sample z_0
-        z = [self.reparameterize(z_mu, z_var)]
+        z_0 = self.reparameterize(z_mu, z_var)
 
-        # Normalizing flows
-        for k in range(self.num_flows):
-            #flow_k = getattr(self, 'flow_' + str(k))
-            #z_k, log_det_jacobian = flow_k(z[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
-            z_k, log_det_jacobian = self.flow(z[k], u[:, k, :, :], w[:, k, :, :], b[:, k, :, :])
-            z.append(z_k)
-            self.log_det_j += log_det_jacobian
+        # pass through normalizing flow
+        z_k, log_det_jacobian = self.flow(z_0)
 
-        x_mean = self.decode(z[-1])
+        # reconstruct
+        x_recon = self.decode(z_k)
 
-        return x_mean, z_mu, z_var, self.log_det_j, z[0], z[-1]
+        return x_recon, z_mu, z_var, log_det_jacobian, z_0, z_k
 
