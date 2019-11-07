@@ -1,4 +1,5 @@
 import torch
+import torch.distributions as D
 import numpy as np
 import math
 import sklearn
@@ -26,6 +27,30 @@ def make_toy_density(args):
     elif args.dataset == "u4":
         u_z = lambda z: - torch.log(torch.exp(-0.5*((z[:,1] - w1(z))/0.4)**2) + \
                                     torch.exp(-0.5*((z[:,1] - w1(z) + w3(z))/0.35)**2) + 1e-10)
+    elif args.dataset == "u5":
+        num_clusters = 4
+        mix_props = np.random.dirichlet([18.5] * num_clusters).astype("float32")
+        print(mix_props)
+        
+        mu = torch.from_numpy(np.random.normal(loc=[0.0, 0.0], scale=3.0, size=[num_clusters, 2]).astype("float32"))
+        print(mu)
+        
+        sigma = np.random.gamma(8.0, scale=0.5, size=[num_clusters, 2, 2]).astype("float32")
+        print(sigma)
+        sigma[:, 0, 0] = np.random.uniform(low=0.5, high=2.5, size=[num_clusters]).astype("float32") * sigma[:, 1, 1]
+        sigma[:, 1, 0] = np.random.uniform(low=0.1, high=0.75, size=[num_clusters]).astype("float32") * sigma[:, 1, 1]
+        print(sigma)
+                
+        mix_props = torch.from_numpy(mix_props)
+        sigma = torch.from_numpy(sigma)
+
+        #u_z = lambda z: torch.sum(D.MultivariateNormal(mu_i, sigma_i).log_prob(z) * mix_props_i \
+        #                          for (mix_props_i, mu_i, sigma_i) in zip(mix_props, mu, sigma), dim=-1)
+        u_z = lambda z: sum(-1.0 * D.MultivariateNormal(mu_i, sigma_i).log_prob(z) * mix_props_i \
+            for (mix_props_i, mu_i, sigma_i) in zip(mix_props, mu, sigma))
+
+
+        return u_z
     else:
         raise ValueError("Unacceptable choice of target density to sample from")
 
@@ -120,14 +145,6 @@ def make_toy_sampler(args):
 
         elif args.dataset == "line":
             x = np.random.rand(batch_size)
-            #x = np.arange(0., 1., 1/batch_size)
-            x = x * 5 - 2.5
-            y = x #- x + np.random.rand(batch_size)
-            data = np.stack((x, y), 1).astype("float32")
-            data = torch.from_numpy(data)
-            
-        elif args.dataset == "line-noisy":
-            x = np.random.rand(batch_size)
             x = x * 5 - 2.5
             y = x + np.random.randn(batch_size)
             data = np.stack((x, y), 1).astype("float32")
@@ -167,7 +184,23 @@ def make_toy_sampler(args):
             centers = torch.tensor([(scale * x, scale * y) for x,y in centers]).float()
             noise = torch.randn(batch_size, 2)
             data = sq2 * (0.5 * noise + centers[torch.randint(2, size=(batch_size,))])
+
+        elif args.dataset == "mog":
+            num_clusters = 4
+            mix_props = np.random.dirichlet([18.5] * num_clusters)
+            mu = np.random.normal(loc=[0.0, 0.0], scale=1.0, size=[n_clust, 2])
+            sigma = np.random.gamma(5.5, scale=0.05, size=[n_clust, 2, 2]) 
+            sigma[:, 0, 0] = np.random.uniform(low=0.7, high=1.4, size=[num_clusters]) * sigma[:, 1, 1]
+            sigma[:, 1, 0] = np.random.uniform(low=0.2, high=0.4, size=[num_clusters]) * sigma[:, 1, 1]
+
+            sigma[:,0,1] = sigma[:,1,0]
+            Y = []
+            for (mix_props_i, mu_i, cov_mat_i) in zip(mix_props, mu, sigma):
+                Y.extend(np.random.multivariate_normal(mu_i, cov_mat_i, size=[int(batch_size * mix_props_i)]))
                 
+            Y = np.array(Y).reshape([batch_size, 2])
+            data = torch.from_numpy(Y)
+            
         else:
             raise ValueError(f"The toy dataset {args.dataset} hasn't been defined!")
 

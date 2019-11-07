@@ -47,7 +47,6 @@ class BoostedVAE(VAE):
                 self.u.append(nn.Parameter(torch.randn(self.num_flows, 2, 1).normal_(0, 0.01)))
                 self.w.append(nn.Parameter(torch.randn(self.num_flows, 1, 2).normal_(0, 0.01)))
                 self.b.append(nn.Parameter(torch.randn(self.num_flows, 1, 1).fill_(0)))
-                
             else:
                 # u, w, b learned from encoder neural network
                 amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
@@ -209,10 +208,13 @@ class BoostedVAE(VAE):
             zk, eldj = self.flow_transformation(z[k], us_k, ws_k, bs_k)
             entropy_ldj += eldj
             z.append(zk)
-            
-            # boosted / external view of sample: compute likelihood of z[k] according to "density_from" components
-            _, bldj = self.flow_transformation(z[k], ud_k, wd_k, bd_k)
-            boosted_ldj += bldj
+
+            if self.component == 0 and self.all_trained == False:
+                boosted_ldj += eldj  # their is no way to computed boosted_ldj on very first component trained
+            else:
+                # boosted / external view of sample: compute likelihood of z[k] according to "density_from" components
+                _, bldj = self.flow_transformation(z[k], ud_k, wd_k, bd_k)
+                boosted_ldj += bldj
 
         return z[-1], entropy_ldj, boosted_ldj
 

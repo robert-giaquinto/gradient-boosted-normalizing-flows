@@ -57,8 +57,8 @@ class VAE(nn.Module):
         self.log_det_j = self.FloatTensor(1).zero_()
 
         # base distribution for calculation of log prob under the model
-        self.register_buffer('base_dist_mean', torch.ones(self.z_size, device=args.device))
-        #self.register_buffer('base_dist_var', 4.0 * torch.eye(self.z_size, device=args.device))
+        self.register_buffer('base_dist_mean', torch.randn(self.z_size, device=args.device).normal_(0, 0.1))
+        #self.register_buffer('base_dist_mean', torch.ones(self.z_size, device=args.device))
         self.register_buffer('base_dist_var', 3.0 * torch.ones(self.z_size, device=args.device))
 
     @property

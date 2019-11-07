@@ -7,6 +7,6 @@ batch_size=128
 seed=123
 num_workers=1
 num_steps=150000
-
+plot_resolution=1000
 
 

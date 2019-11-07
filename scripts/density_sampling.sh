@@ -5,23 +5,24 @@ source ./scripts/experiment_config_density.sh
 source ./venv/bin/activate
 
 # variables specific to this experiment
-num_steps=100001
-exp_name=density_matching
-logging=5000
+num_steps=150001
+exp_name=density_sampling
+logging=1000
 iters_per_component=20000
 min_beta=1.0
 regularization_rate=0.75
-plot_resolution=500
+plot_resolution=1000
 
 
-for u in 2 3 4 1 0
+#for dataset in 8gaussians 2gaussians 1gaussian swissroll rings moons pinwheel cos 2spirals checkerboard line circles joint_gaussian
+for dataset in 8gaussians 2gaussians swissroll rings moons pinwheel
 do
 
-    for flow_depth in 8 16
+    for flow_depth in 4 8 16
     do
 
-        # boosted model
-        python density.py --dataset u${u} \
+        # boosted model, just 2 components for now
+        python density.py --dataset ${dataset} \
                --experiment_name ${exp_name} \
                --no_cuda \
                --num_workers ${num_workers} \
@@ -38,10 +39,10 @@ do
                --batch_size ${batch_size} \
                --manual_seed ${seed} \
                --log_interval ${logging} \
-               --plot_interval ${logging} &
+               --plot_interval ${logging} ;
 
         # planar flow
-        python density.py --dataset u${u} \
+        python density.py --dataset ${dataset} \
                --experiment_name ${exp_name} \
                --no_cuda \
                --num_steps ${num_steps} \
@@ -62,5 +63,3 @@ do
 
 done
 
-
-    

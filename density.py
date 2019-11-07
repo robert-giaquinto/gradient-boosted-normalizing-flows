@@ -21,8 +21,8 @@ from main_experiment import init_model, init_optimizer, init_log
 logger = logging.getLogger(__name__)
 
 
-TOY_DATASETS = ["8gaussians", "2gaussians", "1gaussian",  "swissroll", "rings", "moons", "pinwheel", "cos", "2spirals", "checkerboard", "line", "line-noisy", "circles", "joint_gaussian"]
-ENERGY_FUNS = ['u0', 'u1', 'u2', 'u3', 'u4']
+TOY_DATASETS = ["8gaussians", "2gaussians", "1gaussian",  "swissroll", "rings", "moons", "pinwheel", "cos", "2spirals", "checkerboard", "line", "circles", "joint_gaussian"]
+ENERGY_FUNS = ['u0', 'u1', 'u2', 'u3', 'u4', 'u5']
 
 parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')
 
@@ -41,9 +41,9 @@ parser.add_argument('--num_workers', type=int, default=1,
 parser.add_argument('--no_cuda', action='store_true', default=False,help='disables CUDA training')
 
 # Reporting
-parser.add_argument('--log_interval', type=int, default=0, metavar='LOG_INTERVAL',
+parser.add_argument('--log_interval', type=int, default=0,
                     help='how many batches to wait before logging training status. Set to <0 to turn off.')
-parser.add_argument('--plot_interval', type=int, default=10, metavar='PLOT_INTERVAL',
+parser.add_argument('--plot_interval', type=int, default=10,
                     help='how many batches to wait before creating reconstruction plots. Set to <0 to turn off.')
 
 parser.add_argument('--experiment_name', type=str, default="density_evaluation",
@@ -59,6 +59,7 @@ sr = parser.add_mutually_exclusive_group(required=False)
 sr.add_argument('--save_results', action='store_true', dest='save_results', help='Save results from experiments.')
 sr.add_argument('--discard_results', action='store_false', dest='save_results', help='Do NOT save results from experiments.')
 parser.set_defaults(save_results=True)
+parser.add_argument('--plot_resolution', type=int, default=250, help='how many points to plot, higher gives better resolution')
 
 # optimization settings
 parser.add_argument('--num_steps', type=int, default=100000, help='number of training steps to take (default: 100000)')
@@ -132,17 +133,15 @@ def parse_args(main_args=None):
 
     if args.flow != 'no_flow':
         args.snap_dir += 'flow_length_' + str(args.num_flows)
+
+    if args.flow in ['boosted', 'bagged']:
+        if args.regularization_rate < 0.0:
+            raise ValueError("For boosting the regularization rate should be greater than or equal to zero.")
         
-    if args.flow == 'orthogonal':
-        args.snap_dir += '_num_vectors_' + str(args.num_ortho_vecs)
-    elif args.flow == 'householder':
-        args.snap_dir += '_num_householder_' + str(args.num_householder)
-    elif args.flow == 'iaf':
-        args.snap_dir += '_madehsize_' + str(args.made_h_size)
-    elif args.flow in ['boosted', 'bagged']:
         args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components) + '_regularization_' + f'{int(100*args.regularization_rate):d}'
 
-    args.snap_dir += '_on_' + args.dataset + "_" +args.model_signature + '/'
+    is_annealed = "_annealed" if args.min_beta < 1.0 else ""
+    args.snap_dir += '_on_' + args.dataset + is_annealed + "_" +args.model_signature + '/'
 
     kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
     return args, kwargs
@@ -179,8 +178,7 @@ def compute_kl_qp_loss(model, target_fn, beta, args):
             loss = q_log_prob - logdet + p_log_prob
         else:
             logdet = boosted_ldj + entropy_ldj * args.regularization_rate
-            #loss = q_log_prob - logdet + p_log_prob
-            loss = (1 + args.regularization_rate) * q_log_prob - logdet + p_log_prob  # technically correct but not needed
+            loss = (1 + args.regularization_rate) * q_log_prob - logdet + p_log_prob
 
         return loss.mean(0), (q_log_prob.mean().item(), entropy_ldj.mean().item(), boosted_ldj.mean().item(), p_log_prob.mean().item())
 
@@ -304,7 +302,7 @@ def annealing_schedule(i, args):
         return 1.0
     
     if args.flow == "boosted":
-        if i >= args.iters_per_component * args.num_components:
+        if i >= args.iters_per_component * args.num_components or i == args.iters_per_component:
             rval = 1.0
         else:
             rval = 0.01 + ((i % args.iters_per_component) / args.iters_per_component)
@@ -344,8 +342,9 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
         #scheduler.step(loss)
-
-        if batch_id % args.iters_per_component == 1 or batch_id % args.log_interval == 0:
+        
+        new_boosted_component = batch_id % args.iters_per_component == 1 and args.flow == "boosted" and batch_id != 1
+        if new_boosted_component or batch_id % args.log_interval == 0:
             msg = f'{args.dataset}: step {batch_id:5d} / {args.num_steps}; loss {loss.item():6.3f} (beta={beta:5.4f})'
             msg += f' | q_log_prob {loss_terms[0]:6.3f}'
 
@@ -359,7 +358,9 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
                 msg += f' | ldj {loss_terms[1]:6.3f}'
                 msg += f' | p_log_prob {loss_terms[2]:6.3f}' if args.density_matching else ''
 
-        if (batch_id != 1 and batch_id % args.iters_per_component == 1) or batch_id % args.plot_interval == 0:
+            logger.info(msg)
+
+        if new_boosted_component or batch_id % args.plot_interval == 0:
             plot(batch_id, model, target_or_sample_fn, args)
 
         if args.flow == "bagged":
@@ -370,9 +371,10 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
                 component_loss[0, model.component] += loss.item()
                 component_loss[1, model.component] += args.batch_size
         elif args.flow == "boosted":
-            if batch_id % args.iters_per_component == 0 and batch_id > 0 and model.component < model.num_components:
+            if batch_id % args.iters_per_component == 0 and batch_id > 0:
                 #update_rho(model, target_or_sample_fn, args)
-                if model.component == model.num_components - 1 and batch_id < 100000:
+                if model.component == model.num_components - 1:
+                    # loop through and retrain each component
                     model.component = 0
                     model.all_trained = True
                 else:
@@ -380,9 +382,6 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
 
                 for c in range(args.num_components):
                     optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
-
-        if batch_id % args.iters_per_component == 1 or batch_id % args.log_interval == 0:
-            logger.info(msg)
             
 
 def main(main_args=None):
