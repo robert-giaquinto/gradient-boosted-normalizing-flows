@@ -28,27 +28,20 @@ def make_toy_density(args):
         u_z = lambda z: - torch.log(torch.exp(-0.5*((z[:,1] - w1(z))/0.4)**2) + \
                                     torch.exp(-0.5*((z[:,1] - w1(z) + w3(z))/0.35)**2) + 1e-10)
     elif args.dataset == "u5":
-        num_clusters = 4
-        mix_props = np.random.dirichlet([18.5] * num_clusters).astype("float32")
-        print(mix_props)
-        
-        mu = torch.from_numpy(np.random.normal(loc=[0.0, 0.0], scale=3.0, size=[num_clusters, 2]).astype("float32"))
-        print(mu)
-        
-        sigma = np.random.gamma(8.0, scale=0.5, size=[num_clusters, 2, 2]).astype("float32")
-        print(sigma)
-        sigma[:, 0, 0] = np.random.uniform(low=0.5, high=2.5, size=[num_clusters]).astype("float32") * sigma[:, 1, 1]
-        sigma[:, 1, 0] = np.random.uniform(low=0.1, high=0.75, size=[num_clusters]).astype("float32") * sigma[:, 1, 1]
-        print(sigma)
-                
+        num_clusters = 6
+        mix_props = np.random.dirichlet([10.0] * num_clusters).astype("float32")
+        mu = torch.from_numpy(np.random.normal(loc=[0.0, 0.0], scale=1.0, size=[num_clusters, 2]).astype("float32"))
+        sigma = np.repeat(np.eye(2)[None], num_clusters, axis=0).astype("float32") * 0.8
+        sigma[:, 1, 0] = np.random.uniform(low=0.0, high=0.8, size=[num_clusters]).astype("float32") *\
+            np.random.choice([1, -1], size=[num_clusters])
         mix_props = torch.from_numpy(mix_props)
         sigma = torch.from_numpy(sigma)
 
-        #u_z = lambda z: torch.sum(D.MultivariateNormal(mu_i, sigma_i).log_prob(z) * mix_props_i \
-        #                          for (mix_props_i, mu_i, sigma_i) in zip(mix_props, mu, sigma), dim=-1)
-        u_z = lambda z: sum(-1.0 * D.MultivariateNormal(mu_i, sigma_i).log_prob(z) * mix_props_i \
-            for (mix_props_i, mu_i, sigma_i) in zip(mix_props, mu, sigma))
+        print(mix_props, "\n", mu, "\n", sigma)
 
+        u_z = lambda z: -1.0 * torch.log(sum(
+            torch.exp(D.MultivariateNormal(mu_i, sigma_i).log_prob(z)) * mix_props_i \
+            for (mix_props_i, mu_i, sigma_i) in zip(mix_props, mu, sigma)))
 
         return u_z
     else:

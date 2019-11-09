@@ -73,7 +73,7 @@ def format_ax(ax, range_lim):
     
 def plot_potential(potential_fn, ax, test_grid, n_pts):
     xx, yy, zz = test_grid
-    ax.pcolormesh(xx, yy, torch.exp(-potential_fn(zz)).view(n_pts, n_pts).cpu().data, cmap=plt.cm.viridis)
+    ax.pcolormesh(xx, yy, torch.exp(-1.0 * potential_fn(zz)).view(n_pts, n_pts).cpu().data, cmap=plt.cm.viridis)
     ax.set_title('Target Density', fontdict={'fontsize': 20})
 
     

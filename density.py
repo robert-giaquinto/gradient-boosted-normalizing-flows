@@ -183,8 +183,7 @@ def compute_kl_qp_loss(model, target_fn, beta, args):
         return loss.mean(0), (q_log_prob.mean().item(), entropy_ldj.mean().item(), boosted_ldj.mean().item(), p_log_prob.mean().item())
 
     else:
-        zk, logdet = model.flow(z)
-        
+        zk, logdet = model.flow(z)        
         p_log_prob = target_fn(zk) * beta
         loss = q_log_prob - logdet + p_log_prob
         return loss.mean(0), (q_log_prob.mean().item(), logdet.mean().item(), p_log_prob.mean().item())
