@@ -12,6 +12,7 @@ from models.boosted_vae import BoostedVAE
 from models.bagged_vae import BaggedVAE
 from models.planar_vae import PlanarVAE
 from models.radial_vae import RadialVAE
+from models.liniaf_vae import LinIAFVAE
 from utils.load_data import load_dataset
 from utils.density_plotting import plot
 from utils.density_data import make_toy_density, make_toy_sampler
@@ -27,18 +28,20 @@ ENERGY_FUNS = ['u0', 'u1', 'u2', 'u3', 'u4', 'u5']
 parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')
 
 parser.add_argument('--dataset', type=str, default='mnist', help='Dataset choice.', choices=TOY_DATASETS + ENERGY_FUNS)
+parser.add_argument('--mog_sigma', type=float, default=1.0, help='Variance in location of mixture of gaussian data.',
+                    choices=[i / 100.0 for i in range(50, 250)])
+parser.add_argument('--mog_clusters', type=int, default=6, help='Number of clusters to use in the mixture of gaussian data.',
+                    choices=range(1,13))
 
 # seeds
 parser.add_argument('--manual_seed', type=int, default=123,
                     help='manual seed, if not given resorts to random seed.')
-parser.add_argument('--freyseed', type=int, default=123,
-                    help="Seed for shuffling frey face dataset for test split. Ignored for other datasets.")
 
 # gpu/cpu
 parser.add_argument('--gpu_id', type=int, default=0, metavar='GPU', help='choose GPU to run on.')
 parser.add_argument('--num_workers', type=int, default=1,
                     help='How many CPU cores to run on. Setting to 0 uses os.cpu_count() - 1.')
-parser.add_argument('--no_cuda', action='store_true', default=False,help='disables CUDA training')
+parser.add_argument('--no_cuda', action='store_true', default=False, help='disables CUDA training')
 
 # Reporting
 parser.add_argument('--log_interval', type=int, default=0,
@@ -70,10 +73,11 @@ parser.add_argument('--regularization_rate', type=float, default=0.5, help='Regu
 parser.add_argument('--iters_per_component', type=int, default=10000, help='how often to train each boosted component before changing')
 parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
 parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
+parser.add_argument('--no_annealing', action='store_true', default=False, help='disables annealing while training')
 
 # flow parameters
 parser.add_argument('--flow', type=str, default='planar',
-                    choices=['planar', 'radial', 'boosted', 'bagged'],
+                    choices=['planar', 'radial', 'liniaf', 'boosted', 'bagged'],
                     help="""Type of flows to use, no flows can also be selected""")
 parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
 parser.add_argument('--z_size', type=int, default=2, help='how many stochastic hidden units')
@@ -81,7 +85,7 @@ parser.add_argument('--z_size', type=int, default=2, help='how many stochastic h
 # Bagging/Boosting parameters
 parser.add_argument('--num_components', type=int, default=4,
                     help='How many components are combined to form the flow')
-parser.add_argument('--component_type', type=str, default='planar', choices=['planar', 'radial'],
+parser.add_argument('--component_type', type=str, default='planar', choices=['planar', 'radial', 'liniaf'],
                     help='When flow is bagged or boosted -- what type of flow should each component implement.')
 
 
@@ -140,9 +144,18 @@ def parse_args(main_args=None):
         
         args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components) + '_regularization_' + f'{int(100*args.regularization_rate):d}'
 
-    is_annealed = "_annealed" if args.min_beta < 1.0 else ""
-    args.snap_dir += '_on_' + args.dataset + is_annealed + "_" +args.model_signature + '/'
+    is_annealed = ""
+    if not args.no_annealing and args.min_beta < 1.0:
+        is_annealed += "_annealed"
+    else:
+        args.min_beta = 1.0
 
+    if args.dataset in ['u5', 'mog']:
+        dataset = f"{args.dataset}_s{int(100 * args.mog_sigma)}_c{args.mog_clusters}"
+    else:
+        dataset = args.dataset
+        
+    args.snap_dir += is_annealed + '_on_' + dataset + "_" + args.model_signature + '/'
     kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
     return args, kwargs
 
@@ -183,7 +196,7 @@ def compute_kl_qp_loss(model, target_fn, beta, args):
         return loss.mean(0), (q_log_prob.mean().item(), entropy_ldj.mean().item(), boosted_ldj.mean().item(), p_log_prob.mean().item())
 
     else:
-        zk, logdet = model.flow(z)        
+        zk, logdet = model.flow(z)
         p_log_prob = target_fn(zk) * beta
         loss = q_log_prob - logdet + p_log_prob
         return loss.mean(0), (q_log_prob.mean().item(), logdet.mean().item(), p_log_prob.mean().item())

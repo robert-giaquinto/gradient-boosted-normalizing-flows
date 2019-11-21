@@ -22,17 +22,10 @@ class RadialVAE(VAE):
 
         # Amortized flow parameters
         if args.density_evaluation:
-            self.q_z_nn, self.q_z_mean, self.q_z_var = None, None, None
-            self.p_x_nn, self.p_x_mean = None, None
-
             # only performing an evaluation of flow, init flow parameters randomly
-            self.alpha = nn.Parameter(torch.randn(args.batch_size, self.num_flows, 1, 1).normal_(0, 0.01))
-            self.beta = nn.Parameter(torch.randn(args.batch_size, self.num_flows, 1, 1).normal_(0, 0.01))
-            self.z_ref = nn.Parameter(torch.randn(args.batch_size, self.z_size).fill_(0))
-
-            self.z_mu = nn.Parameter(torch.zeros(2)).requires_grad_(True)
-            self.z_var = nn.Parameter(torch.ones(2)).requires_grad_(True)
-
+            self.alpha = nn.Parameter(torch.randn(self.num_flows, 1, 1).normal_(0, 0.01))
+            self.beta = nn.Parameter(torch.randn(self.num_flows, 1, 1).normal_(0, 0.01))
+            self.z_ref = nn.Parameter(torch.randn(self.z_size).fill_(0))
         else:
             # flow parameters learned from encoder neural network
             self.amor_alpha = nn.Sequential(
@@ -44,6 +37,8 @@ class RadialVAE(VAE):
             self.amor_z_ref = nn.Linear(self.q_z_nn_output_dim, self.z_size)
         
             self.alpha, self.beta, self.z_ref = None, None, None
+
+        self.flow_transformation = flows.Radial()
 
     def encode(self, x):
         """
@@ -65,17 +60,18 @@ class RadialVAE(VAE):
     def flow(self, z_0):
         # Initialize log-det-jacobian to zero
         log_det_jacobian = 0.0
-
-        if self.density_evaluation:
-            # use trainable base distribution parameters
-            # treat z_0 as the "noise"
-            z = [self.z_mu + self.z_var * z_0]
-        else:
-            # already given the reparameterized z_0
-            z = [z_0]
+        z = [z_0]
 
         for k in range(self.num_flows):
-            z_k, ldj = self.flow_transformation(z[k], self.z_ref, self.alpha[:, k, :, :], self.beta[:, k, :, :])
+            if self.density_evaluation:
+                bs = z_0.size(0)
+                alpha, beta = self.alpha[k,...].expand(bs, 1, 1), self.beta[k,...].expand(bs, 1, 1)
+                z_ref = self.z_ref.expand(bs, self.z_size)
+            else:
+                alpha, beta = self.alpha[:, k, :, :], self.beta[:, k, :, :]
+                z_ref = self.z_ref
+                
+            z_k, ldj = self.flow_transformation(z[k], z_ref, alpha, beta)
             z.append(z_k)
             log_det_jacobian += ldj
 

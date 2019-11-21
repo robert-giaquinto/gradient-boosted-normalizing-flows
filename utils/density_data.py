@@ -28,16 +28,14 @@ def make_toy_density(args):
         u_z = lambda z: - torch.log(torch.exp(-0.5*((z[:,1] - w1(z))/0.4)**2) + \
                                     torch.exp(-0.5*((z[:,1] - w1(z) + w3(z))/0.35)**2) + 1e-10)
     elif args.dataset == "u5":
-        num_clusters = 6
+        num_clusters = args.mog_clusters
         mix_props = np.random.dirichlet([10.0] * num_clusters).astype("float32")
-        mu = torch.from_numpy(np.random.normal(loc=[0.0, 0.0], scale=1.0, size=[num_clusters, 2]).astype("float32"))
+        mu = torch.from_numpy(np.random.normal(loc=[0.0, 0.0], scale=args.mog_sigma, size=[num_clusters, 2]).astype("float32"))
         sigma = np.repeat(np.eye(2)[None], num_clusters, axis=0).astype("float32") * 0.8
         sigma[:, 1, 0] = np.random.uniform(low=0.0, high=0.8, size=[num_clusters]).astype("float32") *\
             np.random.choice([1, -1], size=[num_clusters])
         mix_props = torch.from_numpy(mix_props)
         sigma = torch.from_numpy(sigma)
-
-        print(mix_props, "\n", mu, "\n", sigma)
 
         u_z = lambda z: -1.0 * torch.log(sum(
             torch.exp(D.MultivariateNormal(mu_i, sigma_i).log_prob(z)) * mix_props_i \
@@ -179,20 +177,24 @@ def make_toy_sampler(args):
             data = sq2 * (0.5 * noise + centers[torch.randint(2, size=(batch_size,))])
 
         elif args.dataset == "mog":
-            num_clusters = 4
-            mix_props = np.random.dirichlet([18.5] * num_clusters)
-            mu = np.random.normal(loc=[0.0, 0.0], scale=1.0, size=[n_clust, 2])
-            sigma = np.random.gamma(5.5, scale=0.05, size=[n_clust, 2, 2]) 
-            sigma[:, 0, 0] = np.random.uniform(low=0.7, high=1.4, size=[num_clusters]) * sigma[:, 1, 1]
-            sigma[:, 1, 0] = np.random.uniform(low=0.2, high=0.4, size=[num_clusters]) * sigma[:, 1, 1]
+            num_clusters = args.mog_clusters
+            mix_props = np.random.dirichlet([10.0] * num_clusters).astype("float32")
+            mu = torch.from_numpy(np.random.normal(loc=[0.0, 0.0], scale=args.mog_sigma, size=[num_clusters, 2]).astype("float32"))
+            sigma = np.repeat(np.eye(2)[None], num_clusters, axis=0).astype("float32") * 0.8
+            sigma[:, 1, 0] = np.random.uniform(low=0.0, high=0.8, size=[num_clusters]).astype("float32") *\
+                np.random.choice([1, -1], size=[num_clusters])
+            mix_props = torch.from_numpy(mix_props)
+            sigma = torch.from_numpy(sigma)
+            
+            u_z = lambda z: -1.0 * torch.log(sum(
+                torch.exp(D.MultivariateNormal(mu_i, sigma_i).log_prob(z)) * mix_props_i \
+                for (mix_props_i, mu_i, sigma_i) in zip(mix_props, mu, sigma)))
 
-            sigma[:,0,1] = sigma[:,1,0]
-            Y = []
-            for (mix_props_i, mu_i, cov_mat_i) in zip(mix_props, mu, sigma):
-                Y.extend(np.random.multivariate_normal(mu_i, cov_mat_i, size=[int(batch_size * mix_props_i)]))
+            data = []
+            for (mix_props_i, mu_i, sigma_i) in zip(mix_props, mu, sigma):
+                data.extend(np.random.multivariate_normal(mu_i, sigma_i, size=[int(batch_size * mix_props_i)]))
                 
-            Y = np.array(Y).reshape([batch_size, 2])
-            data = torch.from_numpy(Y)
+            data = torch.from_numpy(np.array(data).reshape([batch_size, 2]))
             
         else:
             raise ValueError(f"The toy dataset {args.dataset} hasn't been defined!")

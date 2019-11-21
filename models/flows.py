@@ -353,3 +353,33 @@ class IAF(nn.Module):
             z = gate * z + (1 - gate) * mean
             logdets += torch.sum(safe_log(gate).view(gate.size(0), -1), 1)
         return z, logdets
+
+
+class LinIAF(nn.Module):
+    def __init__(self, z_size):
+        super(LinIAF, self).__init__()
+        self.z_size = z_size
+
+    def forward(self, z, L):
+        '''
+        :param L: batch_size (B) x latent_size^2 (L^2)
+        :param z: batch_size (B) x latent_size (L)
+        :return: z_new = L*z
+        '''
+        #bs = L.size(0)
+        
+        # L->tril(L)
+        L_matrix = L.view( -1, self.z_size, self.z_size ) # resize to get B x L x L
+        LTmask = torch.tril( torch.ones(self.z_size, self.z_size), diagonal=-1 ) # lower-triangular mask matrix (1s in lower triangular part)
+        I = torch.eye(self.z_size, self.z_size).expand(L_matrix.size(0), self.z_size, self.z_size)
+
+        if torch.cuda.is_available():
+            LTmask = LTmask.cuda()
+            I = I.cuda()
+
+        LTmask = LTmask.unsqueeze(0).expand( L_matrix.size(0), self.z_size, self.z_size ) # 1 x L x L -> B x L x L
+        LT = torch.mul( L_matrix, LTmask ) + I # here we get a batch of lower-triangular matrices with ones on diagonal
+
+        # z_new = L * z
+        z_new = torch.bmm( LT , z.unsqueeze(2) ).squeeze(2) # B x L x L * B x L x 1 -> B x L
+        return z_new
