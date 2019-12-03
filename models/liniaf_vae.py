@@ -59,9 +59,6 @@ class LinIAFVAE(VAE):
                 # for now, just expand/repeat the coefficients for each sample
                 bs = z_0.size(0)
                 L = self.L[k,...].expand(bs, self.z_size, self.z_size)
-
-                #u, w, b = self.u[k, :, :], self.w[k, :, :], self.b[k, :, :]
-                #z_k, ldj = self.flow_transformation.transform(z[k], u, w, b)
             else:
                 L = self.L[:, k, :, :]
 

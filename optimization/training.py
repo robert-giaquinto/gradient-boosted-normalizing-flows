@@ -293,15 +293,15 @@ def train_epoch_boosted(epoch, train_loader, model, opt, beta, prob_all, args):
 
         opt.zero_grad()
         
-        x_recon, z_mu, z_var, log_det_jacobians, z0, zk = model(data, prob_all)
-        g_ldj, G_ldj = log_det_jacobians
-        loss, rec, kl = calculate_loss(x_recon, data, z_mu, z_var, z0, zk, G_ldj, args, beta=beta)
+        #x_recon, z_mu, z_var, log_det_jacobians, z0, zk = model(data, prob_all)
+        x_recon, z_mu, z_var, z_g, g_ldj, z_G, G_ldj = model(data)
+        loss, rec, kl = calculate_loss(x_recon, data, z_mu, z_var, z_g[0], z_g[-1], g_ldj, args, beta=beta)
+        loss = rec + beta * kl * args.regularization_rate
 
-        if args.regularization_rate > 0 and model.component < model.num_components and model.component > 0:
-            # compute regularization terms
-            regularizer = variational_loss(z_mu, z_var, z0, g_ldj)
-            loss = loss + args.regularization_rate * regularizer * beta
-            train_entropy[batch_id] = regularizer.item()
+        if model.component < model.num_components and (model.component > 0 or model.all_trained):
+            boosted_loss = variational_loss(z_mu, z_var, z_G[0], G_ldj)
+            loss = loss + boosted_loss * beta
+            train_entropy[batch_id] = boosted_loss.item()
         
         loss.backward()
         opt.step()

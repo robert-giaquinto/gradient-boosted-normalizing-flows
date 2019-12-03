@@ -13,6 +13,8 @@ from models.bagged_vae import BaggedVAE
 from models.planar_vae import PlanarVAE
 from models.radial_vae import RadialVAE
 from models.liniaf_vae import LinIAFVAE
+from models.affine_vae import AffineVAE
+from models.nlsq_vae import NLSqVAE
 from utils.load_data import load_dataset
 from utils.density_plotting import plot
 from utils.density_data import make_toy_density, make_toy_sampler
@@ -77,7 +79,7 @@ parser.add_argument('--no_annealing', action='store_true', default=False, help='
 
 # flow parameters
 parser.add_argument('--flow', type=str, default='planar',
-                    choices=['planar', 'radial', 'liniaf', 'boosted', 'bagged'],
+                    choices=['planar', 'radial', 'liniaf', 'affine', 'nlsq', 'boosted', 'bagged'],
                     help="""Type of flows to use, no flows can also be selected""")
 parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
 parser.add_argument('--z_size', type=int, default=2, help='how many stochastic hidden units')
@@ -85,7 +87,7 @@ parser.add_argument('--z_size', type=int, default=2, help='how many stochastic h
 # Bagging/Boosting parameters
 parser.add_argument('--num_components', type=int, default=4,
                     help='How many components are combined to form the flow')
-parser.add_argument('--component_type', type=str, default='planar', choices=['planar', 'radial', 'liniaf'],
+parser.add_argument('--component_type', type=str, default='planar', choices=['planar', 'radial', 'liniaf', 'affine', 'nlsq'],
                     help='When flow is bagged or boosted -- what type of flow should each component implement.')
 
 
@@ -172,8 +174,8 @@ def compute_kl_qp_loss(model, target_fn, beta, args):
 
     ADAPTED FROM: https://arxiv.org/pdf/1904.04676.pdf (https://github.com/kamenbliznashki/normalizing_flows/blob/master/bnaf.py)
     """
-    z = model.base_dist.sample((args.batch_size,))
-    q_log_prob = model.base_dist.log_prob(z).sum(1)
+    z0 = model.base_dist.sample((args.batch_size,))
+    q_log_prob = model.base_dist.log_prob(z0).sum(1)
     
     if args.flow == "boosted":
         if model.component < model.num_components:
@@ -183,22 +185,26 @@ def compute_kl_qp_loss(model, target_fn, beta, args):
             density_from = '1:c'
             sample_from = '1:c'
             
-        zk, entropy_ldj, boosted_ldj = model.flow(z, sample_from=sample_from, density_from=density_from)
-        p_log_prob = target_fn(zk) * beta
+        z_g, entropy_ldj, z_G, boosted_ldj = model.flow(z0, sample_from=sample_from, density_from=density_from)
+        p_log_prob = -1.0 * target_fn(z_g[-1]) * beta  # p = exp(-potential) => log_p = - potential
+        g_lhood = q_log_prob - entropy_ldj
         
         if model.component == 0 and model.all_trained == False:
-            logdet = entropy_ldj
-            loss = q_log_prob - logdet + p_log_prob
+            G_lhood = torch.zeros_like(g_lhood)
+            loss = g_lhood - p_log_prob
         else:
-            logdet = boosted_ldj + entropy_ldj * args.regularization_rate
-            loss = (1 + args.regularization_rate) * q_log_prob - logdet + p_log_prob
+            G_log_prob = model.base_dist.log_prob(z_G[0]).sum(1)
+            G_lhood = torch.max(G_log_prob - boosted_ldj, torch.ones_like(boosted_ldj) * -10.0)
+            loss =  G_lhood - p_log_prob + g_lhood * args.regularization_rate
 
-        return loss.mean(0), (q_log_prob.mean().item(), entropy_ldj.mean().item(), boosted_ldj.mean().item(), p_log_prob.mean().item())
+            #print(f"\nzg_k\n{z_g[-1][0:2].data}\nzg_0\n{z_g[0][0:2].data}\nzG_0\n{z_G[0][0:2].data}\ng_loss\n{g_loss[0:2].data}\nG_loss\n{G_loss[0:2].data}\np\n{p_log_prob[0:2].data}")
+
+        return loss.mean(0), (g_lhood.mean().item(), G_lhood.mean().item(), p_log_prob.mean().item())
 
     else:
         zk, logdet = model.flow(z)
-        p_log_prob = target_fn(zk) * beta
-        loss = q_log_prob - logdet + p_log_prob
+        p_log_prob = -1.0 * target_fn(zk) * beta  # p = exp(-potential) => log_p = - potential
+        loss = q_log_prob - logdet - p_log_prob
         return loss.mean(0), (q_log_prob.mean().item(), logdet.mean().item(), p_log_prob.mean().item())
 
 
@@ -216,23 +222,25 @@ def compute_kl_pq_loss(model, data_sampler, beta, args):
     sample = data_sampler(args.batch_size).to(args.device)
     
     if args.flow == "boosted":
-        if model.component < model.num_components:
-            density_from = '-c' if model.all_trained else '1:c-1'
-            sample_from = 'c'
-        else:
-            density_from = '1:c'
-            sample_from = '1:c'
-            
-        z, entropy_ldj, boosted_ldj = model.flow(sample, sample_from=sample_from, density_from=density_from)
-        q_log_prob = model.base_dist.log_prob(z).sum(1)
+        # compute transformation from new component
+        Z_g, g_ldj = model.component_forward_flow(sample, model.component)
+        g_log_prob = model.base_dist.log_prob(Z_g[-1]).sum(1)
+        g_lhood = g_log_prob + g_ldj
         
         if model.component == 0 and model.all_trained == False:
-            loss = -1.0 * (q_log_prob + entropy_ldj)
+            G_lhood = torch.zeros_like(g_lhood)
+            loss = -1.0 * g_lhood
         else:
-            logdet = boosted_ldj + entropy_ldj * args.regularization_rate
-            loss = -1.0 * ((1 + args.regularization_rate) * q_log_prob + logdet)
+            fixed_component_labels = '-c' if model.all_trained else '1:c-1'
+            fixed_component = model._sample_component(sampling_components=fixed_component_labels)
+            Z_G, G_ldj = model.component_forward_flow(sample, fixed_component)
+            G_log_prob = model.base_dist.log_prob(Z_G[-1]).sum(1)
+            G_lhood = G_log_prob + G_ldj    
+            G_lhood = torch.max(G_lhood, torch.ones_like(g_ldj) * -10.0)
+            g_lhood = torch.max(g_lhood, torch.ones_like(g_ldj) * -10.0)
+            loss = -1.0 * g_lhood + args.regularization_rate * G_lhood
 
-        return loss.mean(0), (q_log_prob.mean().item(), entropy_ldj.mean().detach().item(), boosted_ldj.mean().detach().item())
+        return loss.mean(0), (g_lhood.mean().item(), G_lhood.mean().item())
         
     else:
         z, logdet = model.flow(sample)
@@ -358,22 +366,22 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
         new_boosted_component = batch_id % args.iters_per_component == 1 and args.flow == "boosted" and batch_id != 1
         if new_boosted_component or batch_id % args.log_interval == 0:
             msg = f'{args.dataset}: step {batch_id:5d} / {args.num_steps}; loss {loss.item():6.3f} (beta={beta:5.4f})'
-            msg += f' | q_log_prob {loss_terms[0]:6.3f}'
 
             if args.flow == "boosted":
-                msg += f' | ldjs ({loss_terms[1]:6.3f}, {loss_terms[2]:6.3f})'
-                msg += f' | p_log_prob {loss_terms[3]:6.3f}' if args.density_matching else ''
+                msg += f' | g vs G ({loss_terms[0]:6.3f}, {loss_terms[1]:6.3f})'
+                msg += f' | p_log_prob {loss_terms[2]:7.3f}' if args.density_matching else ''
                 msg += f' | c={model.component} (all={str(model.all_trained)[0]})'
-                msg += f' | Rho=[' + ', '.join([f"{val:4.2f}" for val in model.rho.data]) + "]"
-                msg += f' | LR=[' + ', '.join([f"{optimizer.param_groups[c]['lr']:6.5f}" for c in range(args.num_components)]) + "]"
+                #msg += f' | Rho=[' + ', '.join([f"{val:4.2f}" for val in model.rho.data]) + "]"
             else:
+                msg += f' | q_log_prob {loss_terms[0]:6.3f}'
                 msg += f' | ldj {loss_terms[1]:6.3f}'
-                msg += f' | p_log_prob {loss_terms[2]:6.3f}' if args.density_matching else ''
+                msg += f' | p_log_prob {loss_terms[2]:7.3f}' if args.density_matching else ''
 
             logger.info(msg)
 
         if new_boosted_component or batch_id % args.plot_interval == 0:
-            plot(batch_id, model, target_or_sample_fn, args)
+            with torch.no_grad():
+                plot(batch_id, model, target_or_sample_fn, args)
 
         if args.flow == "bagged":
             if batch_id % args.iters_per_component == 0 and batch_id > 0:

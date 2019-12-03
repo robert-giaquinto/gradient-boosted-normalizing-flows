@@ -30,31 +30,27 @@ class BoostedVAE(VAE):
         self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
 
         # Flow parameters
-        if args.component_type == "planar":
-            self.flow_transformation = flows.Planar()
+        if args.component_type == "affine":
+            self.flow_transformation = flows.Affine()
+            self.num_coefs = 2
+        elif args.component_type == "nlsq":
+            self.flow_transformation = flows.NLSq()
+            self.num_coefs = 5
         else:
-            raise ValueError("Lets keep it simple for now and only implement planar components")
+            raise NotImplementedError("Only affine and nlsq component types are currently implemented")
 
         if args.density_evaluation:
             self.q_z_nn, self.q_z_mean, self.q_z_var = None, None, None
             self.p_x_nn, self.p_x_mean = None, None
-            self.u, self.w, self.b  = nn.ParameterList(), nn.ParameterList(), nn.ParameterList()
-        
+            self.flow_coef  = nn.ParameterList()
+
         # Amortized flow parameters for each component
         for c in range(self.num_components):
             if args.density_evaluation:
-                # only performing an evaluation of flow, init flow parameters randomly
-                self.u.append(nn.Parameter(torch.randn(self.num_flows, 2, 1).normal_(0, 0.01)))
-                self.w.append(nn.Parameter(torch.randn(self.num_flows, 1, 2).normal_(0, 0.01)))
-                self.b.append(nn.Parameter(torch.randn(self.num_flows, 1, 1).fill_(0)))
+                self.flow_coef.append(nn.Parameter(torch.randn(self.num_flows, self.z_size, self.num_coefs).normal_(0.0, 0.1)))
             else:
-                # u, w, b learned from encoder neural network
-                amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
-                amor_w = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
-                amor_b = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
-                self.add_module('amor_u_' + str(c), amor_u)
-                self.add_module('amor_w_' + str(c), amor_w)
-                self.add_module('amor_b_' + str(c), amor_b)
+                amor_flow_coef = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size * self.num_coefs)
+                self.add_module('amor_flow_coef_' + str(c), amor_flow_coef)
 
     def _rho_gradient(self, x):
         """
@@ -130,6 +126,16 @@ class BoostedVAE(VAE):
         return h, z_mu, z_var
 
     def _sample_component(self, sampling_components):
+        """
+        Given the keyword "sampling_components" (such as "1:c", "1:c-1", or "-c"), sample a component id from the possible
+        components specified by the keyword.
+
+        "1:c":   sample from any of the first c components
+        "1:c-1": sample from any of the first c-1 components
+        "-c":    sample from any component except the c-th component
+
+        Returns the integer id of the sampled component
+        """
         if sampling_components == "c":
             # sample from new component
             j = min(self.component, self.num_components - 1)
@@ -163,62 +169,82 @@ class BoostedVAE(VAE):
         """
 
         if self.args.density_evaluation:
-            u, w, b = self.u[c], self.w[c], self.b[c]
+            flow_coef = self.flow_coef[c]
             
         else:
             if h is None:
-                raise ValueError("Cannot compute u, w, and b without hidden layer h")
+                raise ValueError("Cannot compute flow coefficients without hidden layer h")
             
             batch_size = h.size(0)
-            amor_u = getattr(self, 'amor_u_' + str(c))
-            amor_w = getattr(self, 'amor_w_' + str(c))
-            amor_b = getattr(self, 'amor_b_' + str(c))
-            u = amor_u(h).view(batch_size, self.num_flows, self.z_size, 1)
-            w = amor_w(h).view(batch_size, self.num_flows, 1, self.z_size)
-            b = amor_b(h).view(batch_size, self.num_flows, 1, 1)
+            amor_flow_coef = getattr(self, 'amor_flow_coef_' + str(c))
+            flow_coef = amor_flow_coef(h).view(batch_size, self.num_flows, self.z_size, self.num_coefs)
             
-        return u, w, b
+        return flow_coef
 
-    def flow(self, z0, sample_from, density_from, h=None):
+    def component_forward_flow(self, z0, component, h=None):
+        """
+        Get the corresponding flow's coefficients, then apply the flow
+
+        Returns a list of [z0, ..., zk] and the log det jacobian
+        """
         bs = z0.size(0)
-        entropy_ldj = self.FloatTensor(bs).fill_(0.0)
-        boosted_ldj = self.FloatTensor(bs).fill_(0.0)  # also save ldj according to dist that zk is sampled from
-        z = [z0]
-        
-        # which components should zk be sampled from? (i.e. expectation's distribution)
-        # Ideally, would sample a different flow for each observation,
-        # but instead, for efficiency/simplicity -- just sample a flow PER BATCH
-        s = self._sample_component(sampling_components=sample_from)
-        u, w, b = self._get_flow_coefficients(s, h=h)
+        Z = [z0]
+            
+        flow_coef = self._get_flow_coefficients(component, h=h)
 
-        # get seperate coefficients to compute density against
-        # TODO? take multiple samples to compute density against
-        d = self._sample_component(sampling_components=density_from)
-        ud, wd, bd = self._get_flow_coefficients(d, h=h)
-
+        log_det_j = self.FloatTensor(bs).fill_(0.0)
         for k in range(self.num_flows):
             if self.density_evaluation:
-                us_k, ws_k, bs_k = u[k,...].expand(bs, 2, 1), w[k,...].expand(bs, 1, 2), b[k,...].expand(bs, 1, 1)
-                ud_k, wd_k, bd_k = ud[k,...].expand(bs, 2, 1), wd[k,...].expand(bs, 1, 2), bd[k,...].expand(bs, 1, 1)
+                flow_coef_k = flow_coef[k,...].expand(bs, self.z_size, self.num_coefs)
             else:
-                us_k, ws_k, bs_k = u[:, k, :, :], w[:, k, :, :], b[:, k, :, :]
-                ud_k, wd_k, bd_k = ud[:, k, :, :], wd[:, k, :, :], bd[:, k, :, :]
+                flow_coef_k = flow_coef[:, k, :, :]
+
+            zk, ldj = self.flow_transformation(Z[k], flow_coef_k)
+            log_det_j += ldj
+            Z.append(zk)
+
+        return Z, log_det_j
+
+    def component_inverse_flow(self, z_K, component, h=None):
+        """
+        Given a point z_K find the point z0 using the inverse flow function for a component
+        """
+        bs = z_K.size(0)
+        Z = [None for i in range(self.num_flows + 1)]
+        Z[-1] = z_K
+
+        flow_coef = self._get_flow_coefficients(component, h=h)
+        for k in range(self.num_flows, 0, -1):
+            if self.density_evaluation:
+                flow_coef_k = flow_coef[k-1, ...].expand(bs, self.z_size, self.num_coefs)
+            else:
+                flow_coef_k = flow_coef[:, k-1, :, :]
+
+            z_k, _ = self.flow_transformation.inverse(Z[k], flow_coef_k)
+            Z[k-1] = z_k
+
+        return Z[0]
+
+    def flow(self, z0, sample_from, density_from, h=None):        
+        # compute forward step w.r.t. sampling distribution (for training this is the new component g^c)
+        # i.e. draw a sample from g(z_K | x) (and same log det jacobian term)
+        sample_component = self._sample_component(sampling_components=sample_from)
+        z_g, entropy_ldj = self.component_forward_flow(z0, sample_component, h)
+
+        if self.component == 0 and self.all_trained == False:
+            return z_g, entropy_ldj, None, None
+        else:
+            # compute likelihood of sampled z_K w.r.t fixed components:
+            # inverse step: flow_inv(z_g[k]) to get z_0^G
+            density_component = self._sample_component(sampling_components=density_from)
+            z0_G = self.component_inverse_flow(z_g[-1], density_component, h)
+            
+            # compute forward step w.r.t. density distribution (for training this is the fixed components G^(1:c-1))
+            z_G, boosted_ldj = self.component_forward_flow(z0_G, density_component, h)
                 
-            # entropy / internal view of sample: sample a z_k and compute ldj
-            zk, eldj = self.flow_transformation(z[k], us_k, ws_k, bs_k)
-            entropy_ldj += eldj
-            z.append(zk)
+            return z_g, entropy_ldj, z_G, boosted_ldj
 
-            if self.component == 0 and self.all_trained == False:
-                boosted_ldj += eldj  # their is no way to computed boosted_ldj on very first component trained
-            else:
-                # boosted / external view of sample: compute likelihood of z[k] according to "density_from" components
-                _, bldj = self.flow_transformation(z[k], ud_k, wd_k, bd_k)
-                boosted_ldj += bldj
-
-        return z[-1], entropy_ldj, boosted_ldj
-
-    def forward(self, x, prob_all=0.0):
+    def forward(self, x):
         """
         Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
         Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
@@ -227,27 +253,23 @@ class BoostedVAE(VAE):
         z0 = self.reparameterize(z_mu, z_var)
         
         if self.training and self.component < self.num_components:
-
-            if self.training and prob_all > np.random.rand():
-                sample_from = '1:c'
-                density_from = '1:c'
-            else:
-                sample_from = 'c'
-                density_from = '-c' if self.all_trained else '1:c-1'
-
             # training mode: sample from the new component currently being trained, evaluate it's density according to fixed model
-            zk, entropy_ldj, boosted_ldj = self.flow(z0, sample_from=sample_from, density_from=density_from, h=h)
-            log_det_jacobian = (entropy_ldj, boosted_ldj)
+            sample_from = 'c'
+            density_from = '-c' if self.all_trained else '1:c-1'
+
+            # use this if we don't implement multiple decoders: with prob_all init at 0.0
+            #if self.training and prob_all > np.random.rand():
+            #    sample_from = '1:c'
+            #    density_from = '1:c'
 
         else:
             # evaluation mode: sample from any of the first c components
-            # TODO this should returned boosted part of ldj b/c 1:c may shouldn't necesarily sample the same 1:c
-            zk, log_det_jacobian, _ = self.flow(z0, sample_from="1:c", density_from="1:c", h=h)
-            
-            if self.training:
-                # all components finished training, sample from all, don't need entropy term
-                log_det_jacobian = (None, log_det_jacobian)
+            sample_from = "1:c"
+            density_from = "1:c"
 
-        x_recon = self.decode(zk)
+        z_g, entropy_ldj, z_G, boosted_ldj = self.flow(z0, sample_from=sample_from, density_from=density_from, h=h)
 
-        return x_recon, z_mu, z_var, log_det_jacobian, z0, zk
+        x_recon = self.decode(z_g[-1])
+
+        return x_recon, z_mu, z_var, z_g, entropy_ldj, z_G, boosted_ldj
+    

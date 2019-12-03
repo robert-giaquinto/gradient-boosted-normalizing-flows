@@ -31,8 +31,8 @@ def make_toy_density(args):
         num_clusters = args.mog_clusters
         mix_props = np.random.dirichlet([10.0] * num_clusters).astype("float32")
         mu = torch.from_numpy(np.random.normal(loc=[0.0, 0.0], scale=args.mog_sigma, size=[num_clusters, 2]).astype("float32"))
-        sigma = np.repeat(np.eye(2)[None], num_clusters, axis=0).astype("float32") * 0.8
-        sigma[:, 1, 0] = np.random.uniform(low=0.0, high=0.8, size=[num_clusters]).astype("float32") *\
+        sigma = np.repeat(np.eye(2)[None], num_clusters, axis=0).astype("float32") #* 0.9
+        sigma[:, 1, 0] = np.random.uniform(low=0.0, high=0.7, size=[num_clusters]).astype("float32") *\
             np.random.choice([1, -1], size=[num_clusters])
         mix_props = torch.from_numpy(mix_props)
         sigma = torch.from_numpy(sigma)

@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 from utils.utilities import safe_log
 from models.layers import MaskedConv2d, MaskedLinear
@@ -45,7 +46,7 @@ class Planar(nn.Module):
 
         return z, log_det_jacobian        
         
-    def forward(self, zk, u, w, b):
+    def forward(self, zk, z0, u, w, b):
         """
         Forward pass. Assumes amortized u, w and b. Conditions on diagonals of u and w for invertibility
         will be be satisfied inside this function. Computes the following transformation:
@@ -67,7 +68,7 @@ class Planar(nn.Module):
         u_hat = u + ((m_uw - uw) * w.transpose(2, 1) / w_norm_sq)
 
         # compute flow with u_hat
-        wzb = torch.bmm(w, zk) + b
+        wzb = torch.bmm(w, z0) + b
         z = zk + u_hat * self.h(wzb)
         z = z.squeeze(2)
 
@@ -383,3 +384,109 @@ class LinIAF(nn.Module):
         # z_new = L * z
         z_new = torch.bmm( LT , z.unsqueeze(2) ).squeeze(2) # B x L x L * B x L x 1 -> B x L
         return z_new
+
+
+class Affine(nn.Module):
+    def __init__(self):
+        super(Affine, self).__init__()
+
+    def get_params(self, flow_coef):
+        a = flow_coef[..., 0] # [B, D]
+        log_b_sq = flow_coef[..., 1]
+        b = torch.exp(0.5 * log_b_sq)
+        return a, log_b_sq, b
+
+    def forward(self, z, flow_coef):
+        a, log_b_sq, b = self.get_params(flow_coef)
+        z_new = a + b * z
+        log_det_jacobian = 0.5 * log_b_sq.sum(-1)
+        return z_new, log_det_jacobian
+
+    def inverse(self, z, flow_coef):
+        a, log_b_sq, b = self.get_params(flow_coef)
+        z_prev = (z - a) / b
+        log_det_jacobian = 0.5*log_b_sq.sum(-1)
+        return z_prev, log_det_jacobian
+
+
+def arccosh(x):
+    return torch.log(x + torch.sqrt(x.pow(2)-1))
+
+
+def arcsinh(x):
+    return torch.log(x + torch.sqrt(x.pow(2)+1))
+
+
+class NLSq(nn.Module):
+    def __init__(self):
+        super(NLSq, self).__init__()
+
+    def get_params(self, flow_coef):
+        a = flow_coef[..., 0]
+        log_b = flow_coef[..., 1] * 0.4
+        c_prime = flow_coef[..., 2] * 0.3
+        log_d = flow_coef[..., 3] * 0.4
+        g = flow_coef[..., 4]
+
+        b = torch.exp(log_b)
+        d = torch.exp(log_d)
+        log_A = math.log(8 * math.sqrt(3) / 9 - 0.05)  # 0.05 is a small number to prevent exactly 0 slope
+        c = torch.tanh(c_prime) * torch.exp(log_A + log_b - log_d)
+
+        return a, b, c, d, g
+
+    def forward(self, z, flow_coef):
+        """
+        Technically, computing the reverse direction of the NLSq function defined in:
+        https://arxiv.org/pdf/1901.10548.pdf
+        """
+        a, b, c, d, g = self.get_params(flow_coef)
+
+        # double needed for stability. No effect on overall speed
+        a = a.double()
+        b = b.double()
+        c = c.double()
+        d = d.double()
+        g = g.double()
+        z = z.double()
+
+        aa = -b * d.pow(2)
+        bb = (z - a) * d.pow(2) - 2 * b * d * g
+        cc = (z - a) * 2 * d * g - b * (1 + g.pow(2))
+        dd = (z - a) * (1 + g.pow(2)) - c
+
+        p = (3 * aa * cc - bb.pow(2)) / (3 * aa.pow(2))
+        q = (2 * bb.pow(3) - (9 * aa * bb * cc) + (27 * aa.pow(2) * dd)) / (27 * aa.pow(3))
+        
+        t = -2 * torch.abs(q) / q * torch.sqrt(torch.abs(p) / 3)
+        inter_term1 = -3 * torch.abs(q) / (2*p) * torch.sqrt(3 / torch.abs(p))
+        inter_term2 = 1/3 * arccosh(torch.abs(inter_term1 - 1) + 1)
+        t = t * torch.cosh(inter_term2)
+
+        tpos = -2 * torch.sqrt(torch.abs(p) / 3)
+        inter_term1 = 3*q / (2*p) * torch.sqrt(3 / torch.abs(p))
+        inter_term2 = 1/3 * arcsinh(inter_term1)
+        tpos = tpos * torch.sinh(inter_term2)
+
+        t[p > 0] = tpos[p > 0]
+        z_new = t - bb / (3*aa)
+
+        arg = d * z_new + g
+        denom = 1 + arg.pow(2)
+        log_det_jacobian = -torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
+        #z = a + b*z_new + c/denom
+
+        z_new = z_new.float()
+        log_det_jacobian = log_det_jacobian.float()
+        return z_new, log_det_jacobian
+
+    def reverse(self, z, flow_coef):
+        a, b, c, d, g = self.get_params(flow_coef)
+
+        arg = d*z + g
+        denom = 1 + arg.pow(2)
+        z_prev = a + b*z + c/denom
+        log_det_jacobian = -torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
+        return z_prev, log_det_jacobian
+
+        

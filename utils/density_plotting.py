@@ -143,17 +143,17 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
         col = int((c + num_fixed_plots) % plt_width)
         
         zzk, logdet = [], []
-        for zz_i in zz.split(batch_size, dim=0):        
-            zzk_i, logdet_i = flow(model, zz_i, args, sample_from="current")
-            zzk += [zzk_i]
+        for zz_i in zz.split(batch_size, dim=0):
+            ZZ_i, logdet_i = model.component_forward_flow(zz_i, c)
+            zzk += [ZZ_i[-1]]  # grab K-th element
             logdet += [logdet_i]
         
         zzk, logdet = torch.cat(zzk, 0), torch.cat(logdet, 0)
         q_log_prob = model.base_dist.log_prob(zzk).sum(1)
-        log_prob = (1 + args.regularization_rate) * q_log_prob + logdet
+        log_prob = q_log_prob + logdet
         prob = log_prob.exp().cpu()
 
-        # plot component C
+        # plot component c
         axs[row,col].pcolormesh(xx, yy, prob.view(n_pts,n_pts).data, cmap=plt.cm.viridis)
         axs[row,col].set_facecolor(plt.cm.viridis(0.))
         axs[row,col].set_title(f'Boosted Flow Density for c={c}', fontdict={'fontsize': 20})
@@ -184,16 +184,14 @@ def plot_inv_flow_density(model, ax, test_grid, n_pts, batch_size, args, sample_
     
     zzk, logdet = torch.cat(zzk, 0), torch.cat(logdet, 0)
     log_q0 = model.base_dist.log_prob(zz).sum(1)
-
-    if args.flow == "boosted":
-        log_qk = (1 + args.regularization_rate) * log_q0 - logdet
-        caption = f"While Training c={model.component}" if sample_from == "current" else f"Sampling From All Components"
-    else:
-        log_qk = log_q0 - logdet
-        caption = ''
-        
+    log_qk = log_q0 - logdet
     qk = log_qk.exp().cpu()
     zzk = zzk.cpu()
+    
+    if args.flow == "boosted":
+        caption = f"While Training c={model.component}" if sample_from == "current" else f"Sampling From All Components"
+    else:
+        caption = ''
 
     # plot
     ax.pcolormesh(zzk[:,0].view(n_pts,n_pts).data, zzk[:,1].view(n_pts,n_pts).data, qk.view(n_pts,n_pts).data, cmap=plt.cm.viridis)
@@ -215,27 +213,31 @@ def plot_q0_density(model, ax, test_grid, n_pts, batch_size, args):
     ax.set_title('Base q_0 Density', fontdict={'fontsize': 20})
     
 
+@torch.no_grad()
 def flow(model, z, args, sample_from=None):
-    if args.flow == "boosted":
-        if sample_from is None:
-            raise ValueError("Must specify which component to sample from when plotting results from the boosted model")
+    with torch.no_grad():
+        if args.flow == "boosted":
+            if sample_from is None:
+                raise ValueError("Must specify which component to sample from when plotting results from the boosted model")
         
-        if sample_from == "all":
-            zk, logdet, _ = model.flow(z, sample_from="1:c", density_from="1:c")
-        elif sample_from == "current":
-            density_from = '-c' if model.all_trained else '1:c-1'
-            zk, entropy_ldj, boosted_ldj = model.flow(z, sample_from="c", density_from=density_from)
+            if sample_from == "all":
+                z_g, logdet, _, _ = model.flow(z, sample_from="1:c", density_from="1:c")
+            elif sample_from == "current":
+                density_from = '-c' if model.all_trained else '1:c-1'
+                z_g, entropy_ldj, z_G, boosted_ldj = model.flow(z, sample_from="c", density_from=density_from)
             
-            # for density sampling just given ldj wrt same component sampled
-            if args.density_matching or (model.component == 0 and model.all_trained == False):
-                logdet = entropy_ldj
-            else:
-                logdet = args.regularization_rate * entropy_ldj + boosted_ldj
+                # for density sampling just given ldj wrt same component sampled
+                if args.density_matching or (model.component == 0 and model.all_trained == False):
+                    logdet = entropy_ldj
+                else:
+                    logdet = args.regularization_rate * entropy_ldj + boosted_ldj
 
+            else:
+                raise ValueError("sample_from can only be current or all")
+
+            zk = z_g[-1]
+            
         else:
-            raise ValueError("sample_from can only be current or all")
-                               
-    else:
-        zk, logdet = model.flow(z)
+            zk, logdet = model.flow(z)
 
     return zk, logdet

@@ -15,6 +15,8 @@ from models.bagged_vae import BaggedVAE
 from models.planar_vae import PlanarVAE
 from models.radial_vae import RadialVAE
 from models.liniaf_vae import LinIAFVAE
+from models.affine_vae import AffineVAE
+from models.nlsq_vae import NLSqVAE
 from optimization.training import train
 from optimization.evaluation import evaluate, evaluate_likelihood
 from utils.load_data import load_dataset
@@ -83,7 +85,7 @@ parser.add_argument('--burnin', type=int, default=25, help='number of extra epoc
 
 # flow parameters
 parser.add_argument('--flow', type=str, default='no_flow',
-                    choices=['planar', 'radial', 'iaf', 'liniaf', 'householder', 'orthogonal', 'triangular', 'no_flow', 'boosted', 'bagged'],
+                    choices=['planar', 'radial', 'iaf', 'liniaf', 'affine', 'nlsq', 'householder', 'orthogonal', 'triangular', 'no_flow', 'boosted', 'bagged'],
                     help="""Type of flows to use, no flows can also be selected""")
 parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
 
@@ -100,7 +102,7 @@ parser.add_argument('--z_size', type=int, default=64, help='how many stochastic 
 parser.add_argument('--num_components', type=int, default=8,
                     help='How many components are combined to form the flow')
 parser.add_argument('--component_type', type=str, default='planar',
-                    choices=['planar', 'radial', 'iaf', 'liniaf', 'householder', 'orthogonal', 'triangular', 'random'],
+                    choices=['planar', 'radial', 'iaf', 'liniaf', 'affine', 'nlsq', 'householder', 'orthogonal', 'triangular', 'random'],
                     help='When flow is bagged or boosted -- what type of flow should each component implement.')
 
 
@@ -177,6 +179,10 @@ def init_model(args):
         model = RadialVAE(args).to(args.device)
     elif args.flow == 'liniaf':
         model = LinIAFVAE(args).to(args.device)
+    elif args.flow == 'affine':
+        model = AffineVAE(args).to(args.device)
+    elif args.flow == 'nlsq':
+        model = NLSqVAE(args).to(args.device)
     elif args.flow == 'iaf':
         model = IAFVAE(args).to(args.device)
     elif args.flow == 'orthogonal':

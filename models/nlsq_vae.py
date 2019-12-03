@@ -7,32 +7,29 @@ from models.vae import VAE
 import models.flows as flows
 
 
-class PlanarVAE(VAE):
+class NLSqVAE(VAE):
     """
-    Variational auto-encoder with planar flows in the encoder.
+    Variational auto-encoder with NLSq flows in the encoder.
     """
 
     def __init__(self, args):
-        super(PlanarVAE, self).__init__(args)
+        super(NLSqVAE, self).__init__(args)
         self.num_flows = args.num_flows
         self.density_evaluation = args.density_evaluation
+        self.num_coefs = 5
 
         # Amortized flow parameters
         if args.density_evaluation:
             # only performing an evaluation of flow, init flow parameters randomly
-            self.u = nn.Parameter(torch.randn(self.num_flows, self.z_size, 1).normal_(0, 0.01))
-            self.w = nn.Parameter(torch.randn(self.num_flows, 1, self.z_size).normal_(0, 0.01))
-            self.b = nn.Parameter(torch.randn(self.num_flows, 1, 1).fill_(0))
+            self.flow_coef = nn.Parameter(torch.randn(self.num_flows, self.z_size, self.num_coefs).normal_(0, 0.01))
 
         else:
-            # u, w, b learned from encoder neural network
-            self.amor_u = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
-            self.amor_w = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
-            self.amor_b = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
-            self.u, self.w, self.b = None, None, None
+            # learned from encoder neural network
+            self.amor_flow_coef = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size * self.num_coefs)
+            self.flow_coef = None
 
         # Normalizing flow layers
-        self.flow_transformation = flows.Planar()
+        self.flow_transformation = flows.NLSq()
 
     def encode(self, x):
         """
@@ -46,9 +43,7 @@ class PlanarVAE(VAE):
         z_var = self.q_z_var(h)
 
         # compute amortized (u, w, b) for flows
-        self.u = self.amor_u(h).view(batch_size, self.num_flows, self.z_size, 1)
-        self.w = self.amor_w(h).view(batch_size, self.num_flows, 1, self.z_size)
-        self.b = self.amor_b(h).view(batch_size, self.num_flows, 1, 1)
+        self.flow_coef = self.amor_flow_coef(h).view(batch_size, self.num_flows, self.z_size, self.num_coefs)
 
         return z_mu, z_var
 
@@ -59,15 +54,12 @@ class PlanarVAE(VAE):
 
         for k in range(self.num_flows):
             if self.density_evaluation:
-                # Note: it may be faster to not use the batch-wise default transformation in self.flow_transformation()
-                # but instead create a non-batch-wise version of that forward step.
-                # for now, just expand/repeat the coefficients for each sample
-                bs = z_0.size(0)
-                u, w, b = self.u[k,...].expand(bs, self.z_size, 1), self.w[k,...].expand(bs, 1, self.z_size), self.b[k,...].expand(bs, 1, 1)
+                batch_size = z_0.size(0)
+                flow_coef = self.flow_coef[k, ...].expand(batch_size, self.z_size, self.num_coefs)
             else:
-                u, w, b = self.u[:, k, :, :], self.w[:, k, :, :], self.b[:, k, :, :]
-
-            z_k, ldj = self.flow_transformation(z[k], u, w, b)                
+                flow_coef = self.flow_coef[:, k, :, :]
+            
+            z_k, ldj = self.flow_transformation(z[k], flow_coef)
             z.append(z_k)
             log_det_jacobian += ldj
         
