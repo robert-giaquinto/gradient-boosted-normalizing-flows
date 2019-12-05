@@ -275,7 +275,6 @@ def rho_gradient(model, target_or_sample_fn, args):
         G_zk, _, _, G_ldj = model.flow(sample, sample_from="1:c-1", density_from="1:c")
         loss_wrt_G = -1.0 * (model.base_dist.log_prob(G_zk[-1]).sum(1) + G_ldj)
 
-    #gradient = loss_wrt_g.mean(0).detach().item() - loss_wrt_G.mean(0).detach().item()
     return loss_wrt_g.mean(0).detach().item(), loss_wrt_G.mean(0).detach().item()
 
 
@@ -285,8 +284,10 @@ def update_rho(model, target_or_sample_fn, args):
     
     model.eval()
     with torch.no_grad():
-        
-        print('\n\nInitial Rho: ' + ' '.join([f'{val:1.2f}' for val in model.rho.data]))
+
+        rho_log = open(model.args.snap_dir + '/rho.log', 'a')
+        print(f"\n\nUpdating weight for component {model.component} (all_trained={str(model.all_trained)})", file=rho_log)
+        print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in model.rho.data]), file=rho_log)
             
         step_size = 0.005
         tolerance = 0.0001
@@ -303,8 +304,7 @@ def update_rho(model, target_or_sample_fn, args):
 
             grad_msg = f'{batch_id: >3}. rho = {prev_rho:5.3f} -  {gradient:4.2f} * {ss:5.3f} = {rho:5.3f}'
             loss_msg = f"\tg vs G. Loss: ({loss_wrt_g:5.1f}, {loss_wrt_G:5.1f})."
-
-            print(grad_msg + loss_msg)
+            print(grad_msg + loss_msg, file=rho_log)
                     
             model.rho[model.component] = rho
             dif = abs(prev_rho - rho)
@@ -313,7 +313,7 @@ def update_rho(model, target_or_sample_fn, args):
             if batch_id > min_iters and (batch_id > max_iters or dif < tolerance):
                 break
 
-        print('New Rho: ' + ' '.join([f'{val:1.2f}' for val in model.rho.data]))
+        print('New Rho: ' + ' '.join([f'{val:1.2f}' for val in model.rho.data]), file=rho_log)
 
 
 def annealing_schedule(i, args):
