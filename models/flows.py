@@ -423,9 +423,9 @@ class NLSq(nn.Module):
 
     def get_params(self, flow_coef):
         a = flow_coef[..., 0]
-        log_b = flow_coef[..., 1] * 0.4
-        c_prime = flow_coef[..., 2] * 0.3
-        log_d = flow_coef[..., 3] * 0.4
+        log_b = flow_coef[..., 1] #* 0.4
+        c_prime = flow_coef[..., 2] #* 0.3
+        log_d = flow_coef[..., 3] #* 0.4
         g = flow_coef[..., 4]
 
         b = torch.exp(log_b)
@@ -435,17 +435,24 @@ class NLSq(nn.Module):
 
         return a, b, c, d, g
 
-    def forward(self, z, flow_coef):
+    def inverse(self, z, flow_coef):
         """
         Technically, computing the reverse direction of the NLSq function defined in:
         https://arxiv.org/pdf/1901.10548.pdf
         """
         a, b, c, d, g = self.get_params(flow_coef)
 
+        #if True:
+        #    z_prev = (z - a) / b
+        #    log_det_jacobian = torch.log(b).sum(-1)
+        #    return z_prev, log_det_jacobian
+
+
         # double needed for stability. No effect on overall speed
         a = a.double()
         b = b.double()
         c = c.double()
+        #c = torch.zeros_like(c).double()
         d = d.double()
         g = g.double()
         z = z.double()
@@ -473,20 +480,27 @@ class NLSq(nn.Module):
 
         arg = d * z_new + g
         denom = 1 + arg.pow(2)
-        log_det_jacobian = -torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
+        log_det_jacobian = torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
         #z = a + b*z_new + c/denom
 
-        z_new = z_new.float()
-        log_det_jacobian = log_det_jacobian.float()
-        return z_new, log_det_jacobian
+        z_new = torch.max(z_new, torch.ones_like(z_new) * -100.0)
+        z_new = torch.min(z_new, torch.ones_like(z_new) * 100.0)
 
-    def reverse(self, z, flow_coef):
+
+        return z_new.float(), log_det_jacobian.float()
+
+    def forward(self, z, flow_coef):
         a, b, c, d, g = self.get_params(flow_coef)
+        #c = torch.zeros_like(c)
 
         arg = d*z + g
         denom = 1 + arg.pow(2)
-        z_prev = a + b*z + c/denom
-        log_det_jacobian = -torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
-        return z_prev, log_det_jacobian
+        z_new = a + b*z + c/denom
+
+        z_new = torch.max(z_new, torch.ones_like(z_new) * -100.0)
+        z_new = torch.min(z_new, torch.ones_like(z_new) * 100.0)
+        
+        log_det_jacobian = torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
+        return z_new, log_det_jacobian
 
         

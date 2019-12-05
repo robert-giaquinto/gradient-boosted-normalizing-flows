@@ -22,16 +22,23 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
 
     # plot
     if args.density_matching:
+        #plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + 2))))
+        #plt_width = max(1, int(np.ceil((args.num_components + 2) / plt_height)))
+        #fig, axs = plt.subplots(plt_height, plt_width, figsize=(12,12), subplot_kw={'aspect': 'equal'}, squeeze=False)
+        #plot_potential(potential_or_sampling_fn, axs[0, 0], test_grid, n_pts)
+        #plot_flow_samples(model, axs[0, 1], n_pts, args.batch_size, args, "all")
+        #plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, args.batch_size, args)
+
         fig, axs = plt.subplots(2, 2, figsize=(12,12), subplot_kw={'aspect': 'equal'})
         plot_potential(potential_or_sampling_fn, axs[0, 0], test_grid, n_pts)
         plot_flow_samples(model, axs[0, 1], n_pts, args.batch_size, args, "all")
-        plot_inv_flow_density(model, axs[1, 0], test_grid, n_pts, args.batch_size, args, "current")
-        if args.flow == "boosted":
-            plot_flow_samples(model, axs[1, 1], n_pts, args.batch_size, args, "current")
+        plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, args.batch_size, args)
+        #plot_inv_flow_density(model, axs[1, 0], test_grid, n_pts, args.batch_size, args, "current")
+        #if args.flow == "boosted":
+        #    plot_flow_samples(model, axs[1, 1], n_pts, args.batch_size, args, "current")
 
     else:
         if args.flow == "boosted":
-            # todo, do this all in plot_boosted_fwd?
             plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + 2))))
             plt_width = max(1, int(np.ceil((args.num_components + 2) / plt_height)))
             fig, axs = plt.subplots(plt_height, plt_width, figsize=(12,12), subplot_kw={'aspect': 'equal'}, squeeze=False)
@@ -83,7 +90,7 @@ def plot_samples(samples_fn, ax, range_lim, n_pts):
     ax.set_title('Target Samples', fontdict={'fontsize': 20})
 
     
-def plot_flow_samples(model, ax, n_pts, batch_size, args, sample_from):
+def plot_flow_samples(model, ax, n_pts, batch_size, args, sample_from):    
     z = model.base_dist.sample((n_pts**2,))
     zk = torch.cat([flow(model, z_, args, sample_from)[0] for z_ in z.split(batch_size, dim=0)], 0)
     zk = zk.cpu().numpy()
@@ -159,7 +166,7 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
         axs[row,col].set_title(f'Boosted Flow Density for c={c}', fontdict={'fontsize': 20})
 
         # save total model probs
-        total_prob += prob.view(n_pts, n_pts) * model.rho[c]
+        total_prob += prob.view(n_pts, n_pts).data * model.rho[c]
 
     # plot full model
     axs[0,1].pcolormesh(xx, yy, total_prob.view(n_pts,n_pts).data, cmap=plt.cm.viridis)
@@ -198,6 +205,50 @@ def plot_inv_flow_density(model, ax, test_grid, n_pts, batch_size, args, sample_
     ax.set_facecolor(plt.cm.viridis(0.0))
     ax.set_title('Flow Density ' + caption, fontdict={'fontsize': 20})
 
+
+def plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, batch_size, args):
+    """
+    plots transformed grid and density; where density is exp(loq_flow_base_dist - logdet)
+    """
+    save_component = model.component
+
+    num_fixed_plots = 2  # every image will show the true density and samples from the full model
+    plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + num_fixed_plots))))
+    plt_width = max(1, int(np.ceil((args.num_components + num_fixed_plots) / plt_height)))
+    
+    xx, yy, zz = test_grid
+
+    num_components_to_plot = args.num_components if model.all_trained else model.component + 1
+    for c in range(num_components_to_plot):
+        model.component = c
+        row = int(np.floor((c + num_fixed_plots) / plt_width))
+        col = int((c + num_fixed_plots) % plt_width)
+        
+        zzk, logdet = [], []
+        for zz_i in zz.split(batch_size, dim=0):
+            ZZ_i, logdet_i = model.component_forward_flow(zz_i, c)
+            zzk += [ZZ_i[-1]]  # grab K-th element
+            logdet += [logdet_i]
+        
+        zzk, logdet = torch.cat(zzk, 0), torch.cat(logdet, 0)
+        log_q0 = model.base_dist.log_prob(zz).sum(1)
+        log_qk = log_q0 - logdet
+        qk = log_qk.exp().cpu()
+
+        # plot component c
+        axs[row,col].pcolormesh(zzk[:,0].view(n_pts,n_pts).data, zzk[:,1].view(n_pts,n_pts).data, qk.view(n_pts,n_pts).data, cmap=plt.cm.viridis)
+        axs[row,col].set_facecolor(plt.cm.viridis(0.))
+        axs[row,col].set_title(f'Boosted Flow Density for c={c}', fontdict={'fontsize': 20})
+
+        # plot full model
+        #rho_simplex = model.rho / torch.sum(model.rho)
+        #axs[0,1].pcolormesh(zzk[:, 0].view(n_pts, n_pts).data, zzk[:, 1].view(n_pts, n_pts).data,
+        #                    qk.view(n_pts, n_pts).data, cmap=plt.cm.viridis, alpha=rho_simplex[c])
+        #axs[0,1].set_facecolor(plt.cm.viridis(0.))
+        #axs[0,1].set_title('Boosted Flow Density for All Components', fontdict={'fontsize': 20})
+
+    # return model to it's previous state
+    model.component = save_component
 
 def plot_q0_density(model, ax, test_grid, n_pts, batch_size, args):
     """
