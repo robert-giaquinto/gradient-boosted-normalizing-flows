@@ -8,7 +8,7 @@ source ./venv/bin/activate
 exp_name=too_much_tuna
 dataset=u1
 iters_per_component=50000
-num_steps=500001
+num_steps=1200001
 resolution=250
 logging=1000
 

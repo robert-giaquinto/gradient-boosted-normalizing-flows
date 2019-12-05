@@ -52,6 +52,15 @@ class BoostedVAE(VAE):
                 amor_flow_coef = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size * self.num_coefs)
                 self.add_module('amor_flow_coef_' + str(c), amor_flow_coef)
 
+    def increment_component(self):
+        if self.component == self.num_components - 1:
+            # all components have been trained, now loop through and retrain each component
+            self.component = 0
+            self.all_trained = True
+        else:
+            # increment to the next component
+            self.component = min(self.component + 1, self.num_components - 1)
+
     def _rho_gradient(self, x):
         """
         Estimate gradient with Monte Carlo by drawing sample zK ~ g^c and sample zK ~ G^(c-1), and

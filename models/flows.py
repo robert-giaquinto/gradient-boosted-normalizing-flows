@@ -405,7 +405,7 @@ class Affine(nn.Module):
     def inverse(self, z, flow_coef):
         a, log_b_sq, b = self.get_params(flow_coef)
         z_prev = (z - a) / b
-        log_det_jacobian = 0.5*log_b_sq.sum(-1)
+        log_det_jacobian = 0.5 * log_b_sq.sum(-1)
         return z_prev, log_det_jacobian
 
 

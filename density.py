@@ -290,15 +290,15 @@ def update_rho(model, target_or_sample_fn, args):
             
         step_size = 0.005
         tolerance = 0.0001
-        min_iters = 25
-        max_iters = 250
+        min_iters = 10
+        max_iters = 250 if model.all_trained else 25
         prev_rho = 1.0 / model.num_components
             
         for batch_id in range(max_iters):
 
             loss_wrt_g, loss_wrt_G = rho_gradient(model, target_or_sample_fn, args)
             gradient = loss_wrt_g - loss_wrt_G
-            ss = step_size / (0.01 * batch_id + 1)
+            ss = step_size / (0.025 * batch_id + 1)
             rho = min(max(prev_rho - ss * gradient, 0.025), 1.0)
 
             grad_msg = f'{batch_id: >3}. rho = {prev_rho:5.3f} -  {gradient:4.2f} * {ss:5.3f} = {rho:5.3f}'
@@ -380,28 +380,16 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
         if boosted_component_converged:
             update_rho(model, target_or_sample_fn, args)
 
-        if batch_id % args.plot_interval == 0: #or new_boosted_component:
+        if batch_id % args.plot_interval == 0 or new_boosted_component:
             with torch.no_grad():
                 plot(batch_id, model, target_or_sample_fn, args)
 
         # increment component for boosted model
         if boosted_component_converged:
-            optimizer = increment_boosted_component(model, optimizer, args)
-
-                
-def increment_boosted_component(model, optimizer, args):
-    if model.component == model.num_components - 1:
-        # loop through and retrain each component
-        model.component = 0
-        model.all_trained = True
-    else:
-        # increment to the next component
-        model.component = min(model.component + 1, model.num_components - 1)
-        
-        for c in range(model.num_components):
-            optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
-
-    return optimizer
+            model.increment_component()
+            # update learning rates
+            for c in range(model.num_components):
+                optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
 
  
 def main(main_args=None):
