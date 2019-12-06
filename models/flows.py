@@ -89,15 +89,8 @@ class Radial(nn.Module):
     def __init__(self):
 
         super(Radial, self).__init__()
-        self.softplus = nn.Softplus()
 
-    def der_h(self, r, alpha):
-        """
-        Derivative of h function in paper (from eq 14)
-        """
-        return -1.0 / ((alpha + r)**2)
-
-    def forward(self, zk, z0, alpha, beta):
+    def forward(self, zk, z0, log_alpha, beta):
         """
         Forward pass.
         """
@@ -105,18 +98,17 @@ class Radial(nn.Module):
         zk = zk.unsqueeze(2)
         z0 = z0.unsqueeze(2)
 
-        # reparameterize u such that the flow becomes invertible (see appendix paper)
+        # compute flow
         zk_z0 = zk - z0
         r = torch.norm(zk_z0, dim=1).unsqueeze(1)
-        h = 1.0 / (alpha + r)
-        beta_hat = -alpha * self.softplus(beta)
-        beta_h = beta_hat * h
-        z = zk + beta_h * zk_z0
+        h = 1.0 / (torch.exp(log_alpha) + r)
+        beta = -torch.exp(log_alpha) + torch.log(1 + torch.exp(beta))
+        z = zk + beta * h * zk_z0
         z = z.squeeze(2)
 
-        # compute logdetJ
-        log_det_jacobian = safe_log(torch.bmm(1 + beta_h + (beta_hat * self.der_h(r, alpha) * r),
-            (1.0 + beta_h)**(z_size - 1)))
+        # compute log determinant jacobian
+        log_det_jacobian = (z_size - 1) * torch.log(1 + beta * h) + \
+            torch.log(1 + beta * h - beta * r / (torch.exp(log_alpha) + r)**2)
         log_det_jacobian = log_det_jacobian.squeeze(2).squeeze(1)
 
         return z, log_det_jacobian
@@ -480,12 +472,16 @@ class NLSq(nn.Module):
 
         arg = d * z_new + g
         denom = 1 + arg.pow(2)
-        log_det_jacobian = torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
+        #log_det_jacobian = torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
+        #maybe:
+        log_det_jacobian = safe_log(torch.abs(b - 2 * c * d * arg / denom.pow(2))).sum(-1)
         #z = a + b*z_new + c/denom
-
-        z_new = torch.max(z_new, torch.ones_like(z_new) * -100.0)
-        z_new = torch.min(z_new, torch.ones_like(z_new) * 100.0)
-
+        
+        #z_new = torch.max(z_new, torch.ones_like(z_new) * -25.0)
+        #z_new = torch.min(z_new, torch.ones_like(z_new) * 25.0)
+        if torch.abs(z_new).max() >= 25.0:
+            print(f"Extreme z inverse values: {z_new.data}")
+            
 
         return z_new.float(), log_det_jacobian.float()
 
@@ -497,10 +493,14 @@ class NLSq(nn.Module):
         denom = 1 + arg.pow(2)
         z_new = a + b*z + c/denom
 
-        z_new = torch.max(z_new, torch.ones_like(z_new) * -100.0)
-        z_new = torch.min(z_new, torch.ones_like(z_new) * 100.0)
+        #z_new = torch.max(z_new, torch.ones_like(z_new) * -25.0)
+        #z_new = torch.min(z_new, torch.ones_like(z_new) * 25.0)
+        if torch.abs(z_new).max() >= 25.0:
+            print(f"Extreme z values: {z_new.data}")
         
-        log_det_jacobian = torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
+        #log_det_jacobian = torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
+        # maybe:
+        log_det_jacobian = safe_log(torch.abs(b - 2 * c * d * arg / denom.pow(2))).sum(-1)
         return z_new, log_det_jacobian
 
         

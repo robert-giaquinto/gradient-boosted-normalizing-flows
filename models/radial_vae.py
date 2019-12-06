@@ -16,6 +16,7 @@ class RadialVAE(VAE):
         super(RadialVAE, self).__init__(args)
         self.num_flows = args.num_flows
         self.density_evaluation = args.density_evaluation
+        self.single_reference_point = False
 
         # Normalizing flow layers
         self.flow_transformation = flows.Radial()
@@ -23,18 +24,24 @@ class RadialVAE(VAE):
         # Amortized flow parameters
         if args.density_evaluation:
             # only performing an evaluation of flow, init flow parameters randomly
-            self.alpha = nn.Parameter(torch.randn(self.num_flows, 1, 1).normal_(0, 0.01))
+            self.alpha = nn.Parameter(torch.randn(self.num_flows, 1, 1).normal_(0, 0.1))
             self.beta = nn.Parameter(torch.randn(self.num_flows, 1, 1).normal_(0, 0.01))
-            self.z_ref = nn.Parameter(torch.randn(self.z_size).fill_(0))
+
+            if self.single_reference_point:
+                self.z_ref = nn.Parameter(torch.randn(self.z_size).fill_(0))
+            else:
+                self.z_ref = nn.Parameter(torch.randn(self.num_flows, self.z_size).fill_(0))
+
         else:
             # flow parameters learned from encoder neural network
-            self.amor_alpha = nn.Sequential(
-                nn.Linear(self.q_z_nn_output_dim, self.num_flows),
-                nn.Softplus(),
-                nn.Hardtanh(min_val=0.01, max_val=7.)
-            )
+            self.amor_alpha = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
             self.amor_beta = nn.Linear(self.q_z_nn_output_dim, self.num_flows)
-            self.amor_z_ref = nn.Linear(self.q_z_nn_output_dim, self.z_size)
+
+            if self.single_reference_point:
+                self.amor_z_ref = nn.Linear(self.q_z_nn_output_dim, self.z_size)
+            else:
+                self.amor_z_ref = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size)
+
         
             self.alpha, self.beta, self.z_ref = None, None, None
 
@@ -54,7 +61,11 @@ class RadialVAE(VAE):
         # return amortized u an w for all flows
         self.alpha = self.amor_alpha(h).view(batch_size, self.num_flows, 1, 1)
         self.beta = self.amor_beta(h).view(batch_size, self.num_flows, 1, 1)
-        self.z_ref = self.amor_z_ref(h).view(batch_size, self.z_size)
+        if self.single_reference_point:
+            self.z_ref = self.amor_z_ref(h).view(batch_size, self.z_size)
+        else:
+            self.z_ref = self.amor_z_ref(h).view(batch_size, self.num_flows, self.z_size)
+
         return mean_z, var_z
 
     def flow(self, z_0):
@@ -66,10 +77,11 @@ class RadialVAE(VAE):
             if self.density_evaluation:
                 bs = z_0.size(0)
                 alpha, beta = self.alpha[k,...].expand(bs, 1, 1), self.beta[k,...].expand(bs, 1, 1)
-                z_ref = self.z_ref.expand(bs, self.z_size)
+                z_ref = self.z_ref if self.single_reference_point else self.z_ref[k,...]
+                z_ref = z_ref.expand(bs, self.z_size)
             else:
                 alpha, beta = self.alpha[:, k, :, :], self.beta[:, k, :, :]
-                z_ref = self.z_ref
+                z_ref = self.z_ref if self.single_reference_point else self.z_ref[:, k, ...]
                 
             z_k, ldj = self.flow_transformation(z[k], z_ref, alpha, beta)
             z.append(z_k)

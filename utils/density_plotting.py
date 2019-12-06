@@ -22,20 +22,19 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
 
     # plot
     if args.density_matching:
-        plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + 2))))
-        plt_width = max(1, int(np.ceil((args.num_components + 2) / plt_height)))
-        fig, axs = plt.subplots(plt_height, plt_width, figsize=(12,12), subplot_kw={'aspect': 'equal'}, squeeze=False)
-        plot_potential(potential_or_sampling_fn, axs[0, 0], test_grid, n_pts)
-        plot_flow_samples(model, axs[0, 1], n_pts, args.batch_size, args, "all")
-        plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, args.batch_size, args)
-
-        #fig, axs = plt.subplots(2, 2, figsize=(12,12), subplot_kw={'aspect': 'equal'})
-        #plot_potential(potential_or_sampling_fn, axs[0, 0], test_grid, n_pts)
-        #plot_flow_samples(model, axs[0, 1], n_pts, args.batch_size, args, "all")
-        #plot_inv_flow_density(model, axs[1, 0], test_grid, n_pts, args.batch_size, args, "current")
-        #if args.flow == "boosted":
-        #    plot_flow_samples(model, axs[1, 1], n_pts, args.batch_size, args, "current")
-
+        if args.flow == "boosted":
+            plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + 2))))
+            plt_width = max(1, int(np.ceil((args.num_components + 2) / plt_height)))
+            fig, axs = plt.subplots(plt_height, plt_width, figsize=(12,12), subplot_kw={'aspect': 'equal'}, squeeze=False)
+            plot_potential(potential_or_sampling_fn, axs[0, 0], test_grid, n_pts)
+            plot_flow_samples(model, axs[0, 1], n_pts, args.batch_size, args, "all")
+            plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, args.batch_size, args)
+        else:
+            fig, axs = plt.subplots(2, 2, figsize=(12,12), subplot_kw={'aspect': 'equal'})
+            plot_potential(potential_or_sampling_fn, axs[0, 0], test_grid, n_pts)
+            plot_flow_samples(model, axs[0, 1], n_pts, args.batch_size, args)
+            plot_inv_flow_density(model, axs[1, 0], test_grid, n_pts, args.batch_size, args)
+            
     else:
         if args.flow == "boosted":
             plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + 2))))
@@ -89,7 +88,7 @@ def plot_samples(samples_fn, ax, range_lim, n_pts):
     ax.set_title('Target Samples', fontdict={'fontsize': 20})
 
     
-def plot_flow_samples(model, ax, n_pts, batch_size, args, sample_from):    
+def plot_flow_samples(model, ax, n_pts, batch_size, args, sample_from=None):    
     z = model.base_dist.sample((n_pts**2,))
     zk = torch.cat([flow(model, z_, args, sample_from)[0] for z_ in z.split(batch_size, dim=0)], 0)
     zk = zk.cpu().numpy()
@@ -175,7 +174,7 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
     model.component = save_component
 
     
-def plot_inv_flow_density(model, ax, test_grid, n_pts, batch_size, args, sample_from):
+def plot_inv_flow_density(model, ax, test_grid, n_pts, batch_size, args, sample_from=None):
     """
     plots transformed grid and density; where density is exp(loq_flow_base_dist - logdet)
     """        

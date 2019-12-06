@@ -291,7 +291,7 @@ def update_rho(model, target_or_sample_fn, args):
             
         step_size = 0.005
         tolerance = 0.0001
-        min_iters = 10
+        min_iters = 15
         max_iters = 250 if model.all_trained else 25
         prev_rho = 1.0 / model.num_components
             
