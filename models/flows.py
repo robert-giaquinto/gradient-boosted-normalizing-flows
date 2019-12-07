@@ -4,7 +4,7 @@ import torch.nn.functional as F
 import math
 
 from utils.utilities import safe_log
-from models.layers import MaskedConv2d, MaskedLinear
+from models.layers import MaskedConv2d, MaskedLinear, ReLUNet, ResidualNet
 
 
 class Planar(nn.Module):
@@ -79,6 +79,9 @@ class Planar(nn.Module):
 
         return z, log_det_jacobian
 
+    def inverse(self, z):
+        raise NotImplementedError("Planar flow is not analytically invertible")
+
 
 class Radial(nn.Module):
     """
@@ -112,6 +115,10 @@ class Radial(nn.Module):
         log_det_jacobian = log_det_jacobian.squeeze(2).squeeze(1)
 
         return z, log_det_jacobian
+
+    def inverse(self, z):
+        raise NotImplementedError("Radial flow is not analytically invertible")
+
 
 
 class Sylvester(nn.Module):
@@ -285,17 +292,18 @@ class IAF(nn.Module):
      Note that the size of h needs to be the same as h_size, which is the width of the MADE layers.
      """
 
-    def __init__(self, z_size, num_flows=2, num_hidden=0, h_size=50, forget_bias=1., conv2d=False):
+    def __init__(self, z_size, num_flows=2, num_hidden=0, h_size=50, forget_bias=1.0, conv2d=False):
         super(IAF, self).__init__()
         self.z_size = z_size
         self.num_flows = num_flows
         self.num_hidden = num_hidden
         self.h_size = h_size
         self.conv2d = conv2d
-        if not conv2d:
-            ar_layer = MaskedLinear
-        else:
+        if conv2d:
             ar_layer = MaskedConv2d
+        else:
+            ar_layer = MaskedLinear
+
         self.activation = torch.nn.ELU
         # self.activation = torch.nn.ReLU
 
@@ -342,7 +350,7 @@ class IAF(nn.Module):
             h = h + h_context
             h = flow[1](h)
             mean = flow[2](h)
-            gate = F.sigmoid(flow[3](h) + self.forget_bias)
+            gate = torch.sigmoid(flow[3](h) + self.forget_bias)
             z = gate * z + (1 - gate) * mean
             logdets += torch.sum(safe_log(gate).view(gate.size(0), -1), 1)
         return z, logdets
@@ -376,6 +384,9 @@ class LinIAF(nn.Module):
         # z_new = L * z
         z_new = torch.bmm( LT , z.unsqueeze(2) ).squeeze(2) # B x L x L * B x L x 1 -> B x L
         return z_new
+
+    def inverse(self, z):
+        raise NotImplementedError("Not currently implemented (but possible)")
 
 
 class Affine(nn.Module):
@@ -434,17 +445,10 @@ class NLSq(nn.Module):
         """
         a, b, c, d, g = self.get_params(flow_coef)
 
-        #if True:
-        #    z_prev = (z - a) / b
-        #    log_det_jacobian = torch.log(b).sum(-1)
-        #    return z_prev, log_det_jacobian
-
-
         # double needed for stability. No effect on overall speed
         a = a.double()
         b = b.double()
         c = c.double()
-        #c = torch.zeros_like(c).double()
         d = d.double()
         g = g.double()
         z = z.double()
@@ -477,8 +481,8 @@ class NLSq(nn.Module):
         log_det_jacobian = safe_log(torch.abs(b - 2 * c * d * arg / denom.pow(2))).sum(-1)
         #z = a + b*z_new + c/denom
         
-        #z_new = torch.max(z_new, torch.ones_like(z_new) * -25.0)
-        #z_new = torch.min(z_new, torch.ones_like(z_new) * 25.0)
+        z_new = torch.max(z_new, torch.ones_like(z_new) * -25.0)
+        z_new = torch.min(z_new, torch.ones_like(z_new) * 25.0)
         if torch.abs(z_new).max() >= 25.0:
             print(f"Extreme z inverse values: {z_new.data}")
             
@@ -493,8 +497,8 @@ class NLSq(nn.Module):
         denom = 1 + arg.pow(2)
         z_new = a + b*z + c/denom
 
-        #z_new = torch.max(z_new, torch.ones_like(z_new) * -25.0)
-        #z_new = torch.min(z_new, torch.ones_like(z_new) * 25.0)
+        z_new = torch.max(z_new, torch.ones_like(z_new) * -25.0)
+        z_new = torch.min(z_new, torch.ones_like(z_new) * 25.0)
         if torch.abs(z_new).max() >= 25.0:
             print(f"Extreme z values: {z_new.data}")
         
@@ -504,3 +508,48 @@ class NLSq(nn.Module):
         return z_new, log_det_jacobian
 
         
+
+class RealNVP(nn.Module):
+    """
+    Non-volume preserving flow.
+    [Dinh et. al. 2017]
+
+    TODO: currently only supports 2 "flows", make this programmable
+    TODO: will this work when D is not even
+    """
+    def __init__(self, num_flows, dim, hidden_dim=8, base_network="relu", num_layers=1, use_batch_norm=False, dropout_probability=0.0):
+        super().__init__()
+        
+        self.dim = dim
+        base_network = ResidualNet if base_network == "residual" else ReLUNet
+        #out_dim = dim - (dim // 2)
+        self.t1 = base_network(dim // 2, dim // 2, hidden_dim, num_layers, use_batch_norm, dropout_probability)
+        self.s1 = base_network(dim // 2, dim // 2, hidden_dim, num_layers, use_batch_norm, dropout_probability)
+        self.t2 = base_network(dim // 2, dim // 2, hidden_dim, num_layers, use_batch_norm, dropout_probability)
+        self.s2 = base_network(dim // 2, dim // 2, hidden_dim, num_layers, use_batch_norm, dropout_probability)
+
+    def forward(self, x):
+        lower, upper = x[:,:self.dim // 2], x[:,self.dim // 2:]
+        t1_transformed = self.t1(lower)
+        s1_transformed = self.s1(lower)
+        upper = t1_transformed + upper * torch.exp(s1_transformed)
+        t2_transformed = self.t2(upper)
+        s2_transformed = self.s2(upper)
+        lower = t2_transformed + lower * torch.exp(s2_transformed)
+        z = torch.cat([lower, upper], dim=1)
+        log_det = torch.sum(s1_transformed, dim=1) + \
+                  torch.sum(s2_transformed, dim=1)
+        return z, log_det
+
+    def inverse(self, z):
+        lower, upper = z[:,:self.dim // 2], z[:,self.dim // 2:]
+        t2_transformed = self.t2(upper)
+        s2_transformed = self.s2(upper)
+        lower = (lower - t2_transformed) * torch.exp(-s2_transformed)
+        t1_transformed = self.t1(lower)
+        s1_transformed = self.s1(lower)
+        upper = (upper - t1_transformed) * torch.exp(-s1_transformed)
+        x = torch.cat([lower, upper], dim=1)
+        log_det = torch.sum(-s1_transformed, dim=1) + \
+                  torch.sum(-s2_transformed, dim=1)
+        return x, log_det

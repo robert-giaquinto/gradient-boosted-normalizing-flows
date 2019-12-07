@@ -36,21 +36,31 @@ class BoostedVAE(VAE):
         elif args.component_type == "nlsq":
             self.flow_transformation = flows.NLSq()
             self.num_coefs = 5
+        elif args.component_type == "realnvp":
+            self.base_network = args.base_network
+            self.h_size = args.h_size
+            self.num_base_layers = args.num_base_layers
+            self.flow_transformation == flows.RealNVP(num_flows=self.num_flows,
+                                                      dim=self.z_size, hidden_dim=self.h_size,
+                                                      base_network=self.base_network,
+                                                      num_layers=self.num_base_layers,
+                                                      use_batch_norm=False, dropout_probability=0.0)
         else:
             raise NotImplementedError("Only affine and nlsq component types are currently implemented")
 
         if args.density_evaluation:
             self.q_z_nn, self.q_z_mean, self.q_z_var = None, None, None
             self.p_x_nn, self.p_x_mean = None, None
-            self.flow_coef  = nn.ParameterList()
+            self.flow_coef = nn.ParameterList()
 
         # Amortized flow parameters for each component
-        for c in range(self.num_components):
-            if args.density_evaluation:
-                self.flow_coef.append(nn.Parameter(torch.randn(self.num_flows, self.z_size, self.num_coefs).normal_(0.0, 0.1)))
-            else:
-                amor_flow_coef = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size * self.num_coefs)
-                self.add_module('amor_flow_coef_' + str(c), amor_flow_coef)
+        if args.component_type in ['affine', 'nlsq']:
+            for c in range(self.num_components):
+                if args.density_evaluation:
+                    self.flow_coef.append(nn.Parameter(torch.randn(self.num_flows, self.z_size, self.num_coefs).normal_(0.0, 0.1)))
+                else:
+                    amor_flow_coef = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size * self.num_coefs)
+                    self.add_module('amor_flow_coef_' + str(c), amor_flow_coef)
 
     def increment_component(self):
         if self.component == self.num_components - 1:

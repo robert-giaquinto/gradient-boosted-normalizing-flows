@@ -201,3 +201,100 @@ class MaskedConv2d(nn.Module):
             + str(bias) + ', size_kernel=' \
             + str(self.size_kernel) + ')'
 
+
+class ReLUNet(nn.Module):
+    """
+    Simple fully connected neural network with ReLU activations.
+
+    TODO: change this to a Fully Connected Network with a activation passed as an argument
+    """
+    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=1, use_batch_norm=False, dropout_probability=None):
+        super().__init__()
+
+        layers = []
+        layers += [nn.Linear(in_dim, hidden_dim)]
+        layers += [nn.ReLU()]
+        for i in range(num_layers):
+            layers += [nn.Linear(hidden_dim, hidden_dim)]
+            layers += [nn.ReLU()]
+            if use_batch_norm:
+                layers += [nn.BatchNorm1d(hidden_dim)]
+
+        layers += [nn.Linear(hidden_dim, out_dim)]
+        self.network = nn.Sequential(*layers)
+        
+    def forward(self, x):
+        return self.network(x)
+
+
+class ResidualBlock(nn.Module):
+    """
+    A general-purpose residual block. Works only with 1-dim inputs.
+
+    TODO: allow fo a passed activation function
+    """
+    def __init__(self, hidden_dim, dropout_probability=0.0, use_batch_norm=False, zero_initialization=True):
+        super().__init__()
+        
+        self.activation = nn.ReLU()
+        self.use_batch_norm = use_batch_norm
+        if use_batch_norm:
+            self.batch_norm_layers = nn.ModuleList([
+                nn.BatchNorm1d(hidden_dim, eps=1e-3)
+                for _ in range(2)
+            ])
+
+        self.linear_layers = nn.ModuleList([
+            nn.Linear(hidden_dim, hidden_dim)
+            for _ in range(2)
+        ])
+
+        self.dropout = nn.Dropout(p=dropout_probability)
+
+        if zero_initialization:
+            init.uniform_(self.linear_layers[-1].weight, -1e-3, 1e-3)
+            init.uniform_(self.linear_layers[-1].bias, -1e-3, 1e-3)
+
+    def forward(self, inputs):
+        temps = inputs
+        if self.use_batch_norm:
+            temps = self.batch_norm_layers[0](temps)
+        temps = self.activation(temps)
+        temps = self.linear_layers[0](temps)
+        if self.use_batch_norm:
+            temps = self.batch_norm_layers[1](temps)
+        temps = self.activation(temps)
+        temps = self.dropout(temps)
+        temps = self.linear_layers[1](temps)
+        return inputs + temps
+
+
+class ResidualNet(nn.Module):
+    """
+    A general-purpose residual network. Works only with 1-dim inputs.
+
+    TODO: include context features (could be an output of encoder in VAE setup)?
+    """
+    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=2, use_batch_norm=False, dropout_probability=0.0):
+        """
+        Note: num_layers refers to the number of residual net blocks (each with 2 linear layers)
+        """
+        super().__init__()
+        
+        self.hidden_dim = hidden_dim
+        self.initial_layer = nn.Linear(in_dim, hidden_dim)
+        self.blocks = nn.ModuleList([
+            ResidualBlock(
+                hidden_dim=hidden_dim,
+                dropout_probability=dropout_probability,
+                batch_norm=batch_norm,
+            ) for _ in range(num_layers)
+        ])
+        self.final_layer = nn.Linear(hidden_dim, out_dim)
+
+    def forward(self, inputs):
+        temps = self.initial_layer(inputs)
+        for block in self.blocks:
+            temps = block(temps)
+        outputs = self.final_layer(temps)
+        return outputs

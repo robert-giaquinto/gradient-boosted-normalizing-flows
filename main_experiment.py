@@ -9,7 +9,9 @@ import random
 import os
 import logging
 
-from models.vae import VAE, IAFVAE, OrthogonalSylvesterVAE, HouseholderSylvesterVAE, TriangularSylvesterVAE
+from models.vae import VAE, OrthogonalSylvesterVAE, HouseholderSylvesterVAE, TriangularSylvesterVAE
+from models.iaf_vae import IAFVAE
+from models.realnvp_vae import RealNVPVAE
 from models.boosted_vae import BoostedVAE
 from models.bagged_vae import BaggedVAE
 from models.planar_vae import PlanarVAE
@@ -185,6 +187,8 @@ def init_model(args):
         model = NLSqVAE(args).to(args.device)
     elif args.flow == 'iaf':
         model = IAFVAE(args).to(args.device)
+    elif args.flow == "realnvp":
+        model = RealNVPVAE(args).to(args.device)
     elif args.flow == 'orthogonal':
         model = OrthogonalSylvesterVAE(args).to(args.device)
     elif args.flow == 'householder':

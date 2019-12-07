@@ -8,7 +8,9 @@ import random
 import os
 import logging
 
-from models.vae import VAE, IAFVAE, OrthogonalSylvesterVAE, HouseholderSylvesterVAE, TriangularSylvesterVAE
+from models.vae import VAE, OrthogonalSylvesterVAE, HouseholderSylvesterVAE, TriangularSylvesterVAE
+from models.iaf_vae import IAFVAE
+from models.realnvp_vae import RealNVPVAE
 from models.boosted_vae import BoostedVAE
 from models.bagged_vae import BaggedVAE
 from models.planar_vae import PlanarVAE
@@ -80,16 +82,21 @@ parser.add_argument('--no_annealing', action='store_true', default=False, help='
 
 # flow parameters
 parser.add_argument('--flow', type=str, default='planar',
-                    choices=['planar', 'radial', 'liniaf', 'affine', 'nlsq', 'boosted', 'bagged'],
+                    choices=['planar', 'radial', 'liniaf', 'affine', 'nlsq', 'boosted', 'iaf', 'realnvp'],
                     help="""Type of flows to use, no flows can also be selected""")
 parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
+
+parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--num_base_layers', type=int, default=1, help='Number of layers in the base network of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers',
+                    choices=['relu', 'residual'])
 parser.add_argument('--z_size', type=int, default=2, help='how many stochastic hidden units')
 
 # Bagging/Boosting parameters
 parser.add_argument('--num_components', type=int, default=4,
                     help='How many components are combined to form the flow')
-parser.add_argument('--component_type', type=str, default='planar', choices=['planar', 'radial', 'liniaf', 'affine', 'nlsq'],
-                    help='When flow is bagged or boosted -- what type of flow should each component implement.')
+parser.add_argument('--component_type', type=str, default='affine', choices=['liniaf', 'affine', 'nlsq', 'realnvp'],
+                    help='When flow is boosted -- what type of flow should each component implement.')
 
 
 
