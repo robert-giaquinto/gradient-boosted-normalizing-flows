@@ -46,7 +46,7 @@ class Planar(nn.Module):
 
         return z, log_det_jacobian        
         
-    def forward(self, zk, z0, u, w, b):
+    def forward(self, zk, u, w, b):
         """
         Forward pass. Assumes amortized u, w and b. Conditions on diagonals of u and w for invertibility
         will be be satisfied inside this function. Computes the following transformation:
@@ -68,7 +68,7 @@ class Planar(nn.Module):
         u_hat = u + ((m_uw - uw) * w.transpose(2, 1) / w_norm_sq)
 
         # compute flow with u_hat
-        wzb = torch.bmm(w, z0) + b
+        wzb = torch.bmm(w, zk) + b
         z = zk + u_hat * self.h(wzb)
         z = z.squeeze(2)
 
