@@ -79,6 +79,7 @@ parser.add_argument('--iters_per_component', type=int, default=10000, help='how 
 parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
 parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
 parser.add_argument('--no_annealing', action='store_true', default=False, help='disables annealing while training')
+parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
 
 # flow parameters
 parser.add_argument('--flow', type=str, default='planar',
@@ -162,12 +163,16 @@ def parse_args(main_args=None):
     else:
         args.min_beta = 1.0
 
+    lr_schedule = ""
+    if not args.no_lr_schedule:
+        lr_schedule += "_lr_scheduling"
+
     if args.dataset in ['u5', 'mog']:
         dataset = f"{args.dataset}_s{int(100 * args.mog_sigma)}_c{args.mog_clusters}"
     else:
         dataset = args.dataset
         
-    args.snap_dir += is_annealed + '_on_' + dataset + "_" + args.model_signature + '/'
+    args.snap_dir += lr_schedule + is_annealed + '_on_' + dataset + "_" + args.model_signature + '/'
     kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
     return args, kwargs
 
@@ -367,7 +372,8 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
-        scheduler.step(loss)
+        if not args.no_lr_schedule:
+            scheduler.step(loss)
 
         boosted_component_converged = args.flow == "boosted" and batch_id % args.iters_per_component == 0 and batch_id > 0
         new_boosted_component = batch_id % args.iters_per_component == 1 and args.flow == "boosted"

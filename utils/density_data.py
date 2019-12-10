@@ -89,8 +89,9 @@ def make_toy_sampler(args):
             data = util_shuffle(data)
 
             # Add noise
-            data = torch.from_numpy(data) + torch.randn(data.shape)
             data = data.astype("float32")
+            data += np.random.randn(*data.shape) * 0.1
+            data = torch.from_numpy(data)
 
         elif args.dataset == "moons":
             data = sklearn.datasets.make_moons(n_samples=batch_size, noise=0.1)[0]
