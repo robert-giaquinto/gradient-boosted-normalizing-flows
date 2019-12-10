@@ -7,6 +7,7 @@ import logging
 from models.vae import VAE
 import models.flows as flows
 from optimization.loss import calculate_loss
+from models.layers import ReLUNet, ResidualNet
 
 logger = logging.getLogger(__name__)
 
@@ -24,43 +25,57 @@ class BoostedVAE(VAE):
         self.all_trained = False
         
         # boosting parameters
+        self.component_type = args.component_type
         self.num_components = args.num_components
         self.num_flows = args.num_flows
         self.component = 0  # current component being trained / number of components trained thus far
         self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
 
-        # Flow parameters
-        if args.component_type == "affine":
-            self.flow_transformation = flows.Affine()
-            self.num_coefs = 2
-        elif args.component_type == "nlsq":
-            self.flow_transformation = flows.NLSq()
-            self.num_coefs = 5
-        elif args.component_type == "realnvp":
-            self.base_network = args.base_network
-            self.h_size = args.h_size
-            self.num_base_layers = args.num_base_layers
-            self.flow_transformation == flows.RealNVP(num_flows=self.num_flows,
-                                                      dim=self.z_size, hidden_dim=self.h_size,
-                                                      base_network=self.base_network,
-                                                      num_layers=self.num_base_layers,
-                                                      use_batch_norm=False, dropout_probability=0.0)
-        else:
-            raise NotImplementedError("Only affine and nlsq component types are currently implemented")
-
         if args.density_evaluation:
             self.q_z_nn, self.q_z_mean, self.q_z_var = None, None, None
             self.p_x_nn, self.p_x_mean = None, None
-            self.flow_coef = nn.ParameterList()
+
+        # initialize flow
+        if args.component_type == "realnvp":
+            self.flow_param = nn.ModuleList()
+            self.flow_transformation = flows.RealNVP(dim=self.z_size)
+        else:
+            self.flow_param = nn.ParameterList() if args.density_evaluation else nn.ModuleList()
+            if args.component_type == "affine":
+                self.flow_transformation = flows.Affine()
+                self.num_coefs = 2
+            elif args.component_type == "nlsq":
+                self.flow_transformation = flows.NLSq()
+                self.num_coefs = 5
+            else:
+                raise NotImplementedError("Only affine and nlsq component types are currently implemented")
 
         # Amortized flow parameters for each component
-        if args.component_type in ['affine', 'nlsq']:
-            for c in range(self.num_components):
+        for c in range(self.num_components):
+            if args.component_type == "realnvp":
+                base_network = ResidualNet if args.base_network == "residual" else ReLUNet
+                in_dim = self.z_size // 2
+                out_dim = self.z_size // 2
+                #out_dim = self.z_size - (self.z_size // 2)
+                flow_c = nn.ModuleList()
+                for k in range(self.num_flows):
+                    # realnvp: must initialize the 4 base networks used in each flow (and for each component)
+                    flow_c_k = nn.ModuleList([base_network(in_dim, out_dim, args.h_size, args.num_base_layers, use_batch_norm=True) for _ in range(4)])
+                    flow_c.append(flow_c_k)
+                    
+                self.flow_param.append(flow_c)
+                
+            else:
+                # component type is affine or nlsq
                 if args.density_evaluation:
-                    self.flow_coef.append(nn.Parameter(torch.randn(self.num_flows, self.z_size, self.num_coefs).normal_(0.0, 0.1)))
+                    # flow coefficients NOT data dependent
+                    self.flow_param.append(nn.Parameter(torch.randn(self.num_flows, self.z_size, self.num_coefs).normal_(0.0, 0.1)))
+                    
                 else:
-                    amor_flow_coef = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size * self.num_coefs)
-                    self.add_module('amor_flow_coef_' + str(c), amor_flow_coef)
+                    # amoritize computation of flow parameters, compute coefficients for each datapoint via linear layer
+                    flow_param_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size * self.num_coefs)
+                    self.flow_param.append(flow_param_c)
+                    #self.add_module('flow_param_' + str(c), flow_param)
 
     def increment_component(self):
         if self.component == self.num_components - 1:
@@ -180,88 +195,98 @@ class BoostedVAE(VAE):
 
         return j
 
-    def _get_flow_coefficients(self, c, h=None):
+    def _get_flow_parameters(self, c, h=None):
         """
-        Returns flow coefficients for a particular component c.
-        Can compute coefficients based on output of encoder (requires h), or just pull
+        Returns flow parameters for a particular component c.
+        Can compute parameters based on output of encoder (requires h), or just pull
         the randomly initialized parameters (if doing density evaluation)
         """
-
-        if self.args.density_evaluation:
-            flow_coef = self.flow_coef[c]
+        if self.args.density_evaluation or self.component_type == "realnvp":
+            flow_param_c = self.flow_param[c]
             
         else:
             if h is None:
                 raise ValueError("Cannot compute flow coefficients without hidden layer h")
             
             batch_size = h.size(0)
-            amor_flow_coef = getattr(self, 'amor_flow_coef_' + str(c))
-            flow_coef = amor_flow_coef(h).view(batch_size, self.num_flows, self.z_size, self.num_coefs)
+            amor_flow_param = self.flow_param[c]
+            flow_param_c = amor_flow_param(h).view(batch_size, self.num_flows, self.z_size, self.num_coefs)
             
-        return flow_coef
+        return flow_param_c
 
-    def component_forward_flow(self, z0, component, h=None):
+    def component_forward_flow(self, z_0, component, h=None):
         """
-        Get the corresponding flow's coefficients, then apply the flow
+        Get the corresponding flow component's parameters, then apply the flow
 
-        Returns a list of [z0, ..., zk] and the log det jacobian
+        Returns a list of [z_0, ..., z_k] and the log det jacobian
         """
-        bs = z0.size(0)
-        Z = [z0]
-            
-        flow_coef = self._get_flow_coefficients(component, h=h)
+        batch_size = z_0.size(0)
+        Z = [z_0]
 
-        log_det_j = self.FloatTensor(bs).fill_(0.0)
+        # get parameters for some component
+        flow_param = self._get_flow_parameters(component, h=h)
+
+        # apply forward flow transformation
+        log_det_j = self.FloatTensor(batch_size).fill_(0.0)
         for k in range(self.num_flows):
-            if self.density_evaluation:
-                flow_coef_k = flow_coef[k,...].expand(bs, self.z_size, self.num_coefs)
+            if self.component_type == "realnvp":
+                flow_param_k = flow_param[k]
             else:
-                flow_coef_k = flow_coef[:, k, :, :]
+                if self.density_evaluation:
+                    flow_param_k = flow_param[k,...].expand(batch_size, self.z_size, self.num_coefs)  # repeat coefs for each batch element
+                else:
+                    flow_param_k = flow_param[:, k, :, :]
 
-            zk, ldj = self.flow_transformation(Z[k], flow_coef_k)
+            z_k, ldj = self.flow_transformation(Z[k], flow_param_k)
             log_det_j += ldj
-            Z.append(zk)
+            Z.append(z_k)
 
         return Z, log_det_j
 
     def component_inverse_flow(self, z_K, component, h=None):
         """
-        Given a point z_K find the point z0 using the inverse flow function for a component
+        Given a point z_K find the point z_0 using the inverse flow function for a component
         """
-        bs = z_K.size(0)
+        batch_size = z_K.size(0)
         Z = [None for i in range(self.num_flows + 1)]
         Z[-1] = z_K
 
-        flow_coef = self._get_flow_coefficients(component, h=h)
-        for k in range(self.num_flows, 0, -1):
-            if self.density_evaluation:
-                flow_coef_k = flow_coef[k-1, ...].expand(bs, self.z_size, self.num_coefs)
-            else:
-                flow_coef_k = flow_coef[:, k-1, :, :]
+        # get parameters for some component
+        flow_param = self._get_flow_parameters(component, h=h)
 
-            z_k, _ = self.flow_transformation.inverse(Z[k], flow_coef_k)
+        # apply inverse flow transformation
+        for k in range(self.num_flows, 0, -1):
+            if self.component_type == "realnvp":
+                flow_param_k = flow_param[k-1]
+            else:
+                if self.density_evaluation:
+                    flow_param_k = flow_param[k-1, ...].expand(batch_size, self.z_size, self.num_coefs)
+                else:
+                    flow_param_k = flow_param[:, k-1, :, :]
+
+            z_k, _ = self.flow_transformation.inverse(Z[k], flow_param_k)
             Z[k-1] = z_k
 
         return Z[0]
 
-    def flow(self, z0, sample_from, density_from, h=None):        
+    def flow(self, z_0, sample_from, density_from, h=None):        
         # compute forward step w.r.t. sampling distribution (for training this is the new component g^c)
         # i.e. draw a sample from g(z_K | x) (and same log det jacobian term)
         sample_component = self._sample_component(sampling_components=sample_from)
-        z_g, entropy_ldj = self.component_forward_flow(z0, sample_component, h)
+        zg, entropy_ldj = self.component_forward_flow(z_0, sample_component, h)
 
         if self.component == 0 and self.all_trained == False:
-            return z_g, entropy_ldj, None, None
+            return zg, entropy_ldj, None, None
         else:
             # compute likelihood of sampled z_K w.r.t fixed components:
-            # inverse step: flow_inv(z_g[k]) to get z_0^G
+            # inverse step: flow_inv(zg[k]) to get zG_0
             density_component = self._sample_component(sampling_components=density_from)
-            z0_G = self.component_inverse_flow(z_g[-1], density_component, h)
+            zG_0 = self.component_inverse_flow(zg[-1], density_component, h)
             
             # compute forward step w.r.t. density distribution (for training this is the fixed components G^(1:c-1))
-            z_G, boosted_ldj = self.component_forward_flow(z0_G, density_component, h)
+            zG, boosted_ldj = self.component_forward_flow(zG_0, density_component, h)
                 
-            return z_g, entropy_ldj, z_G, boosted_ldj
+            return zg, entropy_ldj, zG, boosted_ldj
 
     def forward(self, x):
         """
@@ -269,7 +294,7 @@ class BoostedVAE(VAE):
         Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
         """
         h, z_mu, z_var = self.encode(x)
-        z0 = self.reparameterize(z_mu, z_var)
+        z_0 = self.reparameterize(z_mu, z_var)
         
         if self.training and self.component < self.num_components:
             # training mode: sample from the new component currently being trained, evaluate it's density according to fixed model
@@ -286,9 +311,9 @@ class BoostedVAE(VAE):
             sample_from = "1:c"
             density_from = "1:c"
 
-        z_g, entropy_ldj, z_G, boosted_ldj = self.flow(z0, sample_from=sample_from, density_from=density_from, h=h)
+        zg, entropy_ldj, zG, boosted_ldj = self.flow(z_0, sample_from=sample_from, density_from=density_from, h=h)
 
-        x_recon = self.decode(z_g[-1])
+        x_recon = self.decode(zg[-1])
 
-        return x_recon, z_mu, z_var, z_g, entropy_ldj, z_G, boosted_ldj
+        return x_recon, z_mu, z_var, zg, entropy_ldj, zG, boosted_ldj
     

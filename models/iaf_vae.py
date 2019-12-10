@@ -28,7 +28,6 @@ class IAFVAE(VAE):
             self.amor_h_context = nn.Linear(self.q_z_nn_output_dim, self.h_size)
             self.h_context = None
 
-
         # Flow parameters
         self.num_flows = args.num_flows
         self.flow_transformation = flows.IAF(z_size=self.z_size, num_flows=self.num_flows,

@@ -84,7 +84,7 @@ class MaskedLinear(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.kaiming_normal(self.weight)
+        nn.init.kaiming_normal_(self.weight)
         if self.bias is not None:
             self.bias.data.zero_()
 
@@ -154,7 +154,7 @@ class MaskedConv2d(nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        nn.init.kaiming_normal(self.weight)
+        nn.init.kaiming_normal_(self.weight)
         if self.bias is not None:
             self.bias.data.zero_()
 
@@ -208,7 +208,7 @@ class ReLUNet(nn.Module):
 
     TODO: change this to a Fully Connected Network with a activation passed as an argument
     """
-    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=1, use_batch_norm=False, dropout_probability=None):
+    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=1, use_batch_norm=False):
         super().__init__()
 
         layers = []
@@ -233,7 +233,7 @@ class ResidualBlock(nn.Module):
 
     TODO: allow fo a passed activation function
     """
-    def __init__(self, hidden_dim, dropout_probability=0.0, use_batch_norm=False, zero_initialization=True):
+    def __init__(self, hidden_dim, use_batch_norm=False, zero_initialization=True):
         super().__init__()
         
         self.activation = nn.ReLU()
@@ -249,11 +249,9 @@ class ResidualBlock(nn.Module):
             for _ in range(2)
         ])
 
-        self.dropout = nn.Dropout(p=dropout_probability)
-
         if zero_initialization:
-            init.uniform_(self.linear_layers[-1].weight, -1e-3, 1e-3)
-            init.uniform_(self.linear_layers[-1].bias, -1e-3, 1e-3)
+            nn.init.uniform_(self.linear_layers[-1].weight, -1e-3, 1e-3)
+            nn.init.uniform_(self.linear_layers[-1].bias, -1e-3, 1e-3)
 
     def forward(self, inputs):
         temps = inputs
@@ -264,7 +262,6 @@ class ResidualBlock(nn.Module):
         if self.use_batch_norm:
             temps = self.batch_norm_layers[1](temps)
         temps = self.activation(temps)
-        temps = self.dropout(temps)
         temps = self.linear_layers[1](temps)
         return inputs + temps
 
@@ -275,7 +272,7 @@ class ResidualNet(nn.Module):
 
     TODO: include context features (could be an output of encoder in VAE setup)?
     """
-    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=2, use_batch_norm=False, dropout_probability=0.0):
+    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=2, use_batch_norm=False):
         """
         Note: num_layers refers to the number of residual net blocks (each with 2 linear layers)
         """
@@ -286,8 +283,7 @@ class ResidualNet(nn.Module):
         self.blocks = nn.ModuleList([
             ResidualBlock(
                 hidden_dim=hidden_dim,
-                dropout_probability=dropout_probability,
-                batch_norm=batch_norm,
+                use_batch_norm=use_batch_norm,
             ) for _ in range(num_layers)
         ])
         self.final_layer = nn.Linear(hidden_dim, out_dim)

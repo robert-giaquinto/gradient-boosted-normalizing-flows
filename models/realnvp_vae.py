@@ -5,28 +5,28 @@ import random
 
 from models.vae import VAE
 import models.flows as flows
+from models.layers import ReLUNet, ResidualNet
 
 
 class RealNVPVAE(VAE):
     """
     Variational auto-encoder with RealNVP as a flow.
     """
-
     def __init__(self, args):
         super(RealNVPVAE, self).__init__(args)
-
-        self.h_size = args.h_size
-        self.base_network = args.base_network
-        self.num_base_layers = args.num_base_layers
         self.num_flows = args.num_flows
         self.density_evaluation = args.density_evaluation
+        self.flow_transformation = flows.RealNVP(dim=self.z_size)
         
-        # Normalizing flow layer
-        self.flow_transformation = flows.RealNVP(num_flows=self.num_flows,
-                                                 dim=self.z_size, hidden_dim=self.h_size,
-                                                 base_network=self.base_network,
-                                                 num_layers=self.num_base_layers,
-                                                 use_batch_norm=False, dropout_probability=0.0)
+        # Normalizing flow layers
+        base_network = ResidualNet if args.base_network == "residual" else ReLUNet
+        in_dim = self.z_size // 2
+        out_dim = self.z_size // 2
+        #out_dim = self.z_size - (self.z_size // 2)
+        self.flow_param = nn.ModuleList()
+        for k in range(self.num_flows):
+            flow_param_k = nn.ModuleList([base_network(in_dim, out_dim, args.h_size, args.num_base_layers, use_batch_norm=True) for _ in range(4)])
+            self.flow_param.append(flow_param_k)
 
     def encode(self, x):
         """
@@ -40,8 +40,14 @@ class RealNVPVAE(VAE):
         return z_mu, z_var
 
     def flow(self, z_0):
-        z_k, log_det_j = self.flow_transformation(z_0)
-        return z_k, log_det_j
+        log_det_jacobian = 0.0
+        Z = [z_0]
+        for k in range(self.num_flows):
+            flow_k_networks = self.flow_param[k]
+            z_k, ldj = self.flow_transformation(Z[k], flow_k_networks)
+            Z.append(z_k)
+            log_det_jacobian += ldj
+        return Z[-1], log_det_jacobian
 
     def forward(self, x):
         """

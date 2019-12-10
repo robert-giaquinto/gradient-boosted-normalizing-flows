@@ -473,20 +473,14 @@ class NLSq(nn.Module):
 
         t[p > 0] = tpos[p > 0]
         z_new = t - bb / (3*aa)
+        z_new = torch.clamp(z_new, min=-25.0, max=25.0)
 
         arg = d * z_new + g
         denom = 1 + arg.pow(2)
         #log_det_jacobian = torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
         #maybe:
         log_det_jacobian = safe_log(torch.abs(b - 2 * c * d * arg / denom.pow(2))).sum(-1)
-        #z = a + b*z_new + c/denom
         
-        z_new = torch.max(z_new, torch.ones_like(z_new) * -25.0)
-        z_new = torch.min(z_new, torch.ones_like(z_new) * 25.0)
-        if torch.abs(z_new).max() >= 25.0:
-            print(f"Extreme z inverse values: {z_new.data}")
-            
-
         return z_new.float(), log_det_jacobian.float()
 
     def forward(self, z, flow_coef):
@@ -496,11 +490,7 @@ class NLSq(nn.Module):
         arg = d*z + g
         denom = 1 + arg.pow(2)
         z_new = a + b*z + c/denom
-
-        z_new = torch.max(z_new, torch.ones_like(z_new) * -25.0)
-        z_new = torch.min(z_new, torch.ones_like(z_new) * 25.0)
-        if torch.abs(z_new).max() >= 25.0:
-            print(f"Extreme z values: {z_new.data}")
+        z_new = torch.clamp(z_new, min=-25.0, max=25.0)
         
         #log_det_jacobian = torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
         # maybe:
@@ -514,42 +504,41 @@ class RealNVP(nn.Module):
     Non-volume preserving flow.
     [Dinh et. al. 2017]
 
-    TODO: currently only supports 2 "flows", make this programmable
+    TODO: currently only supports 1 "flows", make this programmable
     TODO: will this work when D is not even
-    """
-    def __init__(self, num_flows, dim, hidden_dim=8, base_network="relu", num_layers=1, use_batch_norm=False, dropout_probability=0.0):
-        super().__init__()
-        
-        self.dim = dim
-        base_network = ResidualNet if base_network == "residual" else ReLUNet
-        #out_dim = dim - (dim // 2)
-        self.t1 = base_network(dim // 2, dim // 2, hidden_dim, num_layers, use_batch_norm, dropout_probability)
-        self.s1 = base_network(dim // 2, dim // 2, hidden_dim, num_layers, use_batch_norm, dropout_probability)
-        self.t2 = base_network(dim // 2, dim // 2, hidden_dim, num_layers, use_batch_norm, dropout_probability)
-        self.s2 = base_network(dim // 2, dim // 2, hidden_dim, num_layers, use_batch_norm, dropout_probability)
 
-    def forward(self, x):
+    TODO: may be better to pass [t_0, t_1, ...] and [s_0, s_1, ...] to forward and inverse functions
+    """
+    def __init__(self, dim):
+        super().__init__()        
+        self.dim = dim
+
+    def forward(self, x, networks):
+        t1, s1, t2, s2 = networks
         lower, upper = x[:,:self.dim // 2], x[:,self.dim // 2:]
-        t1_transformed = self.t1(lower)
-        s1_transformed = self.s1(lower)
+        t1_transformed = t1(lower)
+        s1_transformed = s1(lower)
         upper = t1_transformed + upper * torch.exp(s1_transformed)
-        t2_transformed = self.t2(upper)
-        s2_transformed = self.s2(upper)
+        t2_transformed = t2(upper)
+        s2_transformed = s2(upper)
         lower = t2_transformed + lower * torch.exp(s2_transformed)
         z = torch.cat([lower, upper], dim=1)
         log_det = torch.sum(s1_transformed, dim=1) + \
                   torch.sum(s2_transformed, dim=1)
+
         return z, log_det
 
-    def inverse(self, z):
+    def inverse(self, z, networks):
+        t1, s1, t2, s2 = networks
         lower, upper = z[:,:self.dim // 2], z[:,self.dim // 2:]
-        t2_transformed = self.t2(upper)
-        s2_transformed = self.s2(upper)
+        t2_transformed = t2(upper)
+        s2_transformed = s2(upper)
         lower = (lower - t2_transformed) * torch.exp(-s2_transformed)
-        t1_transformed = self.t1(lower)
-        s1_transformed = self.s1(lower)
+        t1_transformed = t1(lower)
+        s1_transformed = s1(lower)
         upper = (upper - t1_transformed) * torch.exp(-s1_transformed)
         x = torch.cat([lower, upper], dim=1)
         log_det = torch.sum(-s1_transformed, dim=1) + \
                   torch.sum(-s2_transformed, dim=1)
+
         return x, log_det

@@ -96,8 +96,11 @@ parser.add_argument('--num_ortho_vecs', type=int, default=8,
                     help=" For orthogonal flow: How orthogonal vectors per flow do you need. Ignored for other flow types.")
 parser.add_argument('--num_householder', type=int, default=8,
                     help="For Householder Sylvester flow: Number of Householder matrices per flow. Ignored for other flow types.")
-parser.add_argument('--made_h_size', type=int, default=320,
-                    help='Width of mades for iaf. Ignored for all other flows.')
+
+parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--num_base_layers', type=int, default=1, help='Number of layers in the base network of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual'])
+
 parser.add_argument('--z_size', type=int, default=64, help='how many stochastic hidden units')
 
 # Bagging/Boosting parameters
@@ -158,9 +161,12 @@ def parse_args(main_args=None):
     elif args.flow == 'householder':
         args.snap_dir += '_num_householder_' + str(args.num_householder)
     elif args.flow == 'iaf':
-        args.snap_dir += '_madehsize_' + str(args.made_h_size)
+        args.snap_dir += '_madehsize_' + str(args.h_size)
     elif args.flow in ['boosted', 'bagged']:
         args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components)
+    elif args.flow == "realnvp":
+        args.snap_dir += '_' + args.base_network + '_layers_' + str(args.num_base_layers) + '_hsize_' + str(args.h_size)
+
 
     args.snap_dir += '_on_' + args.dataset + "_" +args.model_signature + '/'
 
@@ -213,13 +219,14 @@ def init_optimizer(model, args):
         flow_labels = {f"{c}": [] for c in range(args.num_components)}
         vae_params = torch.nn.ParameterList()
         vae_labels = []
-        for name, param in model.named_parameters():            
-            if name.startswith("amor_u") or name.startswith("amor_w") or name.startswith("amor_b") or args.density_evaluation:
-                if args.density_evaluation:
-                    component_id = name[(name.find(".") + 1):(name.find(".") + 2)]
-                else:
-                    component_id = name[(name.find(".") - 1):name.find(".")]
 
+        for name in [n for n, _ in model.named_parameters()]:
+            print(name)
+        
+        for name, param in model.named_parameters():            
+            if name.startswith("flow"):
+                pos = name.find(".")
+                component_id = name[(pos + 1):(pos + 2)]
                 flow_params[component_id].append(param)
                 flow_labels[component_id].append(name)
             else:

@@ -15,10 +15,10 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     model.eval()
     
     n_pts = args.plot_resolution
-    range_lim = 5
+    range_lim = 4
 
     # construct test points
-    test_grid = setup_grid(range_lim * 2, n_pts, args)
+    test_grid = setup_grid(range_lim, n_pts, args)
 
     # plot
     if args.density_matching:
@@ -80,7 +80,7 @@ def plot_potential(potential_fn, ax, test_grid, n_pts):
     xx, yy, zz = test_grid
     ax.pcolormesh(xx, yy, torch.exp(-1.0 * potential_fn(zz)).view(n_pts, n_pts).cpu().data, cmap=plt.cm.viridis)
     ax.set_title('Target Density', fontdict={'fontsize': 20})
-
+    
     
 def plot_samples(samples_fn, ax, range_lim, n_pts):
     samples = samples_fn(n_pts**2).numpy()
@@ -91,6 +91,7 @@ def plot_samples(samples_fn, ax, range_lim, n_pts):
 def plot_flow_samples(model, ax, n_pts, batch_size, args, sample_from=None):    
     z = model.base_dist.sample((n_pts**2,))
     zk = torch.cat([flow(model, z_, args, sample_from)[0] for z_ in z.split(batch_size, dim=0)], 0)
+    zk = torch.clamp(zk, min=-25.0, max=25.0)
     zk = zk.cpu().numpy()
     
     # plot
@@ -232,10 +233,12 @@ def plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, batch_size, args
         log_q0 = model.base_dist.log_prob(zz).sum(1)
         log_qk = log_q0 - logdet
         qk = log_qk.exp().cpu()
+        zzk = zzk.cpu()
 
         # plot component c
-        axs[row,col].pcolormesh(zzk[:,0].view(n_pts,n_pts).data, zzk[:,1].view(n_pts,n_pts).data, qk.view(n_pts,n_pts).data, cmap=plt.cm.viridis)
-        axs[row,col].set_facecolor(plt.cm.viridis(0.))
+        axs[row,col].pcolormesh(zzk[:,0].view(n_pts,n_pts).data, zzk[:,1].view(n_pts,n_pts).data, qk.view(n_pts,n_pts).data,
+                                cmap=plt.cm.viridis)
+        axs[row,col].set_facecolor(plt.cm.viridis(0.0))
         axs[row,col].set_title(f'Boosted Flow Density for c={c}', fontdict={'fontsize': 20})
 
         # plot full model (doesnt really work well, better to just plot samples)

@@ -88,8 +88,7 @@ parser.add_argument('--num_flows', type=int, default=2, help='Number of flow lay
 
 parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--num_base_layers', type=int, default=1, help='Number of layers in the base network of iaf and realnvp. Ignored for all other flows.')
-parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers',
-                    choices=['relu', 'residual'])
+parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual'])
 parser.add_argument('--z_size', type=int, default=2, help='how many stochastic hidden units')
 
 # Bagging/Boosting parameters
@@ -148,10 +147,13 @@ def parse_args(main_args=None):
     if args.flow != 'no_flow':
         args.snap_dir += 'flow_length_' + str(args.num_flows)
 
-    if args.flow in ['boosted', 'bagged']:
+    if args.flow == 'iaf':
+        args.snap_dir += '_hsize_' + str(args.h_size)
+    elif args.flow == "realnvp":
+        args.snap_dir += '_' + args.base_network + '_layers_' + str(args.num_base_layers) + '_hsize_' + str(args.h_size)
+    elif args.flow in ['boosted', 'bagged']:
         if args.regularization_rate < 0.0:
             raise ValueError("For boosting the regularization rate should be greater than or equal to zero.")
-        
         args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components) + '_regularization_' + f'{int(100*args.regularization_rate):d}'
 
     is_annealed = ""
@@ -246,7 +248,7 @@ def compute_kl_pq_loss(model, data_sampler, beta, args):
             G_lhood = G_log_prob + G_ldj    
             G_lhood = torch.max(G_lhood, torch.ones_like(g_ldj) * -10.0)
             g_lhood = torch.max(g_lhood, torch.ones_like(g_ldj) * -10.0)
-            loss = -1.0 * g_lhood + args.regularization_rate * G_lhood
+            loss = -1.0 * (args.regularization_rate * g_lhood + G_lhood)
 
         return loss.mean(0), (g_lhood.mean().item(), G_lhood.mean().item())
         
@@ -365,7 +367,7 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
-        #scheduler.step(loss)
+        scheduler.step(loss)
 
         boosted_component_converged = args.flow == "boosted" and batch_id % args.iters_per_component == 0 and batch_id > 0
         new_boosted_component = batch_id % args.iters_per_component == 1 and args.flow == "boosted"
