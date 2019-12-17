@@ -148,15 +148,18 @@ def parse_args(main_args=None):
     if args.flow != 'no_flow':
         args.snap_dir += 'flow_length_' + str(args.num_flows)
 
-    if args.flow == 'iaf':
-        args.snap_dir += '_hsize_' + str(args.h_size)
-    elif args.flow == "realnvp":
-        args.snap_dir += '_' + args.base_network + '_layers_' + str(args.num_base_layers) + '_hsize_' + str(args.h_size)
-    elif args.flow in ['boosted', 'bagged']:
+    if args.flow in ['boosted', 'bagged']:
         if args.regularization_rate < 0.0:
             raise ValueError("For boosting the regularization rate should be greater than or equal to zero.")
         args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components) + '_regularization_' + f'{int(100*args.regularization_rate):d}'
 
+
+    if args.flow == 'iaf' or args.component_type == "realnvp":
+        args.snap_dir += '_hsize_' + str(args.h_size)
+
+    if args.flow == "realnvp" or args.component_type == "realnvp":
+        args.snap_dir += '_' + args.base_network + '_layers_' + str(args.num_base_layers) + '_hsize_' + str(args.h_size)
+        
     is_annealed = ""
     if not args.no_annealing and args.min_beta < 1.0:
         is_annealed += "_annealed"
