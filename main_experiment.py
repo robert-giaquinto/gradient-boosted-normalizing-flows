@@ -78,12 +78,14 @@ parser.add_argument('--early_stopping_epochs', type=int, default=20, help='numbe
 
 parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
 parser.add_argument('--learning_rate', type=float, default=0.0005, help='learning rate')
-parser.add_argument('--regularization_rate', type=float, default=0.01, help='Regularization penalty for boosting.')
+parser.add_argument('--regularization_rate', type=float, default=0.4, help='Regularization penalty for boosting.')
 
 parser.add_argument('--annealing_schedule', type=int, default=100, help='number of epochs for warm-up. Set to 0 to turn beta annealing off.')
+parser.add_argument('--burnin', type=int, default=25, help='number of extra epochs to run the first component of a boosted model.')
 parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
 parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
-parser.add_argument('--burnin', type=int, default=25, help='number of extra epochs to run the first component of a boosted model.')
+parser.add_argument('--no_annealing', action='store_true', default=False, help='disables annealing while training')
+parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
 
 # flow parameters
 parser.add_argument('--flow', type=str, default='no_flow',
@@ -107,7 +109,7 @@ parser.add_argument('--z_size', type=int, default=64, help='how many stochastic 
 parser.add_argument('--num_components', type=int, default=8,
                     help='How many components are combined to form the flow')
 parser.add_argument('--component_type', type=str, default='planar',
-                    choices=['planar', 'radial', 'iaf', 'liniaf', 'affine', 'nlsq', 'householder', 'orthogonal', 'triangular', 'random'],
+                    choices=['realnvp', 'liniaf', 'affine', 'nlsq', 'random'],
                     help='When flow is bagged or boosted -- what type of flow should each component implement.')
 
 
@@ -161,17 +163,28 @@ def parse_args(main_args=None):
     elif args.flow == 'householder':
         args.snap_dir += '_num_householder_' + str(args.num_householder)
     elif args.flow == 'iaf':
-        args.snap_dir += '_madehsize_' + str(args.h_size)
+        args.snap_dir += '_hsize_' + str(args.h_size)
     elif args.flow in ['boosted', 'bagged']:
-        args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components)
+        if args.regularization_rate < 0.0:
+            raise ValueError("For boosting the regularization rate should be greater than or equal to zero.")
+        args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components) + '_regularization_' + f'{int(100*args.regularization_rate):d}'
     elif args.flow == "realnvp":
         args.snap_dir += '_' + args.base_network + '_layers_' + str(args.num_base_layers) + '_hsize_' + str(args.h_size)
 
+    is_annealed = ""
+    if not args.no_annealing and args.min_beta < 1.0:
+        is_annealed += "_annealed"
+    else:
+        args.min_beta = 1.0
 
-    args.snap_dir += '_on_' + args.dataset + "_" +args.model_signature + '/'
+    lr_schedule = ""
+    if not args.no_lr_schedule:
+        lr_schedule += "_lr_scheduling"
 
+    args.snap_dir += lr_schedule + is_annealed + '_on_' + args.dataset + "_" + args.model_signature + '/'
     kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
     return args, kwargs
+
 
 
 def init_model(args):
@@ -219,10 +232,6 @@ def init_optimizer(model, args):
         flow_labels = {f"{c}": [] for c in range(args.num_components)}
         vae_params = torch.nn.ParameterList()
         vae_labels = []
-
-        for name in [n for n, _ in model.named_parameters()]:
-            print(name)
-        
         for name, param in model.named_parameters():            
             if name.startswith("flow"):
                 pos = name.find(".")
@@ -249,7 +258,14 @@ def init_optimizer(model, args):
         logger.info(f"Initializing optimizer for standard models with learning rate={args.learning_rate}.\n")
         optimizer = optim.Adamax(model.parameters(), lr=args.learning_rate, eps=1.e-7)
 
-    return optimizer
+    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                           factor=0.5,
+                                                           patience=2000,
+                                                           min_lr=5e-4,
+                                                           verbose=True,
+                                                           threshold_mode='abs')
+
+    return optimizer, scheduler
 
 
 def init_log(args):
@@ -292,7 +308,7 @@ def main(main_args=None):
     # INITIALIZE MODEL AND OPTIMIZATION
     # =========================================================================
     model = init_model(args)
-    optimizer = init_optimizer(model, args)
+    optimizer, scheduler = init_optimizer(model, args)
     num_params = sum([param.nelement() for param in model.parameters()])
     logger.info(f"MODEL:\nNumber of model parameters={num_params}\n{model}\n")
 
@@ -300,7 +316,7 @@ def main(main_args=None):
     # TRAINING
     # =========================================================================
     logger.info('TRAINING:')
-    train_loss, val_loss = train(train_loader, val_loader, model, optimizer, args)
+    train_loss, val_loss = train(train_loader, val_loader, model, optimizer, scheduler, args)
 
     # =========================================================================
     # VALIDATION

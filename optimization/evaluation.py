@@ -8,7 +8,7 @@ from scipy.special import logsumexp
 import logging
 
 from optimization.loss import calculate_loss, calculate_loss_array
-from utils.plotting import plot_reconstructions, plot_decoded_random_sample, plot_decoded_manifold, plot_data_manifold
+from utils.plotting import plot_reconstructions, plot_decoded_random_sample, plot_decoded_manifold, plot_data_manifold, plot_flow_samples
 
 logger = logging.getLogger(__name__)
 
@@ -24,25 +24,32 @@ def evaluate(data_loader, model, args, epoch=None, results_type=None):
                   plots and evaluation information is only created if results_type is not None.
     """
     model.eval()
-
+    save_this_epoch = epoch is None or epoch==1 or (args.plot_interval > 0 and epoch % args.plot_interval == 0)
     loss = 0.0
     rec = 0.0
     kl = 0.0
 
-    for batch_id, (data, _) in enumerate(data_loader):
-        data = data.to(args.device)
+    for batch_id, (x, _) in enumerate(data_loader):
+        x = x.to(args.device)
 
-        x_mean, z_mu, z_var, ldj, z0, zk = model(data)
-
-        batch_loss, batch_rec, batch_kl = calculate_loss(x_mean, data, z_mu, z_var, z0, zk, ldj, args)
+        if args.flow == 'boosted':
+            x_recon, z_mu, z_var, Z, ldj, _, _ = model(x)
+            z0, zk = Z[0], Z[-1]
+        else:
+            x_recon, z_mu, z_var, ldj, z0, zk = model(x)
+            
+        batch_loss, batch_rec, batch_kl = calculate_loss(x_recon, x, z_mu, z_var, z0, zk, ldj, args)
         loss += batch_loss.item()
         rec += batch_rec.item()
         kl += batch_kl.item()
 
         # Plots reconstructions
-        save_this_epoch = epoch is None or epoch==1 or (args.plot_interval > 0 and epoch % args.plot_interval == 0)
         if batch_id == 0 and save_this_epoch and args.save_results:
-            plot_reconstructions(data=data, recon_mean=x_mean, loss=batch_loss, args=args, epoch=epoch)
+            plot_reconstructions(data=x, recon_mean=x_recon, loss=batch_loss, args=args, epoch=epoch)
+            
+    if model.z_size == 2 and save_this_epoch and args.save_results:
+        plot_flow_samples(epoch, model, data_loader, args)
+
 
     avg_loss = loss / len(data_loader)
     avg_rec = rec / len(data_loader)
@@ -96,13 +103,7 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000, results_type=
             # Repeat it for all training points
             x = x_single.expand(S, *x_single.size()[1:]).contiguous()
 
-            if args.flow == "boosted":
-                x_mean, z_mu, z_var, _, ldj, z0, zk = model(x, sample_from='all')
-            elif args.flow == "bagged":
-                x_mean, z_mu, z_var, ldj, z0, zk = model(x, batch_id=None)
-            else:
-                x_mean, z_mu, z_var, ldj, z0, zk = model(x)
-
+            x_mean, z_mu, z_var, ldj, z0, zk = model(x)    
             a_tmp = calculate_loss_array(x_mean, x, z_mu, z_var, z0, zk, ldj, args)
             a.append(-a_tmp.cpu().data.numpy())
 
@@ -128,3 +129,4 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000, results_type=
             print(results_msg, file=ff)
 
     return nll
+

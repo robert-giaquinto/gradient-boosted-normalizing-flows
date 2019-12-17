@@ -233,7 +233,7 @@ class ResidualBlock(nn.Module):
 
     TODO: allow fo a passed activation function
     """
-    def __init__(self, hidden_dim, use_batch_norm=False, zero_initialization=True):
+    def __init__(self, hidden_dim, use_batch_norm=True, zero_initialization=True):
         super().__init__()
         
         self.activation = nn.ReLU()
@@ -272,7 +272,7 @@ class ResidualNet(nn.Module):
 
     TODO: include context features (could be an output of encoder in VAE setup)?
     """
-    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=2, use_batch_norm=False):
+    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=2, use_batch_norm=True):
         """
         Note: num_layers refers to the number of residual net blocks (each with 2 linear layers)
         """

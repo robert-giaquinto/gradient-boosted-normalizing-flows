@@ -237,23 +237,22 @@ def compute_kl_pq_loss(model, data_sampler, beta, args):
     sample = data_sampler(args.batch_size).to(args.device)
     
     if args.flow == "boosted":
-        # compute transformation from new component
-        Z_g, g_ldj = model.component_forward_flow(sample, model.component)
+        density_from = '-c' if model.all_trained else '1:c-1'
+        sample_from = 'c'
+            
+        Z_g, g_ldj, Z_G, G_ldj = model.flow(sample, sample_from=sample_from, density_from=density_from)
         g_log_prob = model.base_dist.log_prob(Z_g[-1]).sum(1)
         g_lhood = g_log_prob + g_ldj
+        g_lhood = torch.max(g_lhood, torch.ones_like(g_ldj) * -10.0)
         
-        if model.component == 0 and model.all_trained == False:
+        if model.all_trained or model.component > 0:
+            G_log_prob = model.base_dist.log_prob(Z_G[-1]).sum(1)
+            G_lhood = G_log_prob + G_ldj
+            G_lhood = torch.max(G_lhood, torch.ones_like(G_ldj) * -10.0)
+            loss =  -1.0 * g_lhood + G_lhood * args.regularization_rate
+        else:
             G_lhood = torch.zeros_like(g_lhood)
             loss = -1.0 * g_lhood
-        else:
-            fixed_component_labels = '-c' if model.all_trained else '1:c-1'
-            fixed_component = model._sample_component(sampling_components=fixed_component_labels)
-            Z_G, G_ldj = model.component_forward_flow(sample, fixed_component)
-            G_log_prob = model.base_dist.log_prob(Z_G[-1]).sum(1)
-            G_lhood = G_log_prob + G_ldj    
-            G_lhood = torch.max(G_lhood, torch.ones_like(g_ldj) * -10.0)
-            g_lhood = torch.max(g_lhood, torch.ones_like(g_ldj) * -10.0)
-            loss = -1.0 * (args.regularization_rate * g_lhood + G_lhood)
 
         return loss.mean(0), (g_lhood.mean().item(), G_lhood.mean().item())
         
@@ -275,7 +274,8 @@ def rho_gradient(model, target_or_sample_fn, args):
         p_log_prob_g = -1.0 * target_or_sample_fn(g_zk[-1])  # p = exp(-potential) => log_p = - potential
         loss_wrt_g = q_log_prob - g_ldj - p_log_prob_g
 
-        G_zk, _, _, G_ldj = model.flow(z, sample_from="1:c-1", density_from="1:c")
+        fixed_components = "-c" if self.all_trained else "1:c-1"
+        G_zk, _, _, G_ldj = model.flow(z, sample_from=fixed_components, density_from="1:c")
         p_log_prob_G = -1.0 * target_or_sample_fn(G_zk[-1])  # p = exp(-potential) => log_p = - potential
         loss_wrt_G = q_log_prob - G_ldj - p_log_prob_G
 
@@ -287,6 +287,7 @@ def rho_gradient(model, target_or_sample_fn, args):
         loss_wrt_g = -1.0 * (model.base_dist.log_prob(g_zk[-1]).sum(1) + g_ldj)
                 
         G_zk, _, _, G_ldj = model.flow(sample, sample_from="1:c-1", density_from="1:c")
+        print(G_zk, G_ldj)
         loss_wrt_G = -1.0 * (model.base_dist.log_prob(G_zk[-1]).sum(1) + G_ldj)
 
     return loss_wrt_g.mean(0).detach().item(), loss_wrt_G.mean(0).detach().item()
@@ -304,17 +305,17 @@ def update_rho(model, target_or_sample_fn, args):
         print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in model.rho.data]), file=rho_log)
             
         step_size = 0.005
-        tolerance = 0.0001
+        tolerance = 0.00001
         min_iters = 15
-        max_iters = 250 if model.all_trained else 25
-        prev_rho = 1.0 / model.num_components
+        max_iters = 250 if model.all_trained else 50
+        prev_rho = model.rho[model.component].item()
             
         for batch_id in range(max_iters):
 
             loss_wrt_g, loss_wrt_G = rho_gradient(model, target_or_sample_fn, args)
             gradient = loss_wrt_g - loss_wrt_G
             ss = step_size / (0.025 * batch_id + 1)
-            rho = min(max(prev_rho - ss * gradient, 0.025), 1.0)
+            rho = min(max(prev_rho - ss * gradient, 0.001), 1.0)
 
             grad_msg = f'{batch_id: >3}. rho = {prev_rho:5.3f} -  {gradient:4.2f} * {ss:5.3f} = {rho:5.3f}'
             loss_msg = f"\tg vs G. Loss: ({loss_wrt_g:5.1f}, {loss_wrt_G:5.1f})."
@@ -328,6 +329,7 @@ def update_rho(model, target_or_sample_fn, args):
                 break
 
         print('New Rho: ' + ' '.join([f'{val:1.2f}' for val in model.rho.data]), file=rho_log)
+        rho_log.close()
 
 
 def annealing_schedule(i, args):
@@ -392,8 +394,8 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
 
             logger.info(msg)
 
-        if boosted_component_converged:
-            update_rho(model, target_or_sample_fn, args)
+        #if boosted_component_converged:
+        #    update_rho(model, target_or_sample_fn, args)
 
         if batch_id % args.plot_interval == 0 or new_boosted_component:
             with torch.no_grad():
@@ -430,15 +432,8 @@ def main(main_args=None):
     # INITIALIZE MODEL AND OPTIMIZATION
     # =========================================================================
     model = init_model(args)
-    optimizer = init_optimizer(model, args)
-    num_params = sum([param.nelement() for param in model.parameters()])
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                           factor=0.5,
-                                                           patience=2000,
-                                                           min_lr=5e-4,
-                                                           verbose=True,
-                                                           threshold_mode='abs')
-    
+    optimizer, scheduler = init_optimizer(model, args)
+    num_params = sum([param.nelement() for param in model.parameters()])    
     logger.info(f"MODEL:\nNumber of model parameters={num_params}\n{model}\n")
 
     # =========================================================================

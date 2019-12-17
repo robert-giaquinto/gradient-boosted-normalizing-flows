@@ -6,10 +6,10 @@ import torch.nn.functional as F
 from utils.utilities import safe_log
 
 
-def binary_neg_elbo(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.0):
+def binary_neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, beta=1.0):
     """
     Computes the binary loss function while summing over batch dimension, not averaged!
-    :param recon_x: shape: (batch_size, num_channels, pixel_width, pixel_height), bernoulli parameters p(x=1)
+    :param x_recon: shape: (batch_size, num_channels, pixel_width, pixel_height), bernoulli parameters p(x=1)
     :param x: shape (batchsize, num_channels, pixel_width, pixel_height), pixel values rescaled between [0, 1].
     :param z_mu: mean of z_0
     :param z_var: variance of z_0
@@ -21,7 +21,7 @@ def binary_neg_elbo(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.0):
     """
     # - N E_q0 [ ln p(x|z_k) ]
     reconstruction_function = nn.BCELoss(reduction='sum')
-    recon_loss = reconstruction_function(recon_x, x)
+    recon_loss = reconstruction_function(x_recon, x)
 
     # ln p(z_k)  (not averaged)
     log_p_zk = log_normal_standard(z_k, dim=1)
@@ -45,22 +45,39 @@ def binary_neg_elbo(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.0):
     return loss, recon_loss, kl
 
 
-def variational_loss(z_mu, z_var, z_0, ldj):
-    """
-    Compute the loss for just the variational posterior terms in the negative elbo
-    """
-    # N E_g0 [ln g(z_0)]
-    log_g_z0 = log_normal_diag(z_0, mean=z_mu, log_var=safe_log(z_var), dim=1).sum()
+def boosted_binary_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regularization_rate, first_component, beta=1.0):
+    reconstruction_function = nn.BCELoss(reduction='sum')
+    recon_loss = reconstruction_function(x_recon, x)
 
-    # ldj = -N E_q_z0[\sum_k log |det dz_k/dz_k-1| ]
-    # sum over batches
-    log_det_jacobian = torch.sum(ldj)
+    # prior: ln p(z_k)  (not averaged)
+    log_p_zk = log_normal_standard(z_g[-1], dim=1)
 
-    loss = log_g_z0 - log_det_jacobian
+    # entropy loss w.r.t. to new component terms (not averaged)
+    # N E_g[ ln g(z | x) ]  (not averaged)
+    log_g_base = log_normal_diag(z_g[0], mean=z_mu, log_var=safe_log(z_var), dim=1)
+    log_g_z = log_g_base - g_ldj
 
-    batch_size = z_0.size(0)
-    loss = loss / float(batch_size)
-    return loss
+    if first_component:
+        # train the first component just like a standard VAE + Normalizing Flow
+        kl = torch.sum(log_g_z - log_p_zk)
+        log_G_z = torch.zeros_like(kl)
+    else:
+        # all other components are trained using the boosted loss
+        # loss w.r.t. fixed component terms:
+        log_G_base = log_normal_diag(z_G[0], mean=z_mu, log_var=safe_log(z_var), dim=1)
+        # limit log likelihoods to -10 --- which is pretty small, for numerical stability
+        log_G_z = torch.sum(torch.max(log_G_base - G_ldj, torch.ones_like(G_ldj) * -15.0))
+        kl = torch.sum(regularization_rate * log_g_z - log_p_zk)
+        
+    loss = recon_loss + log_G_z + beta*kl
+
+    batch_size = float(x.size(0))
+    loss = loss / batch_size
+    recon_loss = recon_loss / batch_size
+    kl = kl / batch_size
+    log_G_z = log_G_z / batch_size
+
+    return loss, recon_loss, kl, log_G_z
 
 
 def multinomial_neg_elbo(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):
@@ -110,7 +127,7 @@ def multinomial_neg_elbo(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):
     return loss, ce, kl
 
 
-def binary_loss_array(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
+def binary_loss_array(x_recon, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
     """
     Computes the binary loss without averaging or summing over the batch dimension.
     """
@@ -122,7 +139,7 @@ def binary_loss_array(recon_x, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
 
     # TODO: upgrade to newest pytorch version on master branch, there the nn.BCELoss comes with the option
     # reduce, which when set to False, does no sum over batch dimension.
-    bce = - log_bernoulli(x.view(batch_size, -1), recon_x.view(batch_size, -1), dim=1)
+    bce = - log_bernoulli(x.view(batch_size, -1), x_recon.view(batch_size, -1), dim=1)
     # ln p(z_k)  (not averaged)
     log_p_zk = log_normal_standard(z_k, dim=1)
     # ln q(z_0)  (not averaged)
@@ -187,6 +204,20 @@ def cross_entropy(x, target, reduction='none'):
     return loss
 
 
+def calculate_boosted_loss(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, first_component, beta=1.0):
+
+    if args.input_type == "binary":
+        loss, recon_loss, kl, log_G_z = boosted_binary_neg_elbo(x_recon, x,
+                                                                z_mu, z_var,
+                                                                z_g, g_ldj, z_G, G_ldj,
+                                                                args.regularization_rate, first_component, beta)
+
+    else:
+        ValueError(f"Invalid inpt type for calculate_boosted_loss: {args.input_type}")
+
+    return loss, recon_loss, kl, log_G_z
+        
+
 def calculate_loss(x_mean, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):
     """
     Picks the correct loss depending on the input type.
@@ -209,7 +240,6 @@ def calculate_loss_array(x_mean, x, z_mu, z_var, z_0, z_k, ldj, args):
 
     if args.input_type == 'binary':
         loss = binary_loss_array(x_mean, x, z_mu, z_var, z_0, z_k, ldj)
-
     elif args.input_type == 'multinomial':
         loss = multinomial_loss_array(x_mean, x, z_mu, z_var, z_0, z_k, ldj, args)
 

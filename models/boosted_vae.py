@@ -30,6 +30,8 @@ class BoostedVAE(VAE):
         self.num_flows = args.num_flows
         self.component = 0  # current component being trained / number of components trained thus far
         self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
+        #self.rho = self.FloatTensor(self.num_components).fill_(max(1.0 / (self.num_components), 0.05))
+        #self.rho[0] = 1.0
 
         if args.density_evaluation:
             self.q_z_nn, self.q_z_mean, self.q_z_var = None, None, None
@@ -60,7 +62,7 @@ class BoostedVAE(VAE):
                 flow_c = nn.ModuleList()
                 for k in range(self.num_flows):
                     # realnvp: must initialize the 4 base networks used in each flow (and for each component)
-                    flow_c_k = nn.ModuleList([base_network(in_dim, out_dim, args.h_size, args.num_base_layers, use_batch_norm=True) for _ in range(4)])
+                    flow_c_k = nn.ModuleList([base_network(in_dim, out_dim, args.h_size, args.num_base_layers, use_batch_norm=False) for _ in range(4)])
                     flow_c.append(flow_c_k)
                     
                 self.flow_param.append(flow_c)
@@ -86,6 +88,7 @@ class BoostedVAE(VAE):
             # increment to the next component
             self.component = min(self.component + 1, self.num_components - 1)
 
+    @torch.no_grad()
     def _rho_gradient(self, x):
         """
         Estimate gradient with Monte Carlo by drawing sample zK ~ g^c and sample zK ~ G^(c-1), and
@@ -96,59 +99,58 @@ class BoostedVAE(VAE):
         z0 = self.reparameterize(z_mu, z_var)
 
         # E_g^(c) [ gamma ] sample
-        g_zk, _, g_ldj = self.flow(z0, sample_from="c", density_from="1:c", h=h)
-        g_x = self.decode(g_zk)
-        gamma_wrt_g, g_recon, g_kl = calculate_loss(g_x, x, z_mu, z_var, z0, g_zk, g_ldj, self.args, beta=1.0)
+        g_zk, _, _, g_ldj = self.flow(z0, sample_from="c", density_from="1:c", h=h)
+        g_x = self.decode(g_zk[-1])
+        g_loss, _, _ = calculate_loss(g_x, x, z_mu, z_var, z0, g_zk[-1], g_ldj, self.args, beta=1.0)
 
         # E_G^(c-1) [ gamma ]
-        G_zk, _, G_ldj = self.flow(z0, sample_from="1:c-1", density_from="1:c", h=h)
-        G_x = self.decode(G_zk)
-        gamma_wrt_G, G_recon, G_kl = calculate_loss(G_x, x, z_mu, z_var, z0, G_zk, G_ldj, self.args, beta=1.0)
+        fixed_components = "-c" if self.all_trained else "1:c-1"
+        G_zk, _, _, G_ldj = self.flow(z0, sample_from="1:c-1", density_from="1:c", h=h)
+        G_x = self.decode(G_zk[-1])
+        G_loss, _, _ = calculate_loss(G_x, x, z_mu, z_var, z0, G_zk[-1], G_ldj, self.args, beta=1.0)
 
-        return gamma_wrt_g, g_recon, g_kl, g_ldj.sum().item(), gamma_wrt_G, G_recon, G_kl, G_ldj.sum().item()
+        return g_loss.mean(0).detach().item(), G_loss.mean(0).detach().item()
         
     def update_rho(self, data_loader):
         """
         Update rho using equation ___TBD___ with SGD
         """
-        if self.component > 0:
-            self.eval()
-            with torch.no_grad():
-                
-                grad_log = open(self.args.snap_dir + '/gradient.log', 'a')
-                print('\n\nInitial Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=grad_log)
-            
-                step_size = 0.01
-                tolerance = 0.0001
-                min_iters = 10
-                max_iters = 250
-                prev_rho = 1.0 / self.num_components
-                
-                for batch_id, (x, _) in enumerate(data_loader):
-                    x.to(self.args.device).detach()
-                    
-                    gamma_wrt_g, g_recon, g_kl, g_ldj, gamma_wrt_G, G_recon, G_kl, G_ldj = self._rho_gradient(x)
+        if self.component == 0 and self.all_trained == False:
+            return
 
-                    gradient = gamma_wrt_g.detach().item() - gamma_wrt_G.detach().item()
-                    ss = step_size / (0.01 * batch_id + 1)
-                    rho = min(max(prev_rho - ss * gradient, 0.025), 1.0)
+        self.eval()
+        with torch.no_grad():
 
-                    grad_msg = f'{batch_id: >3}. rho = {prev_rho:5.3f} -  {gradient:4.2f} * {ss:5.3f} = {rho:5.3f}'
-                    gamma_msg = f"\tg vs G. Gamma: ({gamma_wrt_g:5.1f}, {gamma_wrt_G:5.1f})."
-                    gamma_msg += f"\tRecon: ({g_recon:5.1f}, {G_recon:5.1f}).\tKL: ({g_kl:5.1f}, {G_kl:5.1f})."
-                    gamma_msg += f"\tLDJ: ({g_ldj:4.1f}, {G_ldj:4.1f})"
-                    
-                    print(grad_msg + gamma_msg, file=grad_log)
-                
-                    self.rho[self.component] = rho
-                    dif = abs(prev_rho - rho)
-                    prev_rho = rho
+            rho_log = open(self.args.snap_dir + '/rho.log', 'a')
+            print(f"\n\nUpdating weight for component {self.component} (all_trained={str(self.all_trained)})", file=rho_log)
+            print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=rho_log)
 
-                    if batch_id > min_iters and (batch_id > max_iters or dif < tolerance):
-                        break
+            step_size = 0.005
+            tolerance = 0.00001
+            min_iters = 15
+            max_iters = 250 if self.all_trained else 50
+            prev_rho = self.rho[self.component].item()
 
-                print('New Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=grad_log)
-                grad_log.close()
+            for batch_id, (x, _) in enumerate(data_loader):
+                x.to(self.args.device).detach()
+                g_loss, G_loss = self._rho_gradient(x)
+                gradient = g_loss - G_loss
+                step_size = step_size / (0.025 * batch_id + 1)
+                rho = min(max(prev_rho - step_size * gradient, 0.001), 0.999)
+
+                grad_msg = f'{batch_id: >3}. rho = {prev_rho:5.3f} -  {gradient:4.2f} * {step_size:5.3f} = {rho:5.3f}'
+                loss_msg = f"\tg vs G. Loss: ({g_loss:6.1f}, {G_loss:6.1f})."
+                print(grad_msg + loss_msg, file=rho_log)
+
+                self.rho[self.component] = rho
+                dif = abs(prev_rho - rho)
+                prev_rho = rho
+
+                if batch_id > min_iters and (batch_id > max_iters or dif < tolerance):
+                    break
+
+            print('New Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=rho_log)
+            rho_log.close()
                 
     def encode(self, x):
         """
@@ -159,7 +161,7 @@ class BoostedVAE(VAE):
         z_var = self.q_z_var(h)
         return h, z_mu, z_var
 
-    def _sample_component(self, sampling_components):
+    def _sample_component(self, sampling_components, batch_size=1):
         """
         Given the keyword "sampling_components" (such as "1:c", "1:c-1", or "-c"), sample a component id from the possible
         components specified by the keyword.
@@ -173,6 +175,8 @@ class BoostedVAE(VAE):
         if sampling_components == "c":
             # sample from new component
             j = min(self.component, self.num_components - 1)
+            if batch_size > 1:
+                j = torch.ones(batch_size) * j
             
         elif sampling_components in ["1:c", "1:c-1"]:
             # sample from either the first 1:c-1 (fixed) or 1:c (fixed + new = all) components
@@ -183,12 +187,17 @@ class BoostedVAE(VAE):
                 
             num_components = min(max(num_components, 1), self.num_components)
             rho_simplex = self.rho[0:num_components] / torch.sum(self.rho[0:num_components])
-            j = torch.multinomial(rho_simplex, 1, replacement=True).item()
+            j = torch.multinomial(rho_simplex, batch_size, replacement=True)
+            if batch_size == 1:
+                j = j.item()
+                
         elif sampling_components == "-c":
             rho_simplex = self.rho.clone().detach()
             rho_simplex[self.component] = 0.0
             rho_simplex = rho_simplex / rho_simplex.sum()
-            j = torch.multinomial(rho_simplex, 1, replacement=True).item()
+            j = torch.multinomial(rho_simplex, batch_size, replacement=True)
+            if batch_size == 1:
+                j = j.item()
             
         else:
             raise ValueError("z_k can only be sampled from ['c', '1:c-1', '1:c', '-c'] (corresponding to 'new', 'fixed', or new+fixed components)")
@@ -255,6 +264,7 @@ class BoostedVAE(VAE):
         flow_param = self._get_flow_parameters(component, h=h)
 
         # apply inverse flow transformation
+        log_det_j = self.FloatTensor(batch_size).fill_(0.0)
         for k in range(self.num_flows, 0, -1):
             if self.component_type == "realnvp":
                 flow_param_k = flow_param[k-1]
@@ -264,27 +274,50 @@ class BoostedVAE(VAE):
                 else:
                     flow_param_k = flow_param[:, k-1, :, :]
 
-            z_k, _ = self.flow_transformation.inverse(Z[k], flow_param_k)
+            z_k, ldj = self.flow_transformation.inverse(Z[k], flow_param_k)
             Z[k-1] = z_k
+            log_det_j += ldj
 
-        return Z[0]
+        return Z[0], log_det_j
 
-    def flow(self, z_0, sample_from, density_from, h=None):        
+    def flow(self, z_0, sample_from, density_from=None, h=None):        
         # compute forward step w.r.t. sampling distribution (for training this is the new component g^c)
         # i.e. draw a sample from g(z_K | x) (and same log det jacobian term)
         sample_component = self._sample_component(sampling_components=sample_from)
         zg, entropy_ldj = self.component_forward_flow(z_0, sample_component, h)
 
-        if self.component == 0 and self.all_trained == False:
+        if (self.component == 0 and self.all_trained == False) or density_from is None:
             return zg, entropy_ldj, None, None
         else:
-            # compute likelihood of sampled z_K w.r.t fixed components:
-            # inverse step: flow_inv(zg[k]) to get zG_0
-            density_component = self._sample_component(sampling_components=density_from)
-            zG_0 = self.component_inverse_flow(zg[-1], density_component, h)
+            batched_sampling = True if self.num_components > 8 else False
+            if batched_sampling:
+                num_elts = z_0.size(0)
+                batch_size = 4
+                num_batches = num_elts // batch_size
+                density_component = self._sample_component(sampling_components=density_from, batch_size=num_batches)
+                zG_0 = torch.zeros_like(z_0)
+                zG = torch.zeros_like(z_0)
+                boosted_ldj = torch.zeros(num_elts)
+                for i, c in enumerate(density_component):
+                    st = i * batch_size
+                    en = (i+1) * batch_size
+                    h_ = h[st:en] if h is not None else None
+                    zg_ = zg[-1][st:en]                    
+                    zG_0_, _ = self.component_inverse_flow(zg_, c, h_)
+                    zG_, ldj = self.component_forward_flow(zG_0_, c, h_)
+                    zG_0[st:en] = zG_0_
+                    zG[st:en] = zG_[-1]
+                    boosted_ldj[st:en] = ldj
+                zG = [zG_0, zG]
+
+            else:
+                # compute likelihood of sampled z_K w.r.t fixed components:
+                # inverse step: flow_inv(zg[k]) to get zG_0
+                density_component = self._sample_component(sampling_components=density_from)
+                zG_0, _ = self.component_inverse_flow(zg[-1], density_component, h)
             
-            # compute forward step w.r.t. density distribution (for training this is the fixed components G^(1:c-1))
-            zG, boosted_ldj = self.component_forward_flow(zG_0, density_component, h)
+                # compute forward step w.r.t. density distribution (for training this is the fixed components G^(1:c-1))
+                zG, boosted_ldj = self.component_forward_flow(zG_0, density_component, h)
                 
             return zg, entropy_ldj, zG, boosted_ldj
 
@@ -296,7 +329,7 @@ class BoostedVAE(VAE):
         h, z_mu, z_var = self.encode(x)
         z_0 = self.reparameterize(z_mu, z_var)
         
-        if self.training and self.component < self.num_components:
+        if self.training:
             # training mode: sample from the new component currently being trained, evaluate it's density according to fixed model
             sample_from = 'c'
             density_from = '-c' if self.all_trained else '1:c-1'
@@ -308,12 +341,10 @@ class BoostedVAE(VAE):
 
         else:
             # evaluation mode: sample from any of the first c components
-            sample_from = "1:c"
-            density_from = "1:c"
+            sample_from = '1:c'
+            density_from = None
 
-        zg, entropy_ldj, zG, boosted_ldj = self.flow(z_0, sample_from=sample_from, density_from=density_from, h=h)
-
-        x_recon = self.decode(zg[-1])
-
-        return x_recon, z_mu, z_var, zg, entropy_ldj, zG, boosted_ldj
+        z_g, g_ldj, z_G, G_ldj = self.flow(z_0, sample_from=sample_from, density_from=density_from, h=h)
+        x_recon = self.decode(z_g[-1])
+        return x_recon, z_mu, z_var, z_g, g_ldj, z_G, G_ldj
     

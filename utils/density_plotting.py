@@ -143,7 +143,7 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
     
     total_prob = torch.zeros(n_pts, n_pts)
     num_components_to_plot = args.num_components if model.all_trained else model.component + 1
-    for c in range(num_components_to_plot):
+    for c in reversed(range(num_components_to_plot)):
         model.component = c
         row = int(np.floor((c + num_fixed_plots) / plt_width))
         col = int((c + num_fixed_plots) % plt_width)
@@ -165,10 +165,12 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
         axs[row,col].set_title(f'Boosted Flow Density for c={c}', fontdict={'fontsize': 20})
 
         # save total model probs
-        total_prob += prob.view(n_pts, n_pts).data * model.rho[c]
+        total_prob += log_prob.cpu().view(n_pts, n_pts).data * model.rho[c]
 
     # plot full model
-    axs[0,1].pcolormesh(xx, yy, total_prob.view(n_pts,n_pts).data, cmap=plt.cm.viridis)
+    total_prob = total_prob.exp()
+    #total_prob = total_prob / total_prob.sum()
+    axs[0,1].pcolormesh(xx, yy, total_prob, cmap=plt.cm.viridis)
     axs[0,1].set_facecolor(plt.cm.viridis(0.))
     axs[0,1].set_title('Boosted Flow Density for All Components', fontdict={'fontsize': 20})
 

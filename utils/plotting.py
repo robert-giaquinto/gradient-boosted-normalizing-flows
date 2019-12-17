@@ -19,7 +19,6 @@ def plot_training_curve(train_loss, validation_loss, fname='training_curve.png',
     accross training curves.
     :return: None
     """
-
     plt.close()
 
     matplotlib.rcParams.update({'font.size': 14})
@@ -261,75 +260,86 @@ def plot_data_manifold(model, data_loader, args, limit=None):
 
 
 
+def format_ax(ax, range_lim):
+    ax.set_xlim(-range_lim, range_lim)
+    ax.set_ylim(-range_lim, range_lim)
+    ax.get_xaxis().set_visible(False)
+    ax.get_yaxis().set_visible(False)
+    ax.invert_yaxis()
 
-def plot_flows(base_dist, flow, fname, args):
-    n = 200
-    lim = 4
+@torch.no_grad()
+def plot_flow_samples(epoch, model, data_loader, args):
+    fig, axs = plt.subplots(1, 2, figsize=(12,12), subplot_kw={'aspect': 'equal'})
+    alpha = 0.3
+    range_lim = 10
 
-    fig, axs = plt.subplots(2, 2, subplot_kw={'aspect': 'equal'})
+    X = torch.cat([x for x, y in list(data_loader)], 0).to(args.device)
+    if args.flow == "boosted":
+        h, z_mu, z_var = model.encode(X)
+    else:
+        z_mu, z_var = model.encode(X)
+    z0 = model.reparameterize(z_mu, z_var).data
+    mu = z_mu.data.mean(0)
 
-    # plot target density we're trying to approx
-    u_z = make_target_density(args)
-    plot_target_density(u_z, axs[0,0], lim, n)
+    mask_1 = (z0[:, 0] >= mu[0]) & (z0[:, 1] >= mu[1])
+    mask_2 = (z0[:, 0] >= mu[0]) & (z0[:, 1] < mu[1])
+    mask_3 = (z0[:, 0] < mu[0]) & (z0[:, 1] >= mu[1])
+    mask_4 = (z0[:, 0] < mu[0]) & (z0[:, 1] < mu[1])
 
-    # plot posterior approx density
-    mu = torch.zeros(2).to(args.device)
-    sigma = 4.0 * torch.eye(2).to(args.device)
-    base_dist = torch.distributions.MultivariateNormal(mu, sigma)
-    plot_flow_density(base_dist, flow, axs[0,1], lim, n)
+    if args.flow == 'boosted':
+        zk = torch.cat([model.flow(z_, sample_from="1:c", h=h_)[0][-1].data \
+                        for z_, h_ in zip(z0.split(args.batch_size, dim=0), h.split(args.batch_size, dim=0))], 0)
+    else:
+        zk, _ = model.flow(z0)
 
-    # plot flow-transformed base dist sample and histogram
-    z = base_dist.sample((10000,))
-    zk, _ = flow(z)
-    zk = zk.cpu().data.numpy()
-    axs[1,0].scatter(zk[:,0], zk[:,1], s=10, alpha=0.4)
-    axs[1,1].hist2d(zk[:,0], zk[:,1], bins=lim*50, cmap=plt.cm.jet)
+    z0 = z0.cpu().detach()
+    zk = zk.cpu().detach()
 
-    for ax in plt.gcf().axes:
-        ax.get_xaxis().set_visible(True)
-        ax.get_yaxis().set_visible(True)
-        ax.invert_yaxis()
+    axs[0].set_title('Base $z_0$', fontdict={'fontsize': 20})
+    axs[0].scatter(z0[:, 0][mask_1], z0[:, 1][mask_1], color='C0', alpha=alpha)
+    axs[0].scatter(z0[:, 0][mask_2], z0[:, 1][mask_2], color='C1', alpha=alpha)
+    axs[0].scatter(z0[:, 0][mask_3], z0[:, 1][mask_3], color='C3', alpha=alpha)
+    axs[0].scatter(z0[:, 0][mask_4], z0[:, 1][mask_4], color='C4', alpha=alpha)
 
-    plt.tight_layout()
-    plt.savefig(fname)
+    axs[1].set_title('Transformed $z_K$', fontdict={'fontsize': 20})
+    axs[1].scatter(zk[:, 0][mask_1], zk[:, 1][mask_1], color='C0', alpha=alpha)
+    axs[1].scatter(zk[:, 0][mask_2], zk[:, 1][mask_2], color='C1', alpha=alpha)
+    axs[1].scatter(zk[:, 0][mask_3], zk[:, 1][mask_3], color='C3', alpha=alpha)
+    axs[1].scatter(zk[:, 0][mask_4], zk[:, 1][mask_4], color='C4', alpha=alpha)
+
+    for ax in plt.gcf().axes: format_ax(ax, range_lim)
+    plt.tight_layout(rect=[0, 0, 1.0, 0.95])
+
+    title = f'{args.flow.title()} Flow, K={args.num_flows}'
+    title += f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
+    title += f', C={args.num_components}, Reg={args.regularization_rate:.2f}, Training $c_{model.component}$' if args.flow == "boosted" else ''
+    fig.suptitle(title, y=0.98, fontsize=20)
+    if epoch is None:
+        plt.savefig(os.path.join(args.snap_dir, f'flow_samples_final.png'))
+    else:
+        plt.savefig(os.path.join(args.snap_dir, f'flow_samples_{epoch:0>4d}.png'))
     plt.close()
 
+    #axs[0, 0].set_xlim(-range_lim, range_lim)
+    #axs[0, 0].set_ylim(-range_lim, range_lim)
+    #axs[0, 0].get_xaxis().set_visible(False)
+    #axs[0, 0].get_yaxis().set_visible(False)
+    #ax.invert_yaxis()
 
-def plot_target_density(u_z, ax, range_lim=4, n=200):
-    x = torch.linspace(-range_lim, range_lim, n)
-    xx, yy = torch.meshgrid((x, x))
-    zz = torch.stack((xx.flatten(), yy.flatten()), dim=-1).squeeze().to(args.device)
+    # for s, title in zip([z0, zk], ['Base Distribution $z_0$', f'Boosted $z_K$ c=1:{model.num_components if model.all_trained else model.component}']):
+    #     plt.figure(figsize=(8, 8))
+    #     plt.title(title)
+    #     #plt.xlim(-range_lim, range_lim)
+    #     #plt.ylim(-range_lim, range_lim)
+    #     #plt.get_xaxis().set_visible(False)
+    #     #plt.get_yaxis().set_visible(False)
+    #     #plt.invert_yaxis()
+    #     plt.scatter(s[:, 0][mask_1], s[:, 1][mask_1], color='C0', alpha=alpha, label='C0')
+    #     plt.scatter(s[:, 0][mask_2], s[:, 1][mask_2], color='C1', alpha=alpha, label='C1')
+    #     plt.scatter(s[:, 0][mask_3], s[:, 1][mask_3], color='C3', alpha=alpha, label='C3')
+    #     plt.scatter(s[:, 0][mask_4], s[:, 1][mask_4], color='C4', alpha=alpha, label='C4')
+    #     plt.legend()
 
-    ax.pcolormesh(xx, yy, torch.exp(-u_z(zz)).view(n,n).data, cmap=plt.cm.jet)
-
-    for ax in plt.gcf().axes:
-        ax.set_xlim(-range_lim, range_lim)
-        ax.set_ylim(-range_lim, range_lim)
-        ax.get_xaxis().set_visible(False)
-        ax.get_yaxis().set_visible(False)
-        ax.invert_yaxis()
-
-
-def plot_flow_density(base_dist, model, ax, range_lim=4, n=200):
-    x = torch.linspace(-range_lim, range_lim, n)
-    xx, yy = torch.meshgrid((x, x))
-    zz = torch.stack((xx.flatten(), yy.flatten()), dim=-1).squeeze().to(args.device)
-
-    # plot posterior approx density
-    #x_recon, z_mu, z_var, log_det_jacobian, z0, zk = model.flow(zz)
-    zzk, sum_log_abs_det_jacobians = flow(zz)
-    log_q0 = base_dist.log_prob(zz)
-    log_qk = log_q0 - sum_log_abs_det_jacobians
-    qk = log_qk.exp().cpu()
-    zzk = zzk.cpu()
-    ax.pcolormesh(zzk[:,0].view(n,n).data, zzk[:,1].view(n,n).data, qk.view(n,n).data, cmap=plt.cm.jet)
-    ax.set_facecolor(plt.cm.jet(0.))
-
-    for ax in plt.gcf().axes:
-        ax.set_xlim(-range_lim, range_lim)
-        ax.set_ylim(-range_lim, range_lim)
-        ax.get_xaxis().set_visible(False)
-        ax.get_yaxis().set_visible(False)
-        ax.invert_yaxis()
+        
 
 
