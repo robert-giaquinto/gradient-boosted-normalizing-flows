@@ -14,10 +14,10 @@ for u in 1 2 3 4
 do
     for num_components in 2 4 8
     do
-        for regularization_rate in 0.3 0.4 0.50
+        for regularization_rate in 0.4
         do
             # boosted RealNVPS
-            for h_size in 8 32 128
+            for h_size in 8 64
             do
                 for num_flows in 1 2
                 do
@@ -68,7 +68,7 @@ do
                        --manual_seed ${manual_seed} \
                        --log_interval ${logging} \
                        --plot_resolution ${plot_resolution} \
-                       --plot_interval ${iters_per_component} &
+                       --plot_interval ${iters_per_component} ;
             done
             # affine
             python density.py --dataset u${u} \
