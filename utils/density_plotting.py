@@ -60,7 +60,8 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     fname = f'{args.dataset}_{args.flow}_K{args.num_flows}_bs{args.batch_size}'
     fname += f'_C{args.num_components}_reg{int(100*args.regularization_rate):d}_{args.component_type}' if args.flow == 'boosted' else ''
     fname += f'_{args.base_network}{args.num_base_layers}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
-    fname += f'_hsize{args.h_size}' if args.flow == 'iaf' else ''
+    args.snap_dir += '_hidden' + str(args.num_base_layers) + '_hsize' + str(args.h_size)
+    fname += f'_hidden{args.num_base_layers}_hsize{args.h_size}' if args.flow == 'iaf' else ''
     plt.savefig(os.path.join(args.snap_dir, fname + f'_step{batch_id}.png'))
     plt.close()
 

@@ -28,6 +28,7 @@ do
                    --num_steps ${num_steps} \
                    --learning_rate ${learning_rate} \
                    --no_annealing \
+                   --no_lr_schedule \
                    --flow realnvp \
                    --num_flows ${num_flows} \
                    --num_base_layers 1 \
@@ -39,22 +40,28 @@ do
                    --plot_resolution ${plot_resolution} \
                    --plot_interval ${plotting} &
         done
+        
         # iaf
-        python density.py --dataset u${u} \
-               --experiment_name ${exp_name} \
-               --no_cuda \
-               --num_workers ${num_workers} \
-               --num_steps ${num_steps} \
-               --learning_rate ${learning_rate} \
-               --no_annealing \
-               --flow iaf \
-               --num_flows 1 \
-               --h_size ${h_size} \
-               --batch_size ${batch_size} \
-               --manual_seed ${manual_seed} \
-               --log_interval ${logging} \
-               --plot_resolution ${plot_resolution} \
-               --plot_interval ${plotting} ;
+        for num_hidden_layers in 0 1 2
+        do
+            python density.py --dataset u${u} \
+                   --experiment_name ${exp_name} \
+                   --no_cuda \
+                   --num_workers ${num_workers} \
+                   --num_steps ${num_steps} \
+                   --learning_rate ${learning_rate} \
+                   --no_annealing \
+                   --no_lr_schedule \
+                   --flow iaf \
+                   --num_base_layers ${num_hidden_layers} \
+                   --num_flows 1 \
+                   --h_size ${h_size} \
+                   --batch_size ${batch_size} \
+                   --manual_seed ${manual_seed} \
+                   --log_interval ${logging} \
+                   --plot_resolution ${plot_resolution} \
+                   --plot_interval ${plotting} ;
+        done
     done
 
     # basic flows only need to tune num_flows

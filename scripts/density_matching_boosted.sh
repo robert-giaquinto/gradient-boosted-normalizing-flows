@@ -5,7 +5,7 @@ source ./venv/bin/activate
 
 # variables specific to this experiment
 num_steps=400001
-exp_name=bboosted_density_matching
+exp_name=boosted_density_matching
 iters_per_component=25000
 logging=1000
 
@@ -17,7 +17,7 @@ do
         for regularization_rate in 0.4
         do
             # boosted RealNVPS
-            for h_size in 8 64
+            for h_size in 16 32 64 128
             do
                 for num_flows in 1 2
                 do

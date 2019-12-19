@@ -148,7 +148,7 @@ def parse_args(main_args=None):
     if args.flow == 'householder':
         args.snap_dir += '_householder' + str(args.num_householder)
     if args.flow == 'iaf':
-        args.snap_dir += '_hsize' + str(args.h_size)
+        args.snap_dir += '_hidden' + str(args.num_base_layers) + '_hsize' + str(args.h_size)
     if args.flow == 'boosted':
         if args.regularization_rate < 0.0:
             raise ValueError("For boosting the regularization rate should be greater than or equal to zero.")

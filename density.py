@@ -156,7 +156,7 @@ def parse_args(main_args=None):
         args.snap_dir += '_' + args.component_type + '_C' + str(args.num_components) + '_reg' + f'{int(100*args.regularization_rate):d}'
 
     if args.flow == 'iaf':
-        args.snap_dir += '_hsize' + str(args.h_size)
+        args.snap_dir += '_hidden' + str(args.num_base_layers) + '_hsize' + str(args.h_size)
 
     if args.flow == "realnvp" or args.component_type == "realnvp":
         args.snap_dir += '_' + args.base_network + str(args.num_base_layers) + '_hsize' + str(args.h_size)
@@ -279,7 +279,7 @@ def rho_gradient(model, target_or_sample_fn, args):
         p_log_prob_g = -1.0 * target_or_sample_fn(g_zk[-1])  # p = exp(-potential) => log_p = - potential
         loss_wrt_g = q_log_prob - g_ldj - p_log_prob_g
 
-        fixed_components = "-c" if self.all_trained else "1:c-1"
+        fixed_components = "-c" if model.all_trained else "1:c-1"
         G_zk, _, _, G_ldj = model.flow(z, sample_from=fixed_components, density_from="1:c")
         p_log_prob_G = -1.0 * target_or_sample_fn(G_zk[-1])  # p = exp(-potential) => log_p = - potential
         loss_wrt_G = q_log_prob - G_ldj - p_log_prob_G

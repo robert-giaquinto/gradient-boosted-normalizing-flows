@@ -16,6 +16,7 @@ class IAFVAE(VAE):
         super(IAFVAE, self).__init__(args)
         
         self.h_size = args.h_size
+        self.num_hidden = args.num_base_layers
         self.density_evaluation = args.density_evaluation
         
         # flow parameters
@@ -31,7 +32,7 @@ class IAFVAE(VAE):
         # Flow parameters
         self.num_flows = args.num_flows
         self.flow_transformation = flows.IAF(z_size=self.z_size, num_flows=self.num_flows,
-                              num_hidden=1, h_size=self.h_size, conv2d=False)
+                              num_hidden=self.num_hidden, h_size=self.h_size, conv2d=False)
 
     def encode(self, x):
         """
