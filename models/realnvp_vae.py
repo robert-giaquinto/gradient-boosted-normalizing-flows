@@ -25,7 +25,7 @@ class RealNVPVAE(VAE):
         #out_dim = self.z_size - (self.z_size // 2)
         self.flow_param = nn.ModuleList()
         for k in range(self.num_flows):
-            flow_param_k = nn.ModuleList([base_network(in_dim, out_dim, args.h_size, args.num_base_layers, use_batch_norm=True) for _ in range(4)])
+            flow_param_k = nn.ModuleList([base_network(in_dim, out_dim, args.h_size, args.num_base_layers, use_batch_norm=False) for _ in range(4)])
             self.flow_param.append(flow_param_k)
 
     def encode(self, x):

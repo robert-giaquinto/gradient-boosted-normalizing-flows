@@ -218,30 +218,30 @@ def calculate_boosted_loss(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args
     return loss, recon_loss, kl, log_G_z
         
 
-def calculate_loss(x_mean, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):
+def calculate_loss(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):
     """
     Picks the correct loss depending on the input type.
     """
 
     if args.input_type == 'binary':
-        loss, rec, kl = binary_neg_elbo(x_mean, x, z_mu, z_var, z_0, z_k, ldj, beta=beta)
+        loss, rec, kl = binary_neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, beta=beta)
     elif args.input_type == 'multinomial':
-        loss, rec, kl = multinomial_neg_elbo(x_mean, x, z_mu, z_var, z_0, z_k, ldj, args, beta=beta)
+        loss, rec, kl = multinomial_neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=beta)
     else:
         raise ValueError('Invalid input type for calculate loss: %s.' % args.input_type)
 
     return loss, rec, kl
 
 
-def calculate_loss_array(x_mean, x, z_mu, z_var, z_0, z_k, ldj, args):
+def calculate_loss_array(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args):
     """
     Picks the correct loss depending on the input type.
     """
 
     if args.input_type == 'binary':
-        loss = binary_loss_array(x_mean, x, z_mu, z_var, z_0, z_k, ldj)
+        loss = binary_loss_array(x_recon, x, z_mu, z_var, z_0, z_k, ldj)
     elif args.input_type == 'multinomial':
-        loss = multinomial_loss_array(x_mean, x, z_mu, z_var, z_0, z_k, ldj, args)
+        loss = multinomial_loss_array(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args)
 
     else:
         raise ValueError('Invalid input type for calculate loss: %s.' % args.input_type)

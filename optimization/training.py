@@ -16,8 +16,8 @@ logger = logging.getLogger(__name__)
 
 def train(train_loader, val_loader, model, optimizer, scheduler, args):
     header_msg = f'| Epoch |  TRAIN{"Loss": >12}{"Reconstruction": >18}{"KL": >12}'
-    header_msg += f'{"Fixed": >12}{"Converged": >12}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
-    #header_msg += f'{"Entropy": >12}{"P(sample all)": >16}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
+    #header_msg += f'{"Fixed": >12}{"Converged": >12}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
+    header_msg += f'{"Fixed": >12}{"P(c in 1:C)": >16}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
     header_msg += f'{"VALIDATION": >11}{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"| ": >4}{"Annealing": >12}{"|": >3}'
     logger.info('|' + "-"*(len(header_msg)-2) + '|')
     logger.info(header_msg)
@@ -138,20 +138,6 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
         train_rec[batch_id] = rec.item()
         train_kl[batch_id] = kl.item()
 
-        num_trained += len(x)
-        pct_complete = 100. * batch_id / total_batches
-        if args.log_interval > 0 and batch_id % args.log_interval == 0:
-            msg = 'Epoch: {:3d} [{:5d}/{:5d} ({:2.0f}%)]   \tLoss: {:11.6f}\trec: {:11.3f}\tkl: {:11.6f}'
-
-            if args.input_type == 'binary':
-                logger.info(msg.format(
-                    epoch, num_trained, total_samples, pct_complete, loss.item(), rec.item(), kl.item()))
-            else:
-                msg += '\tbpd: {:8.6f}'
-                bpd = loss.item() / (np.prod(args.input_size) * np.log(2.))
-                logger.info(msg.format(
-                    epoch, num_trained, total_samples, pct_complete,loss.item(), rec.item(), kl.item(), bpd))
-
     return train_loss, train_rec, train_kl
 
 
@@ -181,20 +167,19 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
     for epoch in range(1, args.epochs + 1):
 
         # compute annealing rate for KL loss term
-        beta = kl_annealing_rate(epoch, model.component, args)
+        beta = kl_annealing_rate(epoch, model.component, model.all_trained, args)
 
         # occasionally sample from all components to keep decoder from focusing solely on new component
-        #prob_all = sample_from_all_prob(epoch, converged_epoch, model.component, args)
+        prob_all = sample_from_all_prob(epoch, converged_epoch, model.component, model.all_trained, args)
             
         t_start = time.time()
-        tr_loss, tr_rec, tr_kl, tr_fixed = train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, args)
+        tr_loss, tr_rec, tr_kl, tr_fixed = train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, prob_all, args)
         tr_fixed = tr_fixed.mean()
         train_times.append(time.time() - t_start)
         train_loss.append(tr_loss)
         train_rec.append(tr_rec)
         train_kl.append(tr_kl)
 
-        # TODO FIX EVAL
         v_loss, v_rec, v_kl = evaluate(val_loader, model, args, epoch=epoch)
         val_loss.append(v_loss)
         val_rec.append(v_rec)
@@ -205,8 +190,8 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
         if converged:
             converged_epoch = epoch
 
-        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_fixed:12.3f}{str(converged): >12}'
-        #epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_fixed:12.3f}{prob_all:16.2f}'
+        #epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_fixed:12.3f}{str(converged): >12}'
+        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_fixed:12.3f}{prob_all:16.2f}'
         epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}'
 
         # is it time to update rho?
@@ -246,7 +231,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
     return train_loss, train_rec, train_kl, val_loss, val_rec, val_kl, train_times
 
 
-def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, args):
+def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, prob_all, args):
     model.train()
 
     total_batches = len(train_loader)
@@ -257,14 +242,13 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
     train_fixed = np.zeros(total_batches)
 
     for batch_id, (x, _) in enumerate(train_loader):
-
         x = x.to(args.device)
 
         if args.dynamic_binarization:
             x = torch.bernoulli(x)
 
         optimizer.zero_grad()
-        x_recon, z_mu, z_var, z_g, g_ldj, z_G, G_ldj = model(x)
+        x_recon, z_mu, z_var, z_g, g_ldj, z_G, G_ldj = model(x, prob_all=0.0)
         is_first_component = model.component == 0 and not model.all_trained
         loss, rec, kl, log_G_z = calculate_boosted_loss(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, is_first_component, beta)
         loss.backward()
@@ -272,7 +256,6 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
         optimizer.step()
         if not args.no_lr_schedule:
             scheduler.step(loss)
-
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
@@ -282,9 +265,9 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
     return train_loss, train_rec, train_kl, train_fixed
 
 
-def kl_annealing_rate(epoch, component, args):
-    if component == 0:
-        epochs_per_component = max(args.annealing_schedule + args.burnin, 1)
+def kl_annealing_rate(epoch, component, all_trained, args):
+    if not all_trained:
+        epochs_per_component = max(args.annealing_schedule + args.burnin if component == 0 else args.annealing_schedule, 1)
         zero_offset = 1.0 / epochs_per_component  # don't want annealing rate to start at zero
         beta = (((epoch - 1) % epochs_per_component) / epochs_per_component) + zero_offset
         beta = min(beta, args.max_beta)
@@ -295,10 +278,14 @@ def kl_annealing_rate(epoch, component, args):
     return beta
 
 
-def sample_from_all_prob(epoch, converged_epoch, current_component, args):
+def sample_from_all_prob(epoch, converged_epoch, current_component, all_trained, args):
     """
     Want to occasionally sample from all components so decoder doesn't solely focus on new component
     """
+    if all_trained:
+        # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
+        return 1.0
+
     if current_component == 0:
         # first component runs longer than the rest
         epochs_per_component = max(args.annealing_schedule + args.burnin, 1)
@@ -312,11 +299,6 @@ def sample_from_all_prob(epoch, converged_epoch, current_component, args):
     
     prob_all = (((epoch - epoch_offset) % epochs_per_component) / epochs_per_component) + non_zero_offset
     prob_all = min(prob_all, max_prob_all)
-
-    if current_component == args.num_components:
-        # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
-        prob_all = 1.0
-
     return prob_all
 
 

@@ -33,7 +33,7 @@ def evaluate(data_loader, model, args, epoch=None, results_type=None):
         x = x.to(args.device)
 
         if args.flow == 'boosted':
-            x_recon, z_mu, z_var, Z, ldj, _, _ = model(x)
+            x_recon, z_mu, z_var, Z, ldj, _, _ = model(x, prob_all=1.0)
             z0, zk = Z[0], Z[-1]
         else:
             x_recon, z_mu, z_var, ldj, z0, zk = model(x)
@@ -49,7 +49,6 @@ def evaluate(data_loader, model, args, epoch=None, results_type=None):
             
     if model.z_size == 2 and save_this_epoch and args.save_results:
         plot_flow_samples(epoch, model, data_loader, args)
-
 
     avg_loss = loss / len(data_loader)
     avg_rec = rec / len(data_loader)

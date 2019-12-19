@@ -29,9 +29,9 @@ class BoostedVAE(VAE):
         self.num_components = args.num_components
         self.num_flows = args.num_flows
         self.component = 0  # current component being trained / number of components trained thus far
-        self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
-        #self.rho = self.FloatTensor(self.num_components).fill_(max(1.0 / (self.num_components), 0.05))
-        #self.rho[0] = 1.0
+        #self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
+        self.rho = self.FloatTensor(self.num_components).fill_(max(1.0 / (self.num_components), 0.05))
+        self.rho[0] = 1.0
 
         if args.density_evaluation:
             self.q_z_nn, self.q_z_mean, self.q_z_var = None, None, None
@@ -77,7 +77,6 @@ class BoostedVAE(VAE):
                     # amoritize computation of flow parameters, compute coefficients for each datapoint via linear layer
                     flow_param_c = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size * self.num_coefs)
                     self.flow_param.append(flow_param_c)
-                    #self.add_module('flow_param_' + str(c), flow_param)
 
     def increment_component(self):
         if self.component == self.num_components - 1:
@@ -289,7 +288,9 @@ class BoostedVAE(VAE):
         if (self.component == 0 and self.all_trained == False) or density_from is None:
             return zg, entropy_ldj, None, None
         else:
-            batched_sampling = True if self.num_components > 8 else False
+            # experiment to sample a different flow for each batch element.
+            # TODO: a faster approach is to pass flow coefficients for each batch element and compute them that way
+            batched_sampling = False
             if batched_sampling:
                 num_elts = z_0.size(0)
                 batch_size = 4
@@ -321,26 +322,21 @@ class BoostedVAE(VAE):
                 
             return zg, entropy_ldj, zG, boosted_ldj
 
-    def forward(self, x):
+    def forward(self, x, prob_all=0.0):
         """
         Forward pass with planar flows for the transformation z_0 -> z_1 -> ... -> z_k.
         Log determinant is computed as log_det_j = N E_q_z0 [sum_k log |det dz_k / dz_k-1| ].
         """
         h, z_mu, z_var = self.encode(x)
         z_0 = self.reparameterize(z_mu, z_var)
-        
-        if self.training:
+
+        mix_in_all_components = np.random.rand() < prob_all
+        if self.training and not mix_in_all_components:
             # training mode: sample from the new component currently being trained, evaluate it's density according to fixed model
             sample_from = 'c'
             density_from = '-c' if self.all_trained else '1:c-1'
-
-            # use this if we don't implement multiple decoders: with prob_all init at 0.0
-            #if self.training and prob_all > np.random.rand():
-            #    sample_from = '1:c'
-            #    density_from = '1:c'
-
         else:
-            # evaluation mode: sample from any of the first c components
+            # evaluation mode: sample from any of the first c components, only interested in likelihoods w.r.t. that c
             sample_from = '1:c'
             density_from = None
 

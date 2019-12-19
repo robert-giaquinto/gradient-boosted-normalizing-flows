@@ -144,21 +144,21 @@ def parse_args(main_args=None):
     args.model_signature = str(datetime.datetime.now())[0:19].replace(' ', '_').replace(':', '_').replace('-', '_')
     args.experiment_name = args.experiment_name + "_" if args.experiment_name is not None else ""
     args.snap_dir = os.path.join(args.out_dir, args.experiment_name + args.flow + '_')
+    args.snap_dir += f"bs{args.batch_size}_"
 
     if args.flow != 'no_flow':
-        args.snap_dir += 'flow_length_' + str(args.num_flows)
+        args.snap_dir += 'K' + str(args.num_flows)
 
     if args.flow in ['boosted', 'bagged']:
         if args.regularization_rate < 0.0:
             raise ValueError("For boosting the regularization rate should be greater than or equal to zero.")
-        args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components) + '_regularization_' + f'{int(100*args.regularization_rate):d}'
+        args.snap_dir += '_' + args.component_type + '_C' + str(args.num_components) + '_reg' + f'{int(100*args.regularization_rate):d}'
 
-
-    if args.flow == 'iaf' or args.component_type == "realnvp":
-        args.snap_dir += '_hsize_' + str(args.h_size)
+    if args.flow == 'iaf':
+        args.snap_dir += '_hsize' + str(args.h_size)
 
     if args.flow == "realnvp" or args.component_type == "realnvp":
-        args.snap_dir += '_' + args.base_network + '_layers_' + str(args.num_base_layers) + '_hsize_' + str(args.h_size)
+        args.snap_dir += '_' + args.base_network + str(args.num_base_layers) + '_hsize' + str(args.h_size)
         
     is_annealed = ""
     if not args.no_annealing and args.min_beta < 1.0:
@@ -268,6 +268,7 @@ def compute_kl_pq_loss(model, data_sampler, beta, args):
 
 @torch.no_grad()
 def rho_gradient(model, target_or_sample_fn, args):
+    # TODO rename these from loss to lhoods
     if args.density_matching:
         # density matching of a target function
         z = model.base_dist.sample((args.batch_size,))
@@ -290,13 +291,13 @@ def rho_gradient(model, target_or_sample_fn, args):
         loss_wrt_g = -1.0 * (model.base_dist.log_prob(g_zk[-1]).sum(1) + g_ldj)
                 
         G_zk, _, _, G_ldj = model.flow(sample, sample_from="1:c-1", density_from="1:c")
-        print(G_zk, G_ldj)
         loss_wrt_G = -1.0 * (model.base_dist.log_prob(G_zk[-1]).sum(1) + G_ldj)
 
     return loss_wrt_g.mean(0).detach().item(), loss_wrt_G.mean(0).detach().item()
 
 
 def update_rho(model, target_or_sample_fn, args):
+    # TODO rename loss to lhood
     if model.component == 0 and model.all_trained == False:
         return
     
@@ -312,11 +313,11 @@ def update_rho(model, target_or_sample_fn, args):
         min_iters = 15
         max_iters = 250 if model.all_trained else 50
         prev_rho = model.rho[model.component].item()
-            
+
         for batch_id in range(max_iters):
 
             loss_wrt_g, loss_wrt_G = rho_gradient(model, target_or_sample_fn, args)
-            gradient = loss_wrt_g - loss_wrt_G
+            gradient = loss_wrt_g - loss_wrt_G                
             ss = step_size / (0.025 * batch_id + 1)
             rho = min(max(prev_rho - ss * gradient, 0.001), 1.0)
 
@@ -397,8 +398,8 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
 
             logger.info(msg)
 
-        #if boosted_component_converged:
-        #    update_rho(model, target_or_sample_fn, args)
+        if boosted_component_converged:
+            update_rho(model, target_or_sample_fn, args)
 
         if batch_id % args.plot_interval == 0 or new_boosted_component:
             with torch.no_grad():

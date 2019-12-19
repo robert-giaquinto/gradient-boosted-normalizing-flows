@@ -13,7 +13,6 @@ from models.vae import VAE, OrthogonalSylvesterVAE, HouseholderSylvesterVAE, Tri
 from models.iaf_vae import IAFVAE
 from models.realnvp_vae import RealNVPVAE
 from models.boosted_vae import BoostedVAE
-from models.bagged_vae import BaggedVAE
 from models.planar_vae import PlanarVAE
 from models.radial_vae import RadialVAE
 from models.liniaf_vae import LinIAFVAE
@@ -28,33 +27,23 @@ logger = logging.getLogger(__name__)
 
 
 parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')
+parser.add_argument('--experiment_name', type=str, default=None,
+                    help="A name to help identify the experiment being run when training this model.")
 
 parser.add_argument('--dataset', type=str, default='mnist', help='Dataset choice.',
                     choices=['mnist', 'freyfaces', 'omniglot', 'caltech', 'cifar10'])
-parser.add_argument('--num_toy_samples', type=int, default=1000, help='Number of samples to use for toy datasets')
-
-# seeds
-parser.add_argument('--manual_seed', type=int, default=123,
-                    help='manual seed, if not given resorts to random seed.')
-parser.add_argument('--freyseed', type=int, default=123,
-                    help="Seed for shuffling frey face dataset for test split. Ignored for other datasets.")
+parser.add_argument('--manual_seed', type=int, default=123, help='manual seed, if not given resorts to random seed.')
+parser.add_argument('--freyseed', type=int, default=123, help="Seed for shuffling frey face dataset for test split.")
 
 # gpu/cpu
-parser.add_argument('--gpu_id', type=int, default=0, metavar='GPU', help='choose GPU to run on.')
+parser.add_argument('--gpu_id', type=int, default=0, help='choose GPU to run on.')
 parser.add_argument('--num_workers', type=int, default=1,
                     help='How many CPU cores to run on. Setting to 0 uses os.cpu_count() - 1.')
 parser.add_argument('-nc', '--no_cuda', action='store_true', default=False,
                     help='disables CUDA training')
 
 # Reporting
-parser.add_argument('--log_interval', type=int, default=0, metavar='LOG_INTERVAL',
-                    help='how many batches to wait before logging training status. Set to <0 to turn off.')
-parser.add_argument('--plot_interval', type=int, default=10, metavar='PLOT_INTERVAL',
-                    help='how many batches to wait before creating reconstruction plots. Set to <0 to turn off.')
-
-parser.add_argument('--experiment_name', type=str, default=None,
-                    help="A name to help identify the experiment being run when training this model.")
-
+parser.add_argument('--plot_interval', type=int, default=10, help='Number of epochs between reconstructions plots.')
 parser.add_argument('--out_dir', type=str, default='./results/snapshots', help='Output directory for model snapshots etc.')
 parser.add_argument('--data_dir', type=str, default='./data/raw/', help="Where raw data is saved.")
 parser.add_argument('--exp_log', type=str, default='./results/experiment_log.txt', help='File to save high-level results from each run of an experiment.')
@@ -75,43 +64,38 @@ parser.set_defaults(testing=True)
 # optimization settings
 parser.add_argument('--epochs', type=int, default=100, help='number of epochs to train (default: 100)')
 parser.add_argument('--early_stopping_epochs', type=int, default=20, help='number of early stopping epochs')
-
 parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
 parser.add_argument('--learning_rate', type=float, default=0.0005, help='learning rate')
-parser.add_argument('--regularization_rate', type=float, default=0.4, help='Regularization penalty for boosting.')
-
 parser.add_argument('--annealing_schedule', type=int, default=100, help='number of epochs for warm-up. Set to 0 to turn beta annealing off.')
-parser.add_argument('--burnin', type=int, default=25, help='number of extra epochs to run the first component of a boosted model.')
 parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
 parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
 parser.add_argument('--no_annealing', action='store_true', default=False, help='disables annealing while training')
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
 
+# boosting optimization settings
+parser.add_argument('--regularization_rate', type=float, default=0.4, help='Regularization penalty for boosting.')
+parser.add_argument('--burnin', type=int, default=25, help='number of extra epochs to run the first component of a boosted model.')
+
 # flow parameters
-parser.add_argument('--flow', type=str, default='no_flow',
-                    choices=['planar', 'radial', 'iaf', 'liniaf', 'affine', 'nlsq', 'householder', 'orthogonal', 'triangular', 'no_flow', 'boosted', 'bagged'],
-                    help="""Type of flows to use, no flows can also be selected""")
+parser.add_argument('--z_size', type=int, default=64, help='how many stochastic hidden units')
 parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
+parser.add_argument('--flow', type=str, default='no_flow', help="Type of flows to use, no flows can also be selected",
+                    choices=['planar', 'radial', 'iaf', 'liniaf', 'affine', 'nlsq', 'realnvp', 'householder', 'orthogonal', 'triangular', 'no_flow', 'boosted'])
 
 # Sylvester parameters
-parser.add_argument('--num_ortho_vecs', type=int, default=8,
-                    help=" For orthogonal flow: How orthogonal vectors per flow do you need. Ignored for other flow types.")
-parser.add_argument('--num_householder', type=int, default=8,
-                    help="For Householder Sylvester flow: Number of Householder matrices per flow. Ignored for other flow types.")
+parser.add_argument('--num_ortho_vecs', type=int, default=8, help=" For orthogonal flow: Number of orthogonal vectors per flow.")
+parser.add_argument('--num_householder', type=int, default=8, help="For Householder Sylvester flow: Number of Householder matrices per flow.")
 
+# RealNVP (and IAF) parameters
 parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--num_base_layers', type=int, default=1, help='Number of layers in the base network of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual'])
 
-parser.add_argument('--z_size', type=int, default=64, help='how many stochastic hidden units')
-
-# Bagging/Boosting parameters
-parser.add_argument('--num_components', type=int, default=8,
-                    help='How many components are combined to form the flow')
-parser.add_argument('--component_type', type=str, default='planar',
+# Boosting parameters
+parser.add_argument('--num_components', type=int, default=2, help='How many components are combined to form the flow')
+parser.add_argument('--component_type', type=str, default='affine',
                     choices=['realnvp', 'liniaf', 'affine', 'nlsq', 'random'],
-                    help='When flow is bagged or boosted -- what type of flow should each component implement.')
-
+                    help='When flow is boosted -- what type of flow should each component implement.')
 
 
 def parse_args(main_args=None):
@@ -132,7 +116,7 @@ def parse_args(main_args=None):
     np.random.seed(args.manual_seed)
     logger.info(f"Random Seed: {args.manual_seed}\n")
 
-    args.shuffle = args.flow != "bagged"
+    args.shuffle = True
     
     # Set up multiple CPU/GPUs
     logger.info("COMPUTATION SETTINGS:")
@@ -156,20 +140,21 @@ def parse_args(main_args=None):
     args.snap_dir = os.path.join(args.out_dir, args.experiment_name + args.flow + '_')
 
     if args.flow != 'no_flow':
-        args.snap_dir += 'flow_length_' + str(args.num_flows)
+        args.snap_dir += 'K' + str(args.num_flows)
         
     if args.flow == 'orthogonal':
-        args.snap_dir += '_num_vectors_' + str(args.num_ortho_vecs)
-    elif args.flow == 'householder':
-        args.snap_dir += '_num_householder_' + str(args.num_householder)
-    elif args.flow == 'iaf':
-        args.snap_dir += '_hsize_' + str(args.h_size)
-    elif args.flow in ['boosted', 'bagged']:
+        args.snap_dir += '_vectors' + str(args.num_ortho_vecs)
+    if args.flow == 'householder':
+        args.snap_dir += '_householder' + str(args.num_householder)
+    if args.flow == 'iaf':
+        args.snap_dir += '_hsize' + str(args.h_size)
+    if args.flow == 'boosted':
         if args.regularization_rate < 0.0:
             raise ValueError("For boosting the regularization rate should be greater than or equal to zero.")
-        args.snap_dir += '_' + args.component_type + '_num_components_' + str(args.num_components) + '_regularization_' + f'{int(100*args.regularization_rate):d}'
-    elif args.flow == "realnvp":
-        args.snap_dir += '_' + args.base_network + '_layers_' + str(args.num_base_layers) + '_hsize_' + str(args.h_size)
+        args.snap_dir += '_' + args.component_type + '_C' + str(args.num_components) + '_reg' + f'{int(100*args.regularization_rate):d}'
+
+    if args.flow == "realnvp" or args.component_type == "realnvp":
+        args.snap_dir += '_' + args.base_network + str(args.num_base_layers) + '_hsize' + str(args.h_size)
 
     is_annealed = ""
     if not args.no_annealing and args.min_beta < 1.0:
@@ -186,14 +171,11 @@ def parse_args(main_args=None):
     return args, kwargs
 
 
-
 def init_model(args):
     if args.flow == 'no_flow':
         model = VAE(args).to(args.device)
     elif args.flow == 'boosted':
         model = BoostedVAE(args).to(args.device)
-    elif args.flow == 'bagged':
-        model = BaggedVAE(args).to(args.device)
     elif args.flow == 'planar':
         model = PlanarVAE(args).to(args.device)
     elif args.flow == 'radial':
@@ -225,7 +207,7 @@ def init_optimizer(model, args):
     group model parameters to more easily modify learning rates of components (flow parameters)
     """
     logger.info('OPTIMIZER:')
-    if args.flow in ['boosted', 'bagged']:
+    if args.flow == 'boosted':
         logger.info("Initializing optimizer for ensemble model, grouping parameters according to VAE and Component Id:")
 
         flow_params = {f"{c}": torch.nn.ParameterList() for c in range(args.num_components)}
@@ -243,7 +225,7 @@ def init_optimizer(model, args):
                 vae_params.append(param)
 
         # collect all parameters into a single list
-        # the first args.num_components elements in the parameters list correspond bagged/boosting parameters
+        # the first args.num_components elements in the parameters list correspond boosting parameters
         all_params = []
         for c in range(args.num_components):
             all_params.append(flow_params[f"{c}"])
