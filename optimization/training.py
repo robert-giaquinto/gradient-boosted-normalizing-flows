@@ -282,7 +282,7 @@ def sample_from_all_prob(epoch, converged_epoch, current_component, all_trained,
     """
     Want to occasionally sample from all components so decoder doesn't solely focus on new component
     """
-    if all_trained:
+    if all_trained and epoch > (args.burnin + args.annealing_schedule * args.num_components * 2):
         # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
         return 1.0
 

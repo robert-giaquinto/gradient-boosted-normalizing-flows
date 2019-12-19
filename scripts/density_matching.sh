@@ -8,88 +8,92 @@ source ./venv/bin/activate
 num_steps=150001
 exp_name=baseline_density_matching
 logging=1000
-iters_per_component=50000
-regularization_rate=0.4
-plot_resolution=250
-learning_rate=0.005
+plotting=25000
+plot_resolution=500
 
 
 for u in 1 2 3 4
 do
 
-    for flow_depth in 1 2 4 8 16 32
+    # realnvp and iaf with various h_sizes
+    for h_size in 16 32 64 128
     do
-        # planar flow
+        # realnvp
+        for num_flows in 1 2
+        do
+            python density.py --dataset u${u} \
+                   --experiment_name ${exp_name} \
+                   --no_cuda \
+                   --num_workers ${num_workers} \
+                   --num_steps ${num_steps} \
+                   --learning_rate ${learning_rate} \
+                   --no_annealing \
+                   --flow realnvp \
+                   --num_flows ${num_flows} \
+                   --num_base_layers 1 \
+                   --base_network relu \
+                   --h_size ${h_size} \
+                   --batch_size ${batch_size} \
+                   --manual_seed ${manual_seed} \
+                   --log_interval ${logging} \
+                   --plot_resolution ${plot_resolution} \
+                   --plot_interval ${plotting} &
+        done
+        # iaf
         python density.py --dataset u${u} \
                --experiment_name ${exp_name} \
                --no_cuda \
+               --num_workers ${num_workers} \
                --num_steps ${num_steps} \
-               --plot_resolution ${plot_resolution} \
                --learning_rate ${learning_rate} \
                --no_annealing \
-               --num_workers ${num_workers} \
-               --flow planar \
-               --num_flows ${flow_depth} \
+               --flow iaf \
+               --num_flows 1 \
+               --h_size ${h_size} \
                --batch_size ${batch_size} \
-               --z_size ${z_size} \
-               --manual_seed ${seed} \
+               --manual_seed ${manual_seed} \
                --log_interval ${logging} \
-               --plot_interval ${iters_per_component} &
-
-        # radial flow
-        python density.py --dataset u${u} \
-               --experiment_name ${exp_name} \
-               --no_cuda \
-               --num_steps ${num_steps} \
                --plot_resolution ${plot_resolution} \
-               --learning_rate ${learning_rate} \
-               --no_annealing \
-               --num_workers ${num_workers} \
-               --flow radial \
-               --num_flows ${flow_depth} \
-               --batch_size ${batch_size} \
-               --z_size ${z_size} \
-               --manual_seed ${seed} \
-               --log_interval ${logging} \
-               --plot_interval ${iters_per_component} &
+               --plot_interval ${plotting} ;
+    done
 
-        # non-linear squared flow
-        python density.py --dataset u${u} \
-               --experiment_name ${exp_name} \
-               --no_cuda \
-               --num_steps ${num_steps} \
-               --plot_resolution ${plot_resolution} \
-               --learning_rate ${learning_rate} \
-               --no_annealing \
-               --num_workers ${num_workers} \
-               --flow nlsq \
-               --num_flows ${flow_depth} \
-               --batch_size ${batch_size} \
-               --z_size ${z_size} \
-               --manual_seed ${seed} \
-               --log_interval ${logging} \
-               --plot_interval ${iters_per_component} ;
-
+    # basic flows only need to tune num_flows
+    for flow in planar radial nlsq
+    do
+        for flow_depth in 1 2 4 8 16 32
+        do
+            python density.py --dataset u${u} \
+                   --experiment_name ${exp_name} \
+                   --no_cuda \
+                   --num_steps ${num_steps} \
+                   --learning_rate ${learning_rate} \
+                   --no_annealing \
+                   --num_workers ${num_workers} \
+                   --flow ${flow} \
+                   --num_flows ${flow_depth} \
+                   --batch_size ${batch_size} \
+                   --manual_seed ${manual_seed} \
+                   --log_interval ${logging} \
+                   --plot_resolution ${plot_resolution} \
+                   --plot_interval ${plotting} &
+        done
     done
 
     # affine
-    python density.py --dataset ${dataset} \
-       --experiment_name ${exp_name} \
-       --no_cuda \
-       --num_steps ${num_steps} \
-       --plot_resolution ${plot_resolution} \
-       --learning_rate ${learning_rate} \
-       --no_annealing \
-       --num_workers ${num_workers} \
-       --flow affine \
-       --num_flows 1 \
-       --z_size ${z_size} \
-       --batch_size ${batch_size} \
-       --manual_seed ${seed} \
-       --log_interval ${logging} \
-       --plot_interval ${iters_per_component} ;
-
-    
+    python density.py --dataset u${u} \
+           --experiment_name ${exp_name} \
+           --no_cuda \
+           --num_steps ${num_steps} \
+           --learning_rate ${learning_rate} \
+           --no_annealing \
+           --num_workers ${num_workers} \
+           --flow affine \
+           --num_flows 1 \
+           --batch_size ${batch_size} \
+           --manual_seed ${manual_seed} \
+           --log_interval ${logging} \
+           --plot_resolution ${plot_resolution} \
+           --plot_interval ${plotting} ;
 
 done
 

@@ -42,7 +42,7 @@ do
                            --h_size ${h_size} \
                            --regularization_rate ${regularization_rate} \
                            --batch_size ${batch_size} \
-                           --manual_seed ${seed} \
+                           --manual_seed ${manual_seed} \
                            --log_interval ${logging} \
                            --plot_resolution ${plot_resolution} \
                            --plot_interval ${iters_per_component} ;
@@ -66,7 +66,7 @@ do
                    --component_type affine \
                    --regularization_rate ${regularization_rate} \
                    --batch_size ${batch_size} \
-                   --manual_seed ${seed} \
+                   --manual_seed ${manual_seed} \
                    --log_interval ${logging} \
                    --plot_resolution ${plot_resolution} \
                    --plot_interval ${iters_per_component} ;
