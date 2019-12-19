@@ -12,7 +12,6 @@ from models.vae import VAE, OrthogonalSylvesterVAE, HouseholderSylvesterVAE, Tri
 from models.iaf_vae import IAFVAE
 from models.realnvp_vae import RealNVPVAE
 from models.boosted_vae import BoostedVAE
-from models.bagged_vae import BaggedVAE
 from models.planar_vae import PlanarVAE
 from models.radial_vae import RadialVAE
 from models.liniaf_vae import LinIAFVAE
@@ -90,6 +89,8 @@ parser.add_argument('--num_flows', type=int, default=2, help='Number of flow lay
 parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--num_base_layers', type=int, default=1, help='Number of layers in the base network of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual'])
+parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers')
+parser.set_defaults(batch_norm=True)
 parser.add_argument('--z_size', type=int, default=2, help='how many stochastic hidden units')
 
 # Bagging/Boosting parameters

@@ -41,7 +41,7 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
             plt_width = max(1, int(np.ceil((args.num_components + 2) / plt_height)))
             fig, axs = plt.subplots(plt_height, plt_width, figsize=(12,12), subplot_kw={'aspect': 'equal'}, squeeze=False)
             plot_samples(potential_or_sampling_fn, axs[0,0], range_lim, n_pts)
-            plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, args.batch_size, args)
+            total_prob = plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, args.batch_size, args)
         else:
             fig, axs = plt.subplots(1, 2, figsize=(12,12), subplot_kw={'aspect': 'equal'})
             plot_samples(potential_or_sampling_fn, axs[0], range_lim, n_pts)
@@ -57,9 +57,39 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     fig.suptitle(title, y=0.98, fontsize=20)
 
     # save
-    plt.savefig(os.path.join(args.snap_dir, f'vis_step_{batch_id}.png'))
+    fname = f'{args.dataset}_{args.flow}_K{args.num_flows}_bs{args.batch_size}'
+    fname += f'_C{args.num_components}_reg{int(100*args.regularization_rate):d}_{args.component_type}' if args.flow == 'boosted' else ''
+    fname += f'_{args.base_network}{args.num_base_layers}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
+    fname += f'_hsize{args.h_size}' if args.flow == 'iaf' else ''
+    plt.savefig(os.path.join(args.snap_dir, fname + f'_step{batch_id}.png'))
     plt.close()
-    
+
+    # PLOT THE FINAL RESULT IF THIS IS THE LAST BATCH
+    if batch_id == args.num_steps:
+        fig, axs = plt.subplots(1, 2, figsize=(12,12), subplot_kw={'aspect': 'equal'})
+        if args.density_matching:
+            plot_potential(potential_or_sampling_fn, axs[0], test_grid, n_pts)
+            plot_flow_samples(model, axs[1], n_pts, args.batch_size, args, "all")    
+        else:
+            plot_samples(potential_or_sampling_fn, axs[0], range_lim, n_pts)
+            if args.flow == "boosted":
+                xx, yy, zz = test_grid
+                axs[1].pcolormesh(xx, yy, total_prob, cmap=plt.cm.viridis)
+                axs[1].set_facecolor(plt.cm.viridis(0.))
+                axs[1].set_title('Boosted Flow Density for All Components', fontdict={'fontsize': 20})
+            else:
+                plot_fwd_flow_density(model, axs[1], test_grid, n_pts, args.batch_size, args)
+                
+        for ax in plt.gcf().axes: format_ax(ax, range_lim)
+        plt.tight_layout(rect=[0, 0, 1.0, 0.95])
+        title = f'{args.flow.title()} Flow, K={args.num_flows}'
+        title += f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
+        title += f', C={args.num_components}, Reg={args.regularization_rate:.2f}' if args.flow == "boosted" else ''
+        fig.suptitle(title, y=0.98, fontsize=20)
+
+        plt.savefig(os.path.join(args.snap_dir, fname + '.png'))
+        plt.close()
+
 
 def setup_grid(range_lim, n_pts, args):
     x = torch.linspace(-range_lim, range_lim, n_pts)
@@ -169,12 +199,11 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
 
     # plot full model
     total_prob = total_prob.exp()
-    #total_prob = total_prob / total_prob.sum()
     axs[0,1].pcolormesh(xx, yy, total_prob, cmap=plt.cm.viridis)
     axs[0,1].set_facecolor(plt.cm.viridis(0.))
     axs[0,1].set_title('Boosted Flow Density for All Components', fontdict={'fontsize': 20})
-
     model.component = save_component
+    return total_prob
 
     
 def plot_inv_flow_density(model, ax, test_grid, n_pts, batch_size, args, sample_from=None):

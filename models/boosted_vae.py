@@ -29,9 +29,9 @@ class BoostedVAE(VAE):
         self.num_components = args.num_components
         self.num_flows = args.num_flows
         self.component = 0  # current component being trained / number of components trained thus far
-        #self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
-        self.rho = self.FloatTensor(self.num_components).fill_(max(1.0 / (self.num_components), 0.05))
-        self.rho[0] = 1.0
+        self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
+        #self.rho = self.FloatTensor(self.num_components).fill_(max(1.0 / (self.num_components), 0.05))
+        #self.rho[0] = 1.0
 
         if args.density_evaluation:
             self.q_z_nn, self.q_z_mean, self.q_z_var = None, None, None
@@ -62,7 +62,7 @@ class BoostedVAE(VAE):
                 flow_c = nn.ModuleList()
                 for k in range(self.num_flows):
                     # realnvp: must initialize the 4 base networks used in each flow (and for each component)
-                    flow_c_k = nn.ModuleList([base_network(in_dim, out_dim, args.h_size, args.num_base_layers, use_batch_norm=False) for _ in range(4)])
+                    flow_c_k = nn.ModuleList([base_network(in_dim, out_dim, args.h_size, args.num_base_layers, use_batch_norm=args.batch_norm) for _ in range(4)])
                     flow_c.append(flow_c_k)
                     
                 self.flow_param.append(flow_c)
