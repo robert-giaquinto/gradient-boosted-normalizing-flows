@@ -75,6 +75,7 @@ do
                    --num_steps ${num_steps} \
                    --learning_rate ${learning_rate} \
                    --no_annealing \
+                   --no_lr_schedule \
                    --num_workers ${num_workers} \
                    --flow ${flow} \
                    --num_flows ${flow_depth} \
@@ -93,6 +94,7 @@ do
            --num_steps ${num_steps} \
            --learning_rate ${learning_rate} \
            --no_annealing \
+           --no_lr_schedule \
            --num_workers ${num_workers} \
            --flow affine \
            --num_flows 1 \

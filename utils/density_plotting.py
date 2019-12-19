@@ -62,6 +62,8 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     fname += f'_{args.base_network}{args.num_base_layers}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
     args.snap_dir += '_hidden' + str(args.num_base_layers) + '_hsize' + str(args.h_size)
     fname += f'_hidden{args.num_base_layers}_hsize{args.h_size}' if args.flow == 'iaf' else ''
+    fname += '_annealed' if args.min_beta < 1.0 else ''
+    fname += '_lr_scheduling' if not args.no_lr_schedule else ''
     plt.savefig(os.path.join(args.snap_dir, fname + f'_step{batch_id}.png'))
     plt.close()
 
