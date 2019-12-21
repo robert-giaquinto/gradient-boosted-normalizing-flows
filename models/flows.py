@@ -137,7 +137,7 @@ class Sylvester(nn.Module):
         triu_mask = torch.triu(torch.ones(num_ortho_vecs, num_ortho_vecs), diagonal=1).unsqueeze(0)
         diag_idx = torch.arange(0, num_ortho_vecs).long()
 
-        self.register_buffer('triu_mask', Variable(triu_mask))
+        self.register_buffer('triu_mask', triu_mask)  # self.register_buffer('triu_mask', Variable(triu_mask))
         self.triu_mask.requires_grad = False
         self.register_buffer('diag_idx', diag_idx)
 

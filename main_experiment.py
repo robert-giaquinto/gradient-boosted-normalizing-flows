@@ -9,7 +9,8 @@ import random
 import os
 import logging
 
-from models.vae import VAE, OrthogonalSylvesterVAE, HouseholderSylvesterVAE, TriangularSylvesterVAE
+from models.vae import VAE
+from models.sylvester_vae import OrthogonalSylvesterVAE, HouseholderSylvesterVAE, TriangularSylvesterVAE
 from models.iaf_vae import IAFVAE
 from models.realnvp_vae import RealNVPVAE
 from models.boosted_vae import BoostedVAE

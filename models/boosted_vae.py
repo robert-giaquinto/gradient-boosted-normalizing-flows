@@ -1,7 +1,6 @@
 import numpy as np
 import torch
 import torch.nn as nn
-import random
 import logging
 
 from models.vae import VAE
@@ -29,9 +28,9 @@ class BoostedVAE(VAE):
         self.num_components = args.num_components
         self.num_flows = args.num_flows
         self.component = 0  # current component being trained / number of components trained thus far
-        self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
-        #self.rho = self.FloatTensor(self.num_components).fill_(max(1.0 / (self.num_components), 0.05))
-        #self.rho[0] = 1.0
+        #self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
+        self.rho = self.FloatTensor(self.num_components).fill_(max(1.0 / (self.num_components), 0.05))
+        self.rho[0] = 1.0
 
         if args.density_evaluation:
             self.q_z_nn, self.q_z_mean, self.q_z_var = None, None, None

@@ -15,16 +15,15 @@ logger = logging.getLogger(__name__)
 
 
 def train(train_loader, val_loader, model, optimizer, scheduler, args):
-    header_msg = f'| Epoch |  TRAIN{"Loss": >12}{"Reconstruction": >18}{"KL": >12}'
-    #header_msg += f'{"Fixed": >12}{"Converged": >12}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
-    header_msg += f'{"Fixed": >12}{"P(c in 1:C)": >16}{"| ": >4}' if args.flow == "boosted" else f'{"| ": >4}'
-    header_msg += f'{"VALIDATION": >11}{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"| ": >4}{"Annealing": >12}{"|": >3}'
+    header_msg = f'| Epoch |  TRAIN{"Loss": >12}{"Reconstruction": >18}'
+    header_msg += f'{"Log G": >12}{"Prior": >12}{"Entropy": >12}{"Log Ratio": >12}{"| ": >4}' if args.flow == "boosted" else f'{"KL": >12}{"| ": >4}'
+    header_msg += f'{"VALIDATION": >11}{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"| ": >4}{"Annealing": >12}{"P(c in 1:C)": >16}{"|": >3}'
     logger.info('|' + "-"*(len(header_msg)-2) + '|')
     logger.info(header_msg)
     logger.info('|' + "-"*(len(header_msg)-2) + '|')
 
     if args.flow == "boosted":
-        t_loss, t_rec, t_kl, v_loss, v_rec, v_kl, t_times  = train_boosted(
+        t_loss, t_rec, t_G, t_p, t_entropy, v_loss, v_rec, v_kl, t_times  = train_boosted(
             train_loader, val_loader, model, optimizer, scheduler, args)
     else:
         t_loss, t_rec, t_kl, v_loss, v_rec, v_kl, t_times  = train_vae(
@@ -37,9 +36,17 @@ def train(train_loader, val_loader, model, optimizer, scheduler, args):
     logger.info(timing_msg)
 
     if args.save_results:
-        np.savetxt(args.snap_dir + '/train_loss.csv', t_loss, fmt='%f', delimiter=',')
-        np.savetxt(args.snap_dir + '/train_rec.csv', t_rec, fmt='%f', delimiter=',')
-        np.savetxt(args.snap_dir + '/train_kl.csv', t_kl, fmt='%f', delimiter=',')
+        if args.flow == "boosted":
+            np.savetxt(args.snap_dir + '/train_loss.csv', t_loss, fmt='%f', delimiter=',')
+            np.savetxt(args.snap_dir + '/train_rec.csv', t_rec, fmt='%f', delimiter=',')
+            np.savetxt(args.snap_dir + '/train_log_G_z.csv', t_G, fmt='%f', delimiter=',')
+            np.savetxt(args.snap_dir + '/train_log_p_zk.csv', t_p, fmt='%f', delimiter=',')
+            np.savetxt(args.snap_dir + '/train_entropy.csv', t_entropy, fmt='%f', delimiter=',')
+        else:
+            np.savetxt(args.snap_dir + '/train_loss.csv', t_loss, fmt='%f', delimiter=',')
+            np.savetxt(args.snap_dir + '/train_rec.csv', t_rec, fmt='%f', delimiter=',')
+            np.savetxt(args.snap_dir + '/train_kl.csv', t_kl, fmt='%f', delimiter=',')
+        
         np.savetxt(args.snap_dir + '/val_loss.csv', v_loss, fmt='%f', delimiter=',')
         np.savetxt(args.snap_dir + '/val_rec.csv', v_rec, fmt='%f', delimiter=',')
         np.savetxt(args.snap_dir + '/val_kl.csv', v_kl, fmt='%f', delimiter=',')
@@ -84,8 +91,8 @@ def train_vae(train_loader, val_loader, model, optimizer, scheduler, args):
 
         beta = max(min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta]), args.min_beta)
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}'
-        epoch_msg += f'{"| ": >4}{v_loss:22.3f}{v_rec:19.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}'
-        logger.info(epoch_msg + f'{"| ": >4}')
+        epoch_msg += f'{"| ": >4}{v_loss:22.3f}{v_rec:19.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{"| ": >20}'
+        logger.info(epoch_msg)
 
         # early-stopping: does adding a new component help?
         if v_loss < best_loss:
@@ -142,23 +149,25 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
 
 
 def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
+    train_times = []
     train_loss = []
     train_rec = []
-    train_kl = []
+    train_G = []
+    train_p = []
+    train_entropy = []
+    
     val_loss = []
     val_rec = []
     val_kl = []
 
     # for early stopping
     best_loss = np.inf
-    best_bpd = np.inf
-    prev_tr_fixed = np.inf
+    prev_tr_ratio = np.inf
     component_threshold = 0.0 #0.0001
     e = 0
     epoch = 0
     converged_epoch = 0  # corrects the annealing schedule when a component converges early
     converged = False
-    train_times = []
 
     model.component = 0
     for c in range(args.num_components):
@@ -173,12 +182,15 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
         prob_all = sample_from_all_prob(epoch, converged_epoch, model.component, model.all_trained, args)
             
         t_start = time.time()
-        tr_loss, tr_rec, tr_kl, tr_fixed = train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, prob_all, args)
-        tr_fixed = tr_fixed.mean()
+        tr_loss, tr_rec, tr_G, tr_p, tr_entropy, tr_ratio = train_epoch_boosted(
+            epoch, train_loader, model, optimizer, scheduler, beta, prob_all, args)
         train_times.append(time.time() - t_start)
+        
         train_loss.append(tr_loss)
         train_rec.append(tr_rec)
-        train_kl.append(tr_kl)
+        train_G.append(tr_G)
+        train_p.append(tr_p)
+        train_entropy.append(tr_entropy)
 
         v_loss, v_rec, v_kl = evaluate(val_loader, model, args, epoch=epoch)
         val_loss.append(v_loss)
@@ -186,13 +198,12 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
         val_kl.append(v_kl)
 
         # new component performance converged?
-        converged = check_convergence(tr_fixed, prev_tr_fixed, component_threshold, model.component, model.num_components, epoch, args.burnin)
+        converged = check_convergence(tr_ratio, prev_tr_ratio, component_threshold, model.component, model.num_components, epoch, args.burnin)
         if converged:
             converged_epoch = epoch
 
-        #epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_fixed:12.3f}{str(converged): >12}'
-        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}{tr_fixed:12.3f}{prob_all:16.2f}'
-        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}'
+        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_G.mean():12.3f}{tr_p.mean():12.3f}{tr_entropy.mean():12.3f}{tr_ratio:12.3f}'
+        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{prob_all:16.2f}'
 
         # is it time to update rho?
         time_to_update = check_time_to_update(epoch, args.annealing_schedule, args.burnin, model.component, converged_epoch)
@@ -219,27 +230,33 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
                 break
 
         # save log g(z|x) to check for convergence of new component
-        prev_tr_fixed = tr_fixed
+        prev_tr_ratio = tr_ratio
 
     train_loss = np.hstack(train_loss)
     train_rec = np.hstack(train_rec)
-    train_kl = np.hstack(train_kl)
+    train_G = np.hstack(train_G)
+    train_p = np.hstack(train_p)
+    train_entropy = np.hstack(train_entropy)
+    
     val_loss = np.array(val_loss)
     val_rec = np.array(val_rec)
     val_kl = np.array(val_kl)
     train_times = np.array(train_times)
-    return train_loss, train_rec, train_kl, val_loss, val_rec, val_kl, train_times
+    return train_loss, train_rec, train_G, train_p, train_entropy, val_loss, val_rec, val_kl, train_times
 
 
 def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, prob_all, args):
     model.train()
-
+    is_first_component = model.component == 0 and not model.all_trained
+    
     total_batches = len(train_loader)
+    total_samples = len(train_loader.sampler)
     train_loss = np.zeros(total_batches)
-    train_bpd = np.zeros(total_batches)
     train_rec = np.zeros(total_batches)
-    train_kl = np.zeros(total_batches)
-    train_fixed = np.zeros(total_batches)
+    train_G = np.zeros(total_batches)
+    train_p = np.zeros(total_batches)
+    train_entropy = np.zeros(total_batches)
+    train_ratio = np.zeros(total_batches)
 
     for batch_id, (x, _) in enumerate(train_loader):
         x = x.to(args.device)
@@ -248,9 +265,9 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
             x = torch.bernoulli(x)
 
         optimizer.zero_grad()
-        x_recon, z_mu, z_var, z_g, g_ldj, z_G, G_ldj = model(x, prob_all=0.0)
-        is_first_component = model.component == 0 and not model.all_trained
-        loss, rec, kl, log_G_z = calculate_boosted_loss(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, is_first_component, beta)
+        x_recon, z_mu, z_var, z_g, g_ldj, z_G, G_ldj = model(x, prob_all=prob_all)
+        loss, rec, log_G, log_p, entropy, log_ratio = calculate_boosted_loss(
+            x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, is_first_component, beta)
         loss.backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
@@ -259,10 +276,12 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
-        train_kl[batch_id] = kl.item()
-        train_fixed[batch_id] = log_G_z.item()
+        train_G[batch_id] = log_G.item()
+        train_p[batch_id] = log_p.item()
+        train_entropy[batch_id] = entropy.item()
+        train_ratio[batch_id] = log_ratio.item()
 
-    return train_loss, train_rec, train_kl, train_fixed
+    return train_loss, train_rec, train_G, train_p, train_entropy, train_ratio.mean()
 
 
 def kl_annealing_rate(epoch, component, all_trained, args):

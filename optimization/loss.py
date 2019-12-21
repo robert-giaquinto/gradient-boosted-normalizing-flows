@@ -50,7 +50,7 @@ def boosted_binary_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, reg
     recon_loss = reconstruction_function(x_recon, x)
 
     # prior: ln p(z_k)  (not averaged)
-    log_p_zk = log_normal_standard(z_g[-1], dim=1)
+    log_p_zk = torch.sum(log_normal_standard(z_g[-1], dim=1))
 
     # entropy loss w.r.t. to new component terms (not averaged)
     # N E_g[ ln g(z | x) ]  (not averaged)
@@ -59,25 +59,29 @@ def boosted_binary_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, reg
 
     if first_component:
         # train the first component just like a standard VAE + Normalizing Flow
-        kl = torch.sum(log_g_z - log_p_zk)
-        log_G_z = torch.zeros_like(kl)
+        entropy = torch.sum(log_g_z)
+        log_G_z = torch.zeros_like(entropy)
+        log_ratio = torch.zeros_like(entropy).detach()
     else:
         # all other components are trained using the boosted loss
         # loss w.r.t. fixed component terms:
         log_G_base = log_normal_diag(z_G[0], mean=z_mu, log_var=safe_log(z_var), dim=1)
-        # limit log likelihoods to -10 --- which is pretty small, for numerical stability
+        # limit log likelihoods to a small number for numerical stability
         log_G_z = torch.sum(torch.max(log_G_base - G_ldj, torch.ones_like(G_ldj) * -15.0))
-        kl = torch.sum(regularization_rate * log_g_z - log_p_zk)
-        
-    loss = recon_loss + log_G_z + beta*kl
+        log_ratio = torch.sum(regularization_rate * log_g_z.data - log_G_z.data).detach()
+        entropy = torch.sum(regularization_rate * log_g_z)
+
+    loss = recon_loss + log_G_z + beta*(entropy - log_p_zk)
 
     batch_size = float(x.size(0))
     loss = loss / batch_size
     recon_loss = recon_loss / batch_size
-    kl = kl / batch_size
     log_G_z = log_G_z / batch_size
+    log_p_zk = -1.0 * log_p_zk / batch_size
+    entropy = entropy / batch_size
+    log_ratio = log_ratio / batch_size
 
-    return loss, recon_loss, kl, log_G_z
+    return loss, recon_loss, log_G_z, log_p_zk, entropy, log_ratio
 
 
 def multinomial_neg_elbo(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):
@@ -207,15 +211,13 @@ def cross_entropy(x, target, reduction='none'):
 def calculate_boosted_loss(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, first_component, beta=1.0):
 
     if args.input_type == "binary":
-        loss, recon_loss, kl, log_G_z = boosted_binary_neg_elbo(x_recon, x,
-                                                                z_mu, z_var,
-                                                                z_g, g_ldj, z_G, G_ldj,
-                                                                args.regularization_rate, first_component, beta)
+        loss, recon, log_G, log_p, entropy, log_ratio = boosted_binary_neg_elbo(
+            x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args.regularization_rate, first_component, beta)
 
     else:
         ValueError(f"Invalid inpt type for calculate_boosted_loss: {args.input_type}")
 
-    return loss, recon_loss, kl, log_G_z
+    return loss, recon, log_G, log_p, entropy, log_ratio
         
 
 def calculate_loss(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):
