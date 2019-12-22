@@ -57,8 +57,9 @@ def boosted_binary_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, reg
     log_g_base = log_normal_diag(z_g[0], mean=z_mu, log_var=safe_log(z_var), dim=1)
     log_g_z = log_g_base - g_ldj
 
-    if first_component:
+    if first_component or (z_G is None and G_ldj is None):
         # train the first component just like a standard VAE + Normalizing Flow
+        # or if we sampled from all components to alleviate decoder shock
         entropy = torch.sum(log_g_z)
         log_G_z = torch.zeros_like(entropy)
         log_ratio = torch.zeros_like(entropy).detach()
@@ -67,7 +68,7 @@ def boosted_binary_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, reg
         # loss w.r.t. fixed component terms:
         log_G_base = log_normal_diag(z_G[0], mean=z_mu, log_var=safe_log(z_var), dim=1)
         # limit log likelihoods to a small number for numerical stability
-        log_G_z = torch.sum(torch.max(log_G_base - G_ldj, torch.ones_like(G_ldj) * -15.0))
+        log_G_z = torch.sum(torch.max(log_G_base - G_ldj, torch.ones_like(G_ldj) * -10.0))
         log_ratio = torch.sum(regularization_rate * log_g_z.data - log_G_z.data).detach()
         entropy = torch.sum(regularization_rate * log_g_z)
 

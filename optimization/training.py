@@ -203,7 +203,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
             converged_epoch = epoch
 
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_G.mean():12.3f}{tr_p.mean():12.3f}{tr_entropy.mean():12.3f}{tr_ratio:12.3f}'
-        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{prob_all:16.2f}'
+        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{prob_all:16.2f}  |  c={model.component}'
 
         # is it time to update rho?
         time_to_update = check_time_to_update(epoch, args.annealing_schedule, args.burnin, model.component, converged_epoch)
@@ -253,10 +253,10 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
     total_samples = len(train_loader.sampler)
     train_loss = np.zeros(total_batches)
     train_rec = np.zeros(total_batches)
-    train_G = np.zeros(total_batches)
     train_p = np.zeros(total_batches)
     train_entropy = np.zeros(total_batches)
-    train_ratio = np.zeros(total_batches)
+    train_G = []
+    train_ratio = []
 
     for batch_id, (x, _) in enumerate(train_loader):
         x = x.to(args.device)
@@ -276,24 +276,32 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
-        train_G[batch_id] = log_G.item()
         train_p[batch_id] = log_p.item()
         train_entropy[batch_id] = entropy.item()
-        train_ratio[batch_id] = log_ratio.item()
 
+        # ignore the boosting terms if we sampled from all (to alleviate decoder shock)
+        if z_G is not None and G_ldj is not None:
+            train_G.append(log_G.item())
+            train_ratio.append(log_ratio.item())
+
+    train_G = np.array(train_G) if len(train_G) > 0 else np.zeros(1)
+    train_ratio = np.array(train_ratio) if len(train_ratio) > 0 else np.zeros(1)
     return train_loss, train_rec, train_G, train_p, train_entropy, train_ratio.mean()
 
 
 def kl_annealing_rate(epoch, component, all_trained, args):
-    if not all_trained:
-        epochs_per_component = max(args.annealing_schedule + args.burnin if component == 0 else args.annealing_schedule, 1)
-        zero_offset = 1.0 / epochs_per_component  # don't want annealing rate to start at zero
-        beta = (((epoch - 1) % epochs_per_component) / epochs_per_component) + zero_offset
-        beta = min(beta, args.max_beta)
-        beta = max(beta, args.min_beta)
+    if args.annealing_schedule == 1:
+        beta = epoch / (100.0 * args.num_components) if args.flow == "boosted" else epoch / 100.0
     else:
-        beta = 1.0
-
+        if all_trained:
+            beta = 1.0
+        else:
+            epochs_per_component = max(args.annealing_schedule + args.burnin if component == 0 else args.annealing_schedule, 1)
+            zero_offset = 1.0 / epochs_per_component  # don't want annealing rate to start at zero
+            beta = (((epoch - 1) % epochs_per_component) / epochs_per_component) + zero_offset
+            
+    beta = min(beta, args.max_beta)
+    beta = max(beta, args.min_beta)
     return beta
 
 
@@ -301,22 +309,24 @@ def sample_from_all_prob(epoch, converged_epoch, current_component, all_trained,
     """
     Want to occasionally sample from all components so decoder doesn't solely focus on new component
     """
-    if all_trained and epoch > (args.burnin + args.annealing_schedule * args.num_components * 2):
-        # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
-        return 1.0
-
-    if current_component == 0:
-        # first component runs longer than the rest
-        epochs_per_component = max(args.annealing_schedule + args.burnin, 1)
-        epoch_offset = 1
-    else:
-        epochs_per_component = max(args.annealing_schedule, 1)
-        epoch_offset = (args.burnin if converged_epoch == 0 else converged_epoch) + 1
-        
-    non_zero_offset = 1.0 / epochs_per_component
     max_prob_all = 1.0 - (1.0 / (current_component + 1.0))
     
-    prob_all = (((epoch - epoch_offset) % epochs_per_component) / epochs_per_component) + non_zero_offset
+    if all_trained:
+        # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
+        prob_all = 1.0
+
+    else:
+        if current_component == 0:
+            # first component runs longer than the rest
+            epochs_per_component = max(args.annealing_schedule + args.burnin, 1)
+            epoch_offset = 1
+        else:
+            epochs_per_component = max(args.annealing_schedule, 1)
+            epoch_offset = (args.burnin if converged_epoch == 0 else converged_epoch) + 1
+            
+        non_zero_offset = 1.0 / epochs_per_component
+        prob_all = (((epoch - epoch_offset) % epochs_per_component) / epochs_per_component) + non_zero_offset
+        
     prob_all = min(prob_all, max_prob_all)
     return prob_all
 
