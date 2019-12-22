@@ -92,7 +92,7 @@ class BoostedVAE(VAE):
         Estimate gradient with Monte Carlo by drawing sample zK ~ g^c and sample zK ~ G^(c-1), and
         computing their densities under the full model G^c
         """
-        x = x.detach()
+        x = x.detach().to(self.args.device)
         h, z_mu, z_var = self.encode(x)
         z0 = self.reparameterize(z_mu, z_var)
 
@@ -130,7 +130,7 @@ class BoostedVAE(VAE):
             prev_rho = self.rho[self.component].item()
 
             for batch_id, (x, _) in enumerate(data_loader):
-                x.to(self.args.device).detach()
+                x = x.detach().to(self.args.device)
                 g_loss, G_loss = self._rho_gradient(x)
                 gradient = g_loss - G_loss
                 step_size = step_size / (0.025 * batch_id + 1)
