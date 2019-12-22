@@ -309,13 +309,13 @@ def sample_from_all_prob(epoch, converged_epoch, current_component, all_trained,
     """
     Want to occasionally sample from all components so decoder doesn't solely focus on new component
     """
-    max_prob_all = 1.0 - (1.0 / (current_component + 1.0))
-    
     if all_trained:
         # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
+        max_prob_all = 1.0 - (1.0 / (args.num_components))
         prob_all = 1.0
 
     else:
+        max_prob_all = 1.0 - (1.0 / (current_component + 1.0))
         if current_component == 0:
             # first component runs longer than the rest
             epochs_per_component = max(args.annealing_schedule + args.burnin, 1)
@@ -326,7 +326,7 @@ def sample_from_all_prob(epoch, converged_epoch, current_component, all_trained,
             
         non_zero_offset = 1.0 / epochs_per_component
         prob_all = (((epoch - epoch_offset) % epochs_per_component) / epochs_per_component) + non_zero_offset
-        
+
     prob_all = min(prob_all, max_prob_all)
     return prob_all
 
