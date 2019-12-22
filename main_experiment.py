@@ -151,6 +151,8 @@ def parse_args(main_args=None):
         lr_schedule += "_lr_scheduling"
 
     args.snap_dir += lr_schedule + is_annealed + '_on_' + args.dataset + "_" + args.model_signature + '/'
+    if not os.path.exists(args.snap_dir):
+        os.makedirs(args.snap_dir)
 
     # intialize logger
     init_log(args)
@@ -276,8 +278,6 @@ def main(main_args=None):
     # PARSE EXPERIMENT SETTINGS, SETUP SNAPSHOTS DIRECTORY, LOGGING
     # =========================================================================
     args, kwargs = parse_args(main_args)
-    if not os.path.exists(args.snap_dir):
-        os.makedirs(args.snap_dir)
 
     # =========================================================================
     # LOAD DATA

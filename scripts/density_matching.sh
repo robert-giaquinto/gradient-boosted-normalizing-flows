@@ -67,7 +67,7 @@ do
     # basic flows only need to tune num_flows
     for flow in planar radial nlsq
     do
-        for flow_depth in 1 2 4 8 16 32
+        for flow_depth in 1 2 4 8 16
         do
             python density.py --dataset u${u} \
                    --experiment_name ${exp_name} \
@@ -85,6 +85,22 @@ do
                    --plot_resolution ${plot_resolution} \
                    --plot_interval ${plotting} &
         done
+        python density.py --dataset u${u} \
+               --experiment_name ${exp_name} \
+               --no_cuda \
+               --num_steps ${num_steps} \
+               --learning_rate ${learning_rate} \
+               --no_annealing \
+               --no_lr_schedule \
+               --num_workers ${num_workers} \
+               --flow ${flow} \
+               --num_flows 32 \
+               --batch_size ${batch_size} \
+               --manual_seed ${manual_seed} \
+               --log_interval ${logging} \
+               --plot_resolution ${plot_resolution} \
+               --plot_interval ${plotting} ;
+
     done
 
     # affine

@@ -114,6 +114,7 @@ def parse_args(main_args=None):
     args.input_type = 'binary'
     args.input_size = [2]
     args.density_evaluation = True
+    args.shuffle = True
 
     # Set a random seed if not given one
     if args.manual_seed is None:
@@ -122,27 +123,8 @@ def parse_args(main_args=None):
     random.seed(args.manual_seed)
     torch.manual_seed(args.manual_seed)
     np.random.seed(args.manual_seed)
-    logger.info(f"Random Seed: {args.manual_seed}\n")
 
-    args.shuffle = args.flow != "bagged"
-    
-    # Set up multiple CPU/GPUs
-    logger.info("COMPUTATION SETTINGS:")
-    if args.cuda:
-        logger.info("\tUsing CUDA GPU")
-        torch.cuda.set_device(args.gpu_id)
-    else:
-        logger.info("\tUsing CPU")
-        if args.num_workers > 0:
-            num_workers = args.num_workers
-        else:
-            num_workers = max(1, os.cpu_count() - 1)
-
-        logger.info("\tCores available: {} (only requesting {})".format(os.cpu_count(), num_workers))
-        torch.set_num_threads(num_workers)
-        logger.info("\tConfirmed Number of CPU threads: {}".format(torch.get_num_threads()))
-
-    # SETUP SNAPSHOTS DIRECTORY FOR SAVING MODELS
+    # intialize snapshots directory for saving models and results
     args.model_signature = str(datetime.datetime.now())[0:19].replace(' ', '_').replace(':', '_').replace('-', '_')
     args.experiment_name = args.experiment_name + "_" if args.experiment_name is not None else ""
     args.snap_dir = os.path.join(args.out_dir, args.experiment_name + args.flow + '_')
@@ -178,6 +160,28 @@ def parse_args(main_args=None):
         dataset = args.dataset
         
     args.snap_dir += lr_schedule + is_annealed + '_on_' + dataset + "_" + args.model_signature + '/'
+    if not os.path.exists(args.snap_dir):
+        os.makedirs(args.snap_dir)
+
+    init_log(args)
+    
+    # Set up multiple CPU/GPUs
+    logger.info("COMPUTATION SETTINGS:")
+    logger.info(f"Random Seed: {args.manual_seed}\n")
+    if args.cuda:
+        logger.info("\tUsing CUDA GPU")
+        torch.cuda.set_device(args.gpu_id)
+    else:
+        logger.info("\tUsing CPU")
+        if args.num_workers > 0:
+            num_workers = args.num_workers
+        else:
+            num_workers = max(1, os.cpu_count() - 1)
+
+        logger.info("\tCores available: {} (only requesting {})".format(os.cpu_count(), num_workers))
+        torch.set_num_threads(num_workers)
+        logger.info("\tConfirmed Number of CPU threads: {}".format(torch.get_num_threads()))
+
     kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
     return args, kwargs
 
@@ -424,9 +428,6 @@ def main(main_args=None):
     # PARSE EXPERIMENT SETTINGS, SETUP SNAPSHOTS DIRECTORY, LOGGING
     # =========================================================================
     args, kwargs = parse_args(main_args)
-    if not os.path.exists(args.snap_dir):
-        os.makedirs(args.snap_dir)
-    init_log(args)
 
     # =========================================================================
     # SAVE EXPERIMENT SETTINGS
