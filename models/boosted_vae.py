@@ -123,12 +123,17 @@ class BoostedVAE(VAE):
             print(f"\n\nUpdating weight for component {self.component} (all_trained={str(self.all_trained)})", file=rho_log)
             print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=rho_log)
 
-            step_size = 0.005
             tolerance = 0.00001
-            min_iters = 15
-            max_iters = 250 if self.all_trained else 50
+            if self.args.annealing_schedule > 1:
+                step_size = 0.005
+                min_iters = 15
+                max_iters = 250 if self.all_trained else 50
+            else:
+                step_size = 0.0005
+                min_iters = 5
+                max_iters = 15
+                
             prev_rho = self.rho[self.component].item()
-
             for batch_id, (x, _) in enumerate(data_loader):
                 x = x.detach().to(self.args.device)
                 g_loss, G_loss = self._rho_gradient(x)

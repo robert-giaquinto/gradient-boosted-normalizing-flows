@@ -17,7 +17,8 @@ logger = logging.getLogger(__name__)
 def train(train_loader, val_loader, model, optimizer, scheduler, args):
     header_msg = f'| Epoch |  TRAIN{"Loss": >12}{"Reconstruction": >18}'
     header_msg += f'{"Log G": >12}{"Prior": >12}{"Entropy": >12}{"Log Ratio": >12}{"| ": >4}' if args.flow == "boosted" else f'{"KL": >12}{"| ": >4}'
-    header_msg += f'{"VALIDATION": >11}{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"| ": >4}{"Annealing": >12}{"P(c in 1:C)": >16}{"|": >3}'
+    header_msg += f'{"VALIDATION": >11}{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"| ": >4}{"Annealing": >12}'
+    header_msg += f'{"P(c in 1:C)": >16}{"|": >3}' if args.flow == "boosted" else f'{"|": >3}'
     logger.info('|' + "-"*(len(header_msg)-2) + '|')
     logger.info(header_msg)
     logger.info('|' + "-"*(len(header_msg)-2) + '|')
@@ -91,7 +92,7 @@ def train_vae(train_loader, val_loader, model, optimizer, scheduler, args):
 
         beta = max(min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta]), args.min_beta)
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}'
-        epoch_msg += f'{"| ": >4}{v_loss:22.3f}{v_rec:19.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{"| ": >20}'
+        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{"| ": >4}'
         logger.info(epoch_msg)
 
         # early-stopping: does adding a new component help?
@@ -311,7 +312,7 @@ def sample_from_all_prob(epoch, converged_epoch, current_component, all_trained,
     """
     if all_trained:
         # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
-        max_prob_all = 1.0 - (1.0 / (args.num_components))
+        max_prob_all = min(0.5, 1.0 - (1.0 / (args.num_components))) if args.annealing_schedule > 1 else 0.25
         prob_all = 1.0
 
     else:

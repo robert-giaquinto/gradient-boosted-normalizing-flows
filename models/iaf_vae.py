@@ -65,12 +65,12 @@ class IAFVAE(VAE):
         """
 
         # mean and variance of z
-        z_mu, z_var, h_context = self.encode(x)
+        z_mu, z_var = self.encode(x)
         # sample z
         z_0 = self.reparameterize(z_mu, z_var)
 
         # iaf flows
-        z_k, log_det_j = self.flow(z_0, h_context)
+        z_k, log_det_j = self.flow(z_0)
 
         # decode
         x_mean = self.decode(z_k)

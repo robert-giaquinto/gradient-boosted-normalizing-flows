@@ -160,21 +160,22 @@ def parse_args(main_args=None):
     # Initalize computation settings
     # Set up multiple CPU/GPUs
     logger.info("COMPUTATION SETTINGS:")
-    logger.info(f"Random Seed: {args.manual_seed}\n")
+    logger.info(f"Random Seed: {args.manual_seed}")
     if args.cuda:
-        logger.info("\tUsing CUDA GPU")
+        logger_msg = "Using CUDA GPU"
         torch.cuda.set_device(args.gpu_id)
     else:
-        logger.info("\tUsing CPU")
+        logger_msg = "Using CPU"
         if args.num_workers > 0:
             num_workers = args.num_workers
         else:
             num_workers = max(1, os.cpu_count() - 1)
 
-        logger.info("\tCores available: {} (only requesting {})".format(os.cpu_count(), num_workers))
+        logger_msg += "\n\tCores available: {} (only requesting {})".format(os.cpu_count(), num_workers)
         torch.set_num_threads(num_workers)
-        logger.info("\tConfirmed Number of CPU threads: {}".format(torch.get_num_threads()))
+        logger_msg += "\n\tConfirmed Number of CPU threads: {}".format(torch.get_num_threads())
 
+    logger.info(logger_msg + "\n")
     kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
     return args, kwargs
 
