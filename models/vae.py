@@ -27,9 +27,9 @@ class VAE(nn.Module):
         else:
             self.last_kernel_size = 7
             self.last_pad = 2
-        
-        self.simple = True
-        if self.simple:
+
+        self.use_linear_layers = args.vae_layers == "linear"
+        if self.use_linear_layers:
             self.input_size = np.prod(args.input_size)
         else:
             self.input_size = args.input_size[0]
@@ -67,7 +67,7 @@ class VAE(nn.Module):
         the encoder expects data as input of shape (batch_size, num_channels, width, height).
         """
         if self.input_type == 'binary':
-            if self.simple:
+            if self.use_linear_layers:
                 q_z_nn = nn.Sequential(
                     nn.Linear(self.input_size, self.q_z_nn_hidden_dim),
                     nn.ReLU(),
@@ -122,7 +122,7 @@ class VAE(nn.Module):
         num_classes = 256
 
         if self.input_type == 'binary':
-            if self.simple:
+            if self.use_linear_layers:
                 p_x_nn = nn.Sequential(
                     nn.Linear(self.z_size, self.q_z_nn_hidden_dim),
                     nn.ReLU(),
@@ -184,7 +184,7 @@ class VAE(nn.Module):
         Encoder expects following data shapes as input: shape = (batch_size, num_channels, width, height)
         """
         h = self.q_z_nn(x)
-        if not self.simple:
+        if not self.use_linear_layers:
             h = h.view(h.size(0), -1)
         mean = self.q_z_mean(h)
         var = self.q_z_var(h)
@@ -195,7 +195,7 @@ class VAE(nn.Module):
         Decoder outputs reconstructed image in the following shapes:
         x_mean.shape = (batch_size, num_channels, width, height)
         """
-        if not self.simple:
+        if not self.use_linear_layers:
             z = z.view(z.size(0), self.z_size, 1, 1)
         h = self.p_x_nn(z)
         x_mean = self.p_x_mean(h)

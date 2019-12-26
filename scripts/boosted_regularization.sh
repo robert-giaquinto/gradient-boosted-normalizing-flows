@@ -5,7 +5,7 @@ source ./scripts/experiment_config.sh
 source ./venv/bin/activate
 
 # define variable specific to this experiment
-exp_name=regularization
+experiment_name=regularization
 num_components=2
 epochs=600
 lr=0.0005

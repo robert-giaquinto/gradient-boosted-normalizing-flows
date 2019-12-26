@@ -32,6 +32,9 @@ def evaluate(data_loader, model, args, epoch=None, results_type=None):
     for batch_id, (x, _) in enumerate(data_loader):
         x = x.to(args.device)
 
+        if args.vae_layers == 'convolutional':
+            x = x.view(-1, *args.input_size)
+
         if args.flow == 'boosted':
             x_recon, z_mu, z_var, Z, ldj, _, _ = model(x, prob_all=1.0)
             z0, zk = Z[0], Z[-1]

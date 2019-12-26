@@ -77,7 +77,8 @@ parser.add_argument('--no_lr_schedule', action='store_true', default=False, help
 parser.add_argument('--regularization_rate', type=float, default=0.4, help='Regularization penalty for boosting.')
 parser.add_argument('--burnin', type=int, default=25, help='number of extra epochs to run the first component of a boosted model.')
 
-# flow parameters
+# model parameters
+parser.add_argument('--vae_layers', type=str, default='linear', choices=['linear', 'convolutional'], help="Type of layers in VAE's encoder and decoder.")
 parser.add_argument('--z_size', type=int, default=64, help='how many stochastic hidden units')
 parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
 parser.add_argument('--flow', type=str, default='no_flow', help="Type of flows to use, no flows can also be selected",
