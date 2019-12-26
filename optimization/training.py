@@ -263,10 +263,6 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
     train_ratio = []
 
     for batch_id, (x, _) in enumerate(train_loader):
-
-        if batch_id > 100:
-            break
-        
         x = x.to(args.device)
 
         if args.dynamic_binarization:
