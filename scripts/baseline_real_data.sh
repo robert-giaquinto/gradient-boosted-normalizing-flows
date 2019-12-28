@@ -6,6 +6,7 @@ source ./venv/bin/activate
 
 # variables specific to this experiment
 experiment_name=baseline
+vae_layers=linear
 
 
 for dataset in mnist
@@ -14,19 +15,20 @@ do
     for h_size in 128 192 256
     do
         # realnvp
-        for num_flows in 1 #2
+        for num_flows in 1 2
         do
             python main_experiment.py --dataset ${dataset} \
                    --experiment_name ${experiment_name} \
                    --validation \
                    --no_cuda \
                    --manual_seed ${manual_seed} \
-                   --num_workers ${num_workers} \
+                   --num_workers 2 \
                    --epochs ${epochs} \
                    --learning_rate ${learning_rate} \
                    --no_lr_schedule \
                    --early_stopping_epochs ${early_stop} \
                    --annealing_schedule ${annealing_schedule} \
+                   --vae_layers ${vae_layers} \
                    --batch_size ${batch_size} \
                    --num_flows ${num_flows} \
                    --flow realnvp \
@@ -38,28 +40,30 @@ do
         done
         
         # iaf
-        for num_hidden_layers in 0 #1 2
+        for num_hidden_layers in 0 1
         do
             python main_experiment.py --dataset ${dataset} \
                    --experiment_name ${experiment_name} \
                    --validation \
                    --no_cuda \
                    --manual_seed ${manual_seed} \
-                   --num_workers ${num_workers} \
+                   --num_workers 2 \
                    --epochs ${epochs} \
                    --learning_rate ${learning_rate} \
                    --no_lr_schedule \
                    --early_stopping_epochs ${early_stop} \
                    --annealing_schedule ${annealing_schedule} \
+                   --vae_layers ${vae_layers} \
                    --batch_size ${batch_size} \
                    --num_flows ${num_flows} \
                    --flow iaf \
                    --num_base_layers ${num_hidden_layers} \
                    --num_flows 1 \
                    --h_size ${h_size} \
-                   --plot_interval ${plotting} ;
+                   --plot_interval ${plotting} &
         done
     done
+    wait
 
     # basic flows only need to tune num_flows
     for flow_depth in 4 8 16 32
@@ -71,12 +75,13 @@ do
                    --validation \
                    --no_cuda \
                    --manual_seed ${manual_seed} \
-                   --num_workers ${num_workers} \
+                   --num_workers 1 \
                    --epochs ${epochs} \
                    --learning_rate ${learning_rate} \
                    --no_lr_schedule \
                    --early_stopping_epochs ${early_stop} \
                    --annealing_schedule ${annealing_schedule} \
+                   --vae_layers ${vae_layers} \
                    --batch_size ${batch_size} \
                    --flow ${flow} \
                    --num_flows ${flow_depth} \
@@ -89,13 +94,14 @@ do
                --validation \
                --no_cuda \
                --manual_seed ${manual_seed} \
-               --num_workers ${num_workers} \
+               --num_workers 1 \
                --epochs ${epochs} \
-               --learning_rate 0.0005 \
+               --learning_rate 0.0001 \
                --no_lr_schedule \
                --no_annealing \
                --early_stopping_epochs ${early_stop} \
                --annealing_schedule ${annealing_schedule} \
+               --vae_layers ${vae_layers} \
                --batch_size ${batch_size} \
                --flow nlsq \
                --num_flows ${flow_depth} \
@@ -107,17 +113,18 @@ do
                --validation \
                --no_cuda \
                --manual_seed ${manual_seed} \
-               --num_workers ${num_workers} \
+               --num_workers 1 \
                --epochs ${epochs} \
                --learning_rate ${learning_rate} \
                --no_lr_schedule \
                --early_stopping_epochs ${early_stop} \
                --annealing_schedule ${annealing_schedule} \
+               --vae_layers ${vae_layers} \
                --batch_size ${batch_size} \
                --flow orthogonal \
                --num_ortho_vecs 16 \
                --num_flows ${flow_depth} \
-               --plot_interval ${plotting} ;
+               --plot_interval ${plotting} &
     done
 
     # affine
@@ -126,18 +133,22 @@ do
            --validation \
            --no_cuda \
            --manual_seed ${manual_seed} \
-           --num_workers ${num_workers} \
+           --num_workers 1 \
            --epochs ${epochs} \
            --learning_rate ${learning_rate} \
            --no_lr_schedule \
            --early_stopping_epochs ${early_stop} \
            --annealing_schedule ${annealing_schedule} \
+           --vae_layers ${vae_layers} \
            --batch_size ${batch_size} \
            --flow affine \
            --num_flows 1 \
-           --plot_interval ${plotting} ;
-
+           --plot_interval ${plotting} &
+    wait
+    
 done
+wait
+echo "Job complete"
 
 
     

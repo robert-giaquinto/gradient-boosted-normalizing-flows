@@ -13,6 +13,7 @@ results/orinjade
 results/codefix
 results/fulliautomatix
 results/remote_snapshots
+results/msi
 scripts/test*
 *~
 #*#

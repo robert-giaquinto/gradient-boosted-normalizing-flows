@@ -8,5 +8,5 @@ manual_seed=123
 num_workers=1
 burnin=50
 annealing_schedule=100
-learning_rate=0.005
+learning_rate=0.001
 

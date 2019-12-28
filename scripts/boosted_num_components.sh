@@ -1,6 +1,3 @@
-# Hypothesis: More components should lower the loss
-# Experiment: Run planar flows for varying numbers of components
-
 # Load defaults for all experiments
 source ./scripts/experiment_config.sh
 
@@ -9,126 +6,38 @@ source ./venv/bin/activate
 
 # define variable specific to this experiment
 exp_name=num_components
-regularization=0.1
-flow_length=2
+epochs=600
+vae_layers=linear
 
-
-# 1 component
-python main_experiment.py --dataset ${dataset} \
-       --validation \
-       --experiment_name ${exp_name} \
-       --num_workers ${num_workers} \
-       --epochs ${epochs} \
-       --early_stopping_epochs ${early_stop} \
-       --annealing_schedule ${annealing_schedule} \
-       --burnin ${burnin} \
-       --z_size ${z_size} \
-       --flow boosted \
-       --regularization_rate ${regularization} \
-       --num_flows ${flow_length} \
-       --component_type ${component_type} \
-       --num_components 1 \
-       --batch_size ${batch_size} \
-       --manual_seed ${seed} \
-       --log_interval ${log} \
-       --plot_interval ${plot} &
-
-# 2 component
-python main_experiment.py --dataset ${dataset} \
-       --validation \
-       --experiment_name ${exp_name} \
-       --num_workers ${num_workers} \
-       --epochs ${epochs} \
-       --early_stopping_epochs ${early_stop} \
-       --annealing_schedule ${annealing_schedule} \
-       --burnin ${burnin} \
-       --z_size ${z_size} \
-       --flow boosted \
-       --regularization_rate ${regularization} \
-       --num_flows ${flow_length} \
-       --component_type ${component_type} \
-       --num_components 2 \
-       --batch_size ${batch_size} \
-       --manual_seed ${seed} \
-       --log_interval ${log} \
-       --plot_interval ${plot} &
-
-# 3 component
-python main_experiment.py --dataset ${dataset} \
-       --validation \
-       --experiment_name ${exp_name} \
-       --num_workers ${num_workers} \
-       --epochs ${epochs} \
-       --early_stopping_epochs ${early_stop} \
-       --annealing_schedule ${annealing_schedule} \
-       --burnin ${burnin} \
-       --z_size ${z_size} \
-       --flow boosted \
-       --regularization_rate ${regularization} \
-       --num_flows ${flow_length} \
-       --component_type ${component_type} \
-       --num_components 3 \
-       --batch_size ${batch_size} \
-       --manual_seed ${seed} \
-       --log_interval ${log} \
-       --plot_interval ${plot} &
-
-# 4 component
-python main_experiment.py --dataset ${dataset} \
-       --validation \
-       --experiment_name ${exp_name} \
-       --num_workers ${num_workers} \
-       --epochs ${epochs} \
-       --early_stopping_epochs ${early_stop} \
-       --annealing_schedule ${annealing_schedule} \
-       --burnin ${burnin} \
-       --z_size ${z_size} \
-       --flow boosted \
-       --regularization_rate ${regularization} \
-       --num_flows ${flow_length} \
-       --component_type ${component_type} \
-       --num_components 4 \
-       --batch_size ${batch_size} \
-       --manual_seed ${seed} \
-       --log_interval ${log} \
-       --plot_interval ${plot} &
-
-# 5 component
-python main_experiment.py --dataset ${dataset} \
-       --validation \
-       --experiment_name ${exp_name} \
-       --num_workers ${num_workers} \
-       --epochs ${epochs} \
-       --early_stopping_epochs ${early_stop} \
-       --annealing_schedule ${annealing_schedule} \
-       --burnin ${burnin} \
-       --z_size ${z_size} \
-       --flow boosted \
-       --regularization_rate ${regularization} \
-       --num_flows ${flow_length} \
-       --component_type ${component_type} \
-       --num_components 5 \
-       --batch_size ${batch_size} \
-       --manual_seed ${seed} \
-       --log_interval ${log} \
-       --plot_interval ${plot} &
-
-# 6 component
-python main_experiment.py --dataset ${dataset} \
-       --validation \
-       --experiment_name ${exp_name} \
-       --num_workers ${num_workers} \
-       --epochs ${epochs} \
-       --early_stopping_epochs ${early_stop} \
-       --annealing_schedule ${annealing_schedule} \
-       --burnin ${burnin} \
-       --z_size ${z_size} \
-       --flow boosted \
-       --regularization_rate ${regularization} \
-       --num_flows ${flow_length} \
-       --component_type ${component_type} \
-       --num_components 6 \
-       --batch_size ${batch_size} \
-       --manual_seed ${seed} \
-       --log_interval ${log} \
-       --plot_interval ${plot} ;
+for num_components in 2 4 8
+do
+    for regularization_rate in 0.9 0.95 1.0 1.05 1.1 1.25
+    do
+        python main_experiment.py --dataset mnist \
+               --experiment_name ${experiment_name} \
+               --validation \
+               --no_cuda \
+               --num_workers ${num_workers} \
+               --no_lr_schedule \
+               --learning_rate 0.0005 \
+               --epochs ${epochs} \
+               --early_stopping_epochs 0 \
+               --burnin 0 \
+               --annealing_schedule 100 \
+               --vae_layers ${vae_layers} \
+               --flow boosted \
+               --component_type realnvp \
+               --num_base_layers 1 \
+               --base_network relu \
+               --h_size 128 \
+               --num_components ${num_components} \
+               --regularization_rate ${regularization_rate} \
+               --num_flows 1 \
+               --z_size ${z_size} \
+               --batch_size ${batch_size} \
+               --manual_seed ${manual_seed} \
+               --plot_interval ${plotting} &
+    done
+done
+wait
+echo "Job complete"

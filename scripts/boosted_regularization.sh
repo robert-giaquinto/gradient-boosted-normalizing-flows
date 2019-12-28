@@ -8,6 +8,7 @@ source ./venv/bin/activate
 experiment_name=regularization
 num_components=2
 epochs=600
+vae_layer=linear
 
 for learning_rate in 0.0005 0.001
 do
@@ -24,7 +25,7 @@ do
                --early_stopping_epochs 0 \
                --burnin 0 \
                --annealing_schedule 100 \
-               --vae_layers convolutional \
+               --vae_layers ${vae_layers} \
                --flow boosted \
                --component_type realnvp \
                --num_base_layers 1 \
@@ -39,4 +40,5 @@ do
                --plot_interval ${plotting} &
     done
 done
-
+wait
+echo "Job complete"

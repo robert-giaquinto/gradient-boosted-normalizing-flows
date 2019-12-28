@@ -122,7 +122,8 @@ def parse_args(main_args=None):
     # intialize snapshots directory for saving models and results
     args.model_signature = str(datetime.datetime.now())[0:19].replace(' ', '_').replace(':', '_').replace('-', '_')
     args.experiment_name = args.experiment_name + "_" if args.experiment_name is not None else ""
-    args.snap_dir = os.path.join(args.out_dir, args.experiment_name + args.flow + '_')
+    vae_type = "vae_" if args.vae_layers == "linear" else "cvae_"
+    args.snap_dir = os.path.join(args.out_dir, args.experiment_name + vae_type + args.flow + '_')
 
     if args.flow != 'no_flow':
         args.snap_dir += 'K' + str(args.num_flows)
