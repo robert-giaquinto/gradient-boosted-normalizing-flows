@@ -29,6 +29,7 @@ logger = logging.getLogger(__name__)
 
 TOY_DATASETS = ["8gaussians", "2gaussians", "1gaussian",  "swissroll", "rings", "moons", "pinwheel", "cos", "2spirals", "checkerboard", "line", "circles", "joint_gaussian"]
 ENERGY_FUNS = ['u0', 'u1', 'u2', 'u3', 'u4', 'u5']
+G_MAX_LOSS = -10.0
 
 parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')
 
@@ -49,9 +50,9 @@ parser.add_argument('--num_workers', type=int, default=1,
 parser.add_argument('--no_cuda', action='store_true', default=False, help='disables CUDA training')
 
 # Reporting
-parser.add_argument('--log_interval', type=int, default=0,
+parser.add_argument('--log_interval', type=int, default=1000,
                     help='how many batches to wait before logging training status. Set to <0 to turn off.')
-parser.add_argument('--plot_interval', type=int, default=10,
+parser.add_argument('--plot_interval', type=int, default=1000,
                     help='how many batches to wait before creating reconstruction plots. Set to <0 to turn off.')
 
 parser.add_argument('--experiment_name', type=str, default="density_evaluation",
@@ -89,7 +90,7 @@ parser.add_argument('--num_flows', type=int, default=2, help='Number of flow lay
 
 parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--num_base_layers', type=int, default=1, help='Number of layers in the base network of iaf and realnvp. Ignored for all other flows.')
-parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual'])
+parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual', 'tanh', 'random'])
 parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers')
 parser.set_defaults(batch_norm=True)
 parser.add_argument('--z_size', type=int, default=2, help='how many stochastic hidden units')
@@ -97,7 +98,7 @@ parser.add_argument('--z_size', type=int, default=2, help='how many stochastic h
 # Bagging/Boosting parameters
 parser.add_argument('--num_components', type=int, default=4,
                     help='How many components are combined to form the flow')
-parser.add_argument('--component_type', type=str, default='affine', choices=['liniaf', 'affine', 'nlsq', 'realnvp'],
+parser.add_argument('--component_type', type=str, default='affine', choices=['liniaf', 'affine', 'nlsq', 'realnvp', 'realnvp2'],
                     help='When flow is boosted -- what type of flow should each component implement.')
 
 
@@ -218,10 +219,8 @@ def compute_kl_qp_loss(model, target_fn, beta, args):
             loss = g_lhood - p_log_prob
         else:
             G_log_prob = model.base_dist.log_prob(z_G[0]).sum(1)
-            G_lhood = torch.max(G_log_prob - boosted_ldj, torch.ones_like(boosted_ldj) * -10.0)
+            G_lhood = torch.max(G_log_prob - boosted_ldj, torch.ones_like(boosted_ldj) * G_MAX_LOSS)
             loss =  G_lhood - p_log_prob + g_lhood * args.regularization_rate
-
-            #print(f"\nzg_k\n{z_g[-1][0:2].data}\nzg_0\n{z_g[0][0:2].data}\nzG_0\n{z_G[0][0:2].data}\ng_loss\n{g_loss[0:2].data}\nG_loss\n{G_loss[0:2].data}\np\n{p_log_prob[0:2].data}")
 
         return loss.mean(0), (g_lhood.mean().item(), G_lhood.mean().item(), p_log_prob.mean().item())
 
@@ -242,22 +241,20 @@ def compute_kl_pq_loss(model, data_sampler, beta, args):
 
     ADAPTED FROM: https://arxiv.org/pdf/1904.04676.pdf (https://github.com/kamenbliznashki/normalizing_flows/blob/master/bnaf.py)
     """
-    
     sample = data_sampler(args.batch_size).to(args.device)
     
     if args.flow == "boosted":
         density_from = '-c' if model.all_trained else '1:c-1'
         sample_from = 'c'
-            
+        
         Z_g, g_ldj, Z_G, G_ldj = model.flow(sample, sample_from=sample_from, density_from=density_from)
         g_log_prob = model.base_dist.log_prob(Z_g[-1]).sum(1)
         g_lhood = g_log_prob + g_ldj
-        g_lhood = torch.max(g_lhood, torch.ones_like(g_ldj) * -10.0)
         
         if model.all_trained or model.component > 0:
             G_log_prob = model.base_dist.log_prob(Z_G[-1]).sum(1)
             G_lhood = G_log_prob + G_ldj
-            G_lhood = torch.max(G_lhood, torch.ones_like(G_ldj) * -10.0)
+            G_lhood = torch.max(G_lhood, torch.ones_like(G_ldj) * G_MAX_LOSS)
             loss =  -1.0 * g_lhood + G_lhood * args.regularization_rate
         else:
             G_lhood = torch.zeros_like(g_lhood)
@@ -274,36 +271,69 @@ def compute_kl_pq_loss(model, data_sampler, beta, args):
 
 @torch.no_grad()
 def rho_gradient(model, target_or_sample_fn, args):
-    # TODO rename these from loss to lhoods
     if args.density_matching:
         # density matching of a target function
-        z = model.base_dist.sample((args.batch_size,))
-        q_log_prob = model.base_dist.log_prob(z).sum(1)
+        #z = model.base_dist.sample((args.batch_size,))
+        #q_log_prob = model.base_dist.log_prob(z).sum(1)
 
-        g_zk, _, _, g_ldj = model.flow(z, sample_from="c", density_from="1:c")
-        p_log_prob_g = -1.0 * target_or_sample_fn(g_zk[-1])  # p = exp(-potential) => log_p = - potential
-        loss_wrt_g = q_log_prob - g_ldj - p_log_prob_g
+        #g_zk, _, _, g_ldj = model.flow(z, sample_from="c", density_from="1:c", debug=False)
+        #p_log_prob_g = -1.0 * target_or_sample_fn(g_zk[-1])  # p = exp(-potential) => log_p = - potential
+        #loss_wrt_g = q_log_prob - g_ldj - p_log_prob_g
 
         fixed_components = "-c" if model.all_trained else "1:c-1"
-        G_zk, _, _, G_ldj = model.flow(z, sample_from=fixed_components, density_from="1:c")
-        p_log_prob_G = -1.0 * target_or_sample_fn(G_zk[-1])  # p = exp(-potential) => log_p = - potential
-        loss_wrt_G = q_log_prob - G_ldj - p_log_prob_G
+        #G_zk, _, _, G_ldj = model.flow(z, sample_from=fixed_components, density_from="1:c", debug=False)
+        #p_log_prob_G = -1.0 * target_or_sample_fn(G_zk[-1])  # p = exp(-potential) => log_p = - potential
+        #loss_wrt_G = q_log_prob - G_ldj - p_log_prob_G
 
+        z0 = model.base_dist.sample((args.num_components * args.batch_size * 50,))
+        g_zk, g_ldj = [], []
+        G_zk, G_ldj = [], []
+        for z0_i in z0.split(args.batch_size, dim=0):
+            gZ_i, _, _, g_ldj_i = model.flow(z0_i, sample_from="c", density_from="1:c")
+            g_zk += [gZ_i[-1]]  # grab K-th element
+            g_ldj += [g_ldj_i]
+            GZ_i, _, _, G_ldj_i = model.flow(z0_i, sample_from=fixed_components, density_from="1:c")
+            G_zk += [GZ_i[-1]]  # grab K-th element
+            G_ldj += [G_ldj_i]
+        
+        g_zk, g_ldj = torch.cat(g_zk, 0), torch.cat(g_ldj, 0)
+        G_zk, G_ldj = torch.cat(G_zk, 0), torch.cat(G_ldj, 0)
+        
+        q_log_prob = model.base_dist.log_prob(z0).sum(1)
+        p_log_prob_g = -1.0 * target_or_sample_fn(g_zk)  # p = exp(-potential) => log_p = - potential
+        loss_wrt_g = q_log_prob - g_ldj - p_log_prob_g
+        p_log_prob_G = -1.0 * target_or_sample_fn(G_zk)  # p = exp(-potential) => log_p = - potential
+        loss_wrt_G = q_log_prob - G_ldj - p_log_prob_G
+        
     else:
         # estimate density from a sampler
-        sample = target_or_sample_fn(args.batch_size).to(args.device)
+        # sample = target_or_sample_fn(args.batch_size).to(args.device)
+        # g_zk, _, _, g_ldj = model.flow(sample, sample_from="c", density_from="1:c")
+        # loss_wrt_g = -1.0 * (model.base_dist.log_prob(g_zk[-1]).sum(1) + g_ldj)
+        # G_zk, _, _, G_ldj = model.flow(sample, sample_from="1:c-1", density_from="1:c")
+        # loss_wrt_G = -1.0 * (model.base_dist.log_prob(G_zk[-1]).sum(1) + G_ldj)
 
-        g_zk, _, _, g_ldj = model.flow(sample, sample_from="c", density_from="1:c")
-        loss_wrt_g = -1.0 * (model.base_dist.log_prob(g_zk[-1]).sum(1) + g_ldj)
-                
-        G_zk, _, _, G_ldj = model.flow(sample, sample_from="1:c-1", density_from="1:c")
-        loss_wrt_G = -1.0 * (model.base_dist.log_prob(G_zk[-1]).sum(1) + G_ldj)
+        sample = target_or_sample_fn(args.num_components * args.batch_size * 50).to(args.device)
+        g_zk, g_ldj = [], []
+        G_zk, G_ldj = [], []
+        for sample_i in sample.split(args.batch_size, dim=0):
+            g_zk_i, _, _, g_ldj_i = model.flow(sample_i, sample_from="c", density_from="1:c")
+            g_zk += [g_zk_i[-1]]
+            g_ldj += [g_ldj_i]
+            G_zk_i, _, _, G_ldj_i = model.flow(sample_i, sample_from="1:c-1", density_from="1:c")
+            G_zk += [G_zk_i[-1]]
+            G_ldj += [G_ldj_i]
+
+        g_zk, g_ldj = torch.cat(g_zk, 0), torch.cat(g_ldj, 0)
+        G_zk, G_ldj = torch.cat(G_zk, 0), torch.cat(G_ldj, 0)  
+
+        loss_wrt_g = -1.0 * (model.base_dist.log_prob(g_zk).sum(1) + g_ldj)
+        loss_wrt_G = -1.0 * (model.base_dist.log_prob(G_zk).sum(1) + G_ldj)
 
     return loss_wrt_g.mean(0).detach().item(), loss_wrt_G.mean(0).detach().item()
 
 
 def update_rho(model, target_or_sample_fn, args):
-    # TODO rename loss to lhood
     if model.component == 0 and model.all_trained == False:
         return
     
@@ -314,18 +344,21 @@ def update_rho(model, target_or_sample_fn, args):
         print(f"\n\nUpdating weight for component {model.component} (all_trained={str(model.all_trained)})", file=rho_log)
         print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in model.rho.data]), file=rho_log)
             
-        step_size = 0.005
+        step_size = 0.01
         tolerance = 0.00001
-        min_iters = 15
-        max_iters = 250 if model.all_trained else 50
-        prev_rho = model.rho[model.component].item()
-
+        min_iters = 25
+        max_iters = 250 if model.all_trained else 100
+        prev_rho = model.rho.data[model.component].item()
         for batch_id in range(max_iters):
 
             loss_wrt_g, loss_wrt_G = rho_gradient(model, target_or_sample_fn, args)
+            if math.isnan(loss_wrt_g) or math.isnan(loss_wrt_G):
+                print("NaN encountered, breaking", file=rho_log)
+                break
+            
             gradient = loss_wrt_g - loss_wrt_G                
             ss = step_size / (0.025 * batch_id + 1)
-            rho = min(max(prev_rho - ss * gradient, 0.001), 1.0)
+            rho = min(max(prev_rho - ss * gradient, 0.01), 1.0)
 
             grad_msg = f'{batch_id: >3}. rho = {prev_rho:5.3f} -  {gradient:4.2f} * {ss:5.3f} = {rho:5.3f}'
             loss_msg = f"\tg vs G. Loss: ({loss_wrt_g:5.1f}, {loss_wrt_G:5.1f})."
@@ -363,9 +396,12 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
 
     if args.flow == "boosted":
         model.component = 0
+        prev_lr = []
         for c in range(args.num_components):
             optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
-
+            prev_lr.append(args.learning_rate)
+        for n, param in model.named_parameters():
+            param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
             
     for batch_id in range(args.num_steps):
         model.train()
@@ -380,43 +416,45 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
             target_or_sample_fn = make_toy_density(args)
 
         loss, loss_terms = loss_fn(model, target_or_sample_fn, beta, args)
-        
-        loss.backward()
+        loss.backward(retain_graph=True)
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
         if not args.no_lr_schedule:
             scheduler.step(loss)
+            if args.flow == "boosted":
+                prev_lr[model.component] = optimizer.param_groups[model.component]['lr']
 
         boosted_component_converged = args.flow == "boosted" and batch_id % args.iters_per_component == 0 and batch_id > 0
-        new_boosted_component = batch_id % args.iters_per_component == 1 and args.flow == "boosted"
-        if new_boosted_component or batch_id % args.log_interval == 0:
-            msg = f'{args.dataset}: step {batch_id:5d} / {args.num_steps}; loss {loss.item():6.3f} (beta={beta:5.4f})'
-
+        new_boosted_component = args.flow == "boosted" and batch_id % args.iters_per_component == 1
+        if boosted_component_converged or new_boosted_component or batch_id % args.log_interval == 0:
+            msg = f'{args.dataset}: step {batch_id:5d} / {args.num_steps}; loss {loss.item():8.3f} (beta={beta:5.4f})'
             if args.flow == "boosted":
                 msg += f' | g vs G ({loss_terms[0]:8.3f}, {loss_terms[1]:8.3f})'
                 msg += f' | p_log_prob {loss_terms[2]:8.3f}' if args.density_matching else ''
                 msg += f' | c={model.component} (all={str(model.all_trained)[0]})'
                 msg += f' | Rho=[' + ', '.join([f"{val:4.2f}" for val in model.rho.data]) + "]"
+                msg += f' | ' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.4f}" for c in range(model.num_components)])
             else:
                 msg += f' | q_log_prob {loss_terms[0]:8.3f}'
                 msg += f' | ldj {loss_terms[1]:8.3f}'
                 msg += f' | p_log_prob {loss_terms[2]:7.3f}' if args.density_matching else ''
-
             logger.info(msg)
 
         if boosted_component_converged:
             update_rho(model, target_or_sample_fn, args)
+            model.increment_component()
 
-        if batch_id % args.plot_interval == 0 or new_boosted_component:
+            # update learning rates
+            for c in range(model.num_components):
+                optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
+            for n, param in model.named_parameters():
+                param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
+
+        if (batch_id % args.plot_interval == 0) or boosted_component_converged:
             with torch.no_grad():
                 plot(batch_id, model, target_or_sample_fn, args)
 
-        # increment component for boosted model
-        if boosted_component_converged:
-            model.increment_component()
-            # update learning rates
-            for c in range(model.num_components):
-                optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
+            
 
  
 def main(main_args=None):

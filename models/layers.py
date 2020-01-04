@@ -208,23 +208,37 @@ class ReLUNet(nn.Module):
 
     TODO: change this to a Fully Connected Network with a activation passed as an argument
     """
-    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=1, use_batch_norm=False):
+    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=1):
         super().__init__()
 
         layers = []
         layers += [nn.Linear(in_dim, hidden_dim)]
-        layers += [nn.ReLU()]
+        layers += []
         for i in range(num_layers):
-            layers += [nn.Linear(hidden_dim, hidden_dim)]
-            layers += [nn.ReLU()]
-            if use_batch_norm:
-                layers += [nn.BatchNorm1d(hidden_dim)]
+            layers += [nn.ReLU(), nn.Linear(hidden_dim, hidden_dim)]
 
-        layers += [nn.Linear(hidden_dim, out_dim)]
+        layers += [nn.ReLU(), nn.Linear(hidden_dim, out_dim)]
         self.network = nn.Sequential(*layers)
         
     def forward(self, x):
         return self.network(x)
+
+
+class TanhNet(nn.Module):
+    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=1):
+        super().__init__()
+
+        layers = []
+        layers += [nn.Linear(in_dim, hidden_dim)]
+        for i in range(num_layers):
+            layers += [nn.Tanh(), nn.Linear(hidden_dim, hidden_dim)]
+
+        layers += [nn.Tanh(), nn.Linear(hidden_dim, out_dim)]
+        self.network = nn.Sequential(*layers)
+        
+    def forward(self, x):
+        return self.network(x)
+
 
 
 class ResidualBlock(nn.Module):
@@ -237,12 +251,6 @@ class ResidualBlock(nn.Module):
         super().__init__()
         
         self.activation = nn.ReLU()
-        self.use_batch_norm = use_batch_norm
-        if use_batch_norm:
-            self.batch_norm_layers = nn.ModuleList([
-                nn.BatchNorm1d(hidden_dim, eps=1e-3)
-                for _ in range(2)
-            ])
 
         self.linear_layers = nn.ModuleList([
             nn.Linear(hidden_dim, hidden_dim)
@@ -255,12 +263,8 @@ class ResidualBlock(nn.Module):
 
     def forward(self, inputs):
         temps = inputs
-        if self.use_batch_norm:
-            temps = self.batch_norm_layers[0](temps)
         temps = self.activation(temps)
         temps = self.linear_layers[0](temps)
-        if self.use_batch_norm:
-            temps = self.batch_norm_layers[1](temps)
         temps = self.activation(temps)
         temps = self.linear_layers[1](temps)
         return inputs + temps
@@ -272,7 +276,7 @@ class ResidualNet(nn.Module):
 
     TODO: include context features (could be an output of encoder in VAE setup)?
     """
-    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=2, use_batch_norm=True):
+    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=2):
         """
         Note: num_layers refers to the number of residual net blocks (each with 2 linear layers)
         """
@@ -283,7 +287,6 @@ class ResidualNet(nn.Module):
         self.blocks = nn.ModuleList([
             ResidualBlock(
                 hidden_dim=hidden_dim,
-                use_batch_norm=use_batch_norm,
             ) for _ in range(num_layers)
         ])
         self.final_layer = nn.Linear(hidden_dim, out_dim)
@@ -294,3 +297,59 @@ class ResidualNet(nn.Module):
             temps = block(temps)
         outputs = self.final_layer(temps)
         return outputs
+
+
+class BatchNorm(nn.Module):
+    """
+    RealNVP BatchNorm layer
+    """
+    def __init__(self, input_size, momentum=0.9, eps=1e-5):
+        super().__init__()
+        self.momentum = momentum
+        self.eps = eps
+
+        self.log_gamma = nn.Parameter(torch.zeros(input_size))
+        self.beta = nn.Parameter(torch.zeros(input_size))
+
+        self.register_buffer('running_mean', torch.zeros(input_size))
+        self.register_buffer('running_var', torch.ones(input_size))
+        self.register_buffer('batch_mean', torch.zeros(input_size))
+        self.register_buffer('batch_var', torch.zeros(input_size))
+
+    def forward(self, x):
+        if self.training:
+            self.batch_mean = x.mean(0)
+            self.batch_var = x.var(0) # note MAF paper uses biased variance estimate; ie x.var(0, unbiased=False)
+
+            # update running mean
+            self.running_mean.mul_(self.momentum).add_(self.batch_mean.data * (1 - self.momentum))
+            self.running_var.mul_(self.momentum).add_(self.batch_var.data * (1 - self.momentum))
+
+            mean = self.batch_mean
+            var = self.batch_var
+        else:
+            mean = self.running_mean
+            var = self.running_var
+
+        # compute normalized input (cf original batch norm paper algo 1)
+        x_hat = (x - mean) / torch.sqrt(var + self.eps)
+        y = self.log_gamma.exp() * x_hat + self.beta
+
+        # compute log_abs_det_jacobian (cf RealNVP paper)
+        log_abs_det_jacobian = self.log_gamma - 0.5 * torch.log(var + self.eps)
+        return y, torch.sum(log_abs_det_jacobian.expand_as(x), dim=1)
+
+    def inverse(self, y):
+        if self.training:
+            mean = self.batch_mean
+            var = self.batch_var
+        else:
+            mean = self.running_mean
+            var = self.running_var
+
+        x_hat = (y - self.beta) * torch.exp(-self.log_gamma)
+        x = x_hat * torch.sqrt(var + self.eps) + mean
+
+        log_abs_det_jacobian = 0.5 * torch.log(var + self.eps) - self.log_gamma
+        return x, torch.sum(log_abs_det_jacobian.expand_as(x), dim=1)
+    

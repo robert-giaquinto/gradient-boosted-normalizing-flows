@@ -1,8 +1,13 @@
-# Load defaults for all experiments
-source ./scripts/experiment_config_density.sh
+cd /export/scratch/robert/ensemble-normalizing-flows
 
 # activate virtual environment
-source ./venv/bin/activate
+module unload soft/python
+module load soft/python/anaconda
+source /soft/python/anaconda/Linux_x86_64/etc/profile.d/conda.sh
+conda activate env
+
+# Load defaults for all experiments
+source ./scripts/experiment_config_density.sh
 
 # variables specific to this experiment
 exp_name=too_much_tuna
@@ -18,7 +23,7 @@ do
     for num_components in 4 8
     do
         
-        python density.py --dataset ${dataset} \
+        python -m density_experiment --dataset ${dataset} \
                --experiment_name ${exp_name} \
                --no_cuda \
                --no_annealing \
@@ -41,7 +46,7 @@ do
     done
 
     # show for a two components too
-    python density.py --dataset ${dataset} \
+    python -m density_experiment --dataset ${dataset} \
            --experiment_name ${exp_name} \
            --no_cuda \
            --no_annealing \

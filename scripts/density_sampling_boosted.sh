@@ -1,8 +1,13 @@
-# Load defaults for all experiments
-source ./scripts/experiment_config_density.sh
+cd /export/scratch/robert/ensemble-normalizing-flows
 
 # activate virtual environment
-source ./venv/bin/activate
+module unload soft/python
+module load soft/python/anaconda
+source /soft/python/anaconda/Linux_x86_64/etc/profile.d/conda.sh
+conda activate env
+
+# Load defaults for all experiments
+source ./scripts/experiment_config_density.sh
 
 # variables specific to this experiment
 num_steps=400001
@@ -24,7 +29,7 @@ do
                 
                 for num_flows in 1 2
                 do
-                    python density.py --dataset ${dataset} \
+                    python -m density_experiment --dataset ${dataset} \
                            --experiment_name ${exp_name} \
                            --no_cuda \
                            --no_lr_schedule \
@@ -51,7 +56,7 @@ do
             done
             
             # affine (1 flow)
-            python density.py --dataset ${dataset} \
+            python -m density_experiment --dataset ${dataset} \
                    --experiment_name ${exp_name} \
                    --no_cuda \
                    --no_lr_schedule \

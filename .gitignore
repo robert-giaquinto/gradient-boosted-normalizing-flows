@@ -15,5 +15,6 @@ results/fulliautomatix
 results/remote_snapshots
 results/msi
 scripts/test*
+scripts/archive
 *~
 #*#

@@ -1,8 +1,13 @@
-# Load defaults for all experiments
-source ./scripts/experiment_config_density.sh
+cd /export/scratch/robert/ensemble-normalizing-flows
 
 # activate virtual environment
-source ./venv/bin/activate
+module unload soft/python
+module load soft/python/anaconda
+source /soft/python/anaconda/Linux_x86_64/etc/profile.d/conda.sh
+conda activate env
+
+# Load defaults for all experiments
+source ./scripts/experiment_config_density.sh
 
 # variables specific to this experiment
 num_steps=100001
@@ -21,7 +26,7 @@ do
         # realnvp
         for num_flows in 1 2
         do
-            python density.py --dataset ${dataset} \
+            python -m density_experiment --dataset ${dataset} \
                    --experiment_name ${exp_name} \
                    --no_annealing \
                    --no_cuda \
@@ -42,7 +47,7 @@ do
                    --plot_interval ${plotting} &
         done
         # iaf
-        python density.py --dataset ${dataset} \
+        python -m density_experiment --dataset ${dataset} \
                --experiment_name ${exp_name} \
                --no_annealing \
                --no_cuda \
@@ -68,7 +73,7 @@ do
         for num_flows in 1 2 4 8 16
         do
 
-            python density.py --dataset ${dataset} \
+            python -m density_experiment --dataset ${dataset} \
                    --experiment_name ${exp_name} \
                    --no_annealing \
                    --no_cuda \
@@ -84,7 +89,7 @@ do
                    --plot_resolution ${plot_resolution} \
                    --plot_interval ${plotting} &
         done
-        python density.py --dataset ${dataset} \
+        python -m density_experiment --dataset ${dataset} \
                --experiment_name ${exp_name} \
                --no_annealing \
                --no_cuda \

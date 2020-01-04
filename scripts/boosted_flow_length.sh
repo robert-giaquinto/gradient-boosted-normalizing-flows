@@ -1,11 +1,14 @@
-# Hypothesis: A medium size of flow should be best
-# Experiment: Run planar flows for varying flow lengths
+cd /export/scratch/robert/ensemble-normalizing-flows
+
+# activate virtual environment
+module unload soft/python
+module load soft/python/anaconda
+source /soft/python/anaconda/Linux_x86_64/etc/profile.d/conda.sh
+conda activate env
+
 
 # Load defaults for all experiments
 source ./scripts/experiment_config.sh
-
-# activate virtual environment
-source ./venv/bin/activate
 
 # define variable specific to this experiment
 exp_name=flow_length

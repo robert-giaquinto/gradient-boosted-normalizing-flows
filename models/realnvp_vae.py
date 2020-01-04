@@ -5,7 +5,7 @@ import random
 
 from models.vae import VAE
 import models.flows as flows
-from models.layers import ReLUNet, ResidualNet
+from models.layers import ReLUNet, ResidualNet, TanhNet, BatchNorm
 
 
 class RealNVPVAE(VAE):
@@ -16,17 +16,26 @@ class RealNVPVAE(VAE):
         super(RealNVPVAE, self).__init__(args)
         self.num_flows = args.num_flows
         self.density_evaluation = args.density_evaluation
-        self.flow_transformation = flows.RealNVP(dim=self.z_size)
+        self.flow_transformation = flows.RealNVP(dim=self.z_size, use_batch_norm=args.batch_norm)
         
         # Normalizing flow layers
-        base_network = ResidualNet if args.base_network == "residual" else ReLUNet
+        if args.base_network == "relu":
+            base_network = ReLUNet
+        elif args.base_network == "residual":
+            base_network = ResidualNet
+        else:
+            base_network = TanhNet
+
         in_dim = self.z_size // 2
         out_dim = self.z_size // 2
         #out_dim = self.z_size - (self.z_size // 2)
         self.flow_param = nn.ModuleList()
         for k in range(self.num_flows):
-            flow_param_k = nn.ModuleList([base_network(in_dim, out_dim, args.h_size, args.num_base_layers, use_batch_norm=args.batch_norm) for _ in range(4)])
-            self.flow_param.append(flow_param_k)
+            flow_k = [base_network(in_dim, out_dim, args.h_size, args.num_base_layers) for _ in range(4)]
+            if args.batch_norm:
+                flow_k += [BatchNorm(self.z_size)]
+
+            self.flow_param.append(nn.ModuleList(flow_k))
 
     def encode(self, x):
         """
@@ -43,7 +52,7 @@ class RealNVPVAE(VAE):
         log_det_jacobian = 0.0
         Z = [z_0]
         for k in range(self.num_flows):
-            flow_k_networks = self.flow_param[k]
+            flow_k_networks = [self.flow_param[k], k % 2]
             z_k, ldj = self.flow_transformation(Z[k], flow_k_networks)
             Z.append(z_k)
             log_det_jacobian += ldj

@@ -27,17 +27,17 @@ class VAE(nn.Module):
         else:
             self.last_kernel_size = 7
             self.last_pad = 2
-
-        self.use_linear_layers = args.vae_layers == "linear"
-        if self.use_linear_layers:
-            self.input_size = np.prod(args.input_size)
-        else:
-            self.input_size = args.input_size[0]
             
         self.q_z_nn_output_dim = 256
         self.q_z_nn_hidden_dim = 128
 
         if not args.density_evaluation:
+            self.use_linear_layers = args.vae_layers == "linear"
+            if self.use_linear_layers:
+                self.input_size = np.prod(args.input_size)
+            else:
+                self.input_size = args.input_size[0]
+
             self.q_z_nn, self.q_z_mean, self.q_z_var = self.create_encoder()
             self.p_x_nn, self.p_x_mean = self.create_decoder()
 

@@ -91,7 +91,7 @@ parser.add_argument('--num_householder', type=int, default=8, help="For Househol
 # RealNVP (and IAF) parameters
 parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--num_base_layers', type=int, default=1, help='Number of layers in the base network of iaf and realnvp. Ignored for all other flows.')
-parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual'])
+parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual', 'tanh', 'random'])
 parser.add_argument('--batch_norm', action='store_true', default=False, help='Enables batch norm in realnvp layers')
 
 # Boosting parameters
@@ -225,7 +225,7 @@ def init_optimizer(model, args):
         flow_labels = {f"{c}": [] for c in range(args.num_components)}
         vae_params = torch.nn.ParameterList()
         vae_labels = []
-        for name, param in model.named_parameters():            
+        for name, param in model.named_parameters():
             if name.startswith("flow"):
                 pos = name.find(".")
                 component_id = name[(pos + 1):(pos + 2)]
@@ -242,9 +242,10 @@ def init_optimizer(model, args):
             all_params.append(flow_params[f"{c}"])
             logger.info(f"Grouping [{', '.join(flow_labels[str(c)])}] as Component {c}'s parameters.")
 
-        # vae parameters are at the end of the list
-        all_params.append(vae_params)
-        logger.info(f"Grouping [{', '.join(vae_labels)}] as the VAE parameters.\n")
+        # vae parameters are at the end of the list (may not exist if doing density estimation)
+        if len(vae_params) > 0:
+            all_params.append(vae_params)
+            logger.info(f"Grouping [{', '.join(vae_labels)}] as the VAE parameters.\n")
             
         optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=args.learning_rate, eps=1.e-7)
     else:
@@ -254,8 +255,8 @@ def init_optimizer(model, args):
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                            factor=0.5,
                                                            patience=2000,
-                                                           min_lr=5e-4,
-                                                           verbose=True,
+                                                           min_lr=5e-5,
+                                                           verbose=False,
                                                            threshold_mode='abs')
 
     return optimizer, scheduler
