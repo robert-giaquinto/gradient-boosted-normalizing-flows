@@ -19,9 +19,8 @@ plot_resolution=1000
 
 for u in 1 2 3 4
 do
-
     # realnvp and iaf with various h_sizes
-    for h_size in 32 64 128 256
+    for h_size in 64 128 256
     do
         # realnvp
         for num_flows in 1 2
@@ -37,7 +36,6 @@ do
                            --num_workers ${num_workers} \
                            --num_steps ${num_steps} \
                            --learning_rate ${learning_rate} \
-                           --no_annealing \
                            --flow realnvp \
                            --num_flows ${num_flows} \
                            --num_base_layers ${layers} \
@@ -61,7 +59,6 @@ do
         #            --num_workers ${num_workers} \
         #            --num_steps ${num_steps} \
         #            --learning_rate ${learning_rate} \
-        #            --no_annealing \
         #            --flow iaf \
         #            --num_base_layers ${num_hidden_layers} \
         #            --num_flows 1 \
@@ -85,7 +82,6 @@ do
     #                --no_cuda \
     #                --num_steps ${num_steps} \
     #                --learning_rate ${learning_rate} \
-    #                --no_annealing \
     #                --num_workers ${num_workers} \
     #                --flow ${flow} \
     #                --num_flows ${flow_depth} \
@@ -100,7 +96,6 @@ do
     #            --no_cuda \
     #            --num_steps ${num_steps} \
     #            --learning_rate ${learning_rate} \
-    #            --no_annealing \
     #            --num_workers ${num_workers} \
     #            --flow ${flow} \
     #            --num_flows 32 \
@@ -118,7 +113,6 @@ do
     #        --no_cuda \
     #        --num_steps ${num_steps} \
     #        --learning_rate ${learning_rate} \
-    #        --no_annealing \
     #        --num_workers ${num_workers} \
     #        --flow affine \
     #        --num_flows 1 \

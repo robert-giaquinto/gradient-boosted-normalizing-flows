@@ -11,101 +11,85 @@ source ./scripts/experiment_config_density.sh
 
 # variables specific to this experiment
 num_steps=100001
-exp_name=baseline_density_sampling
-logging=1000
+experiment_name=baseline_density_sampling
 plotting=25000
-plot_resolution=500
 
 
-for dataset in 8gaussians 2gaussians 1gaussian swissroll rings moons pinwheel cos 2spirals checkerboard line circles joint_gaussian
+for dataset in 8gaussians swissroll rings moons pinwheel cos 2spirals checkerboard line circles joint_gaussian
 do
-
-    # realnvp and iaf with various h_sizes
-    for h_size in 8 16 32 64 128
+    # realnvp and iaf
+    for h_size in 64 128 256
     do
-        # realnvp
         for num_flows in 1 2
         do
-            python -m density_experiment --dataset ${dataset} \
-                   --experiment_name ${exp_name} \
-                   --no_annealing \
-                   --no_cuda \
-                   --num_workers ${num_workers} \
-                   --num_steps ${num_steps} \
-                   --learning_rate ${learning_rate} \
-                   --num_workers ${num_workers} \
-                   --flow realnvp \
-                   --num_flows ${num_flows} \
-                   --num_base_layers 1 \
-                   --base_network relu \
-                   --h_size ${h_size} \
-                   --z_size ${z_size} \
-                   --batch_size ${batch_size} \
-                   --manual_seed ${seed} \
-                   --log_interval ${logging} \
-                   --plot_resolution ${plot_resolution} \
-                   --plot_interval ${plotting} &
+            for layers in 1 2
+            do
+                for network in tanh relu
+                do
+                    python -m density_experiment --dataset ${dataset} \
+                           --experiment_name ${experiment_name} \
+                           --no_annealing \
+                           --no_cuda \
+                           --num_workers ${num_workers} \
+                           --num_steps ${num_steps} \
+                           --learning_rate ${learning_rate} \
+                           --num_workers ${num_workers} \
+                           --flow realnvp \
+                           --num_flows ${num_flows} \
+                           --num_base_layers ${layers} \
+                           --base_network ${network} \
+                           --h_size ${h_size} \
+                           --batch_size ${batch_size} \
+                           --manual_seed ${manual_seed} \
+                           --log_interval ${logging} \
+                           --plot_resolution ${plot_resolution} \
+                           --plot_interval ${plotting} &
+                done
+            done
         done
-        # iaf
-        python -m density_experiment --dataset ${dataset} \
-               --experiment_name ${exp_name} \
-               --no_annealing \
-               --no_cuda \
-               --num_workers ${num_workers} \
-               --num_steps ${num_steps} \
-               --learning_rate ${learning_rate} \
-               --flow iaf \
-               --num_flows 1 \
-               --h_size ${h_size} \
-               --z_size ${z_size} \
-               --batch_size ${batch_size} \
-               --manual_seed ${seed} \
-               --log_interval ${logging} \
-               --plot_resolution ${plot_resolution} \
-               --plot_interval ${plotting} ;
     done
 
-    # basic flows only need to tune num_flows
-    for flow in planar radial affine nlsq
-    do
+    # # run each basic flows
+    # for num_flows in 1 2 4 8 16 32
+    # do
+    #     # basic flows: planar and radial
+    #     for flow in planar radial
+    #     do
 
-        # run each basic flow in parallel, 1 job for each "num_flows"
-        for num_flows in 1 2 4 8 16
-        do
-
-            python -m density_experiment --dataset ${dataset} \
-                   --experiment_name ${exp_name} \
-                   --no_annealing \
-                   --no_cuda \
-                   --num_workers ${num_workers} \
-                   --num_steps ${num_steps} \
-                   --learning_rate ${learning_rate} \
-                   --flow ${flow} \
-                   --num_flows ${num_flows} \
-                   --z_size ${z_size} \
-                   --batch_size ${batch_size} \
-                   --manual_seed ${seed} \
-                   --log_interval ${logging} \
-                   --plot_resolution ${plot_resolution} \
-                   --plot_interval ${plotting} &
-        done
-        python -m density_experiment --dataset ${dataset} \
-               --experiment_name ${exp_name} \
-               --no_annealing \
-               --no_cuda \
-               --num_workers ${num_workers} \
-               --num_steps ${num_steps} \
-               --learning_rate ${learning_rate} \
-               --flow ${flow} \
-               --num_flows 32 \
-               --z_size ${z_size} \
-               --batch_size ${batch_size} \
-               --manual_seed ${seed} \
-               --log_interval ${logging} \
-               --plot_resolution ${plot_resolution} \
-               --plot_interval ${plotting} ;
-
-    done
-
+    #         python -m density_experiment --dataset ${dataset} \
+    #                --experiment_name ${experiment_name} \
+    #                --no_annealing \
+    #                --no_cuda \
+    #                --num_workers ${num_workers} \
+    #                --num_steps ${num_steps} \
+    #                --learning_rate ${learning_rate} \
+    #                --flow ${flow} \
+    #                --num_flows ${num_flows} \
+    #                --z_size ${z_size} \
+    #                --batch_size ${batch_size} \
+    #                --manual_seed ${seed} \
+    #                --log_interval ${logging} \
+    #                --plot_resolution ${plot_resolution} \
+    #                --plot_interval ${plotting} &
+    #     done
+    #     # run non-linear squared flow with a lower learning rate for safety
+    #     python -m density_experiment --dataset ${dataset} \
+    #            --experiment_name ${experiment_name} \
+    #            --no_annealing \
+    #            --no_cuda \
+    #            --num_workers ${num_workers} \
+    #            --num_steps ${num_steps} \
+    #            --learning_rate 0.0001 \
+    #            --flow ${flow} \
+    #            --num_flows ${num_flows} \
+    #            --z_size ${z_size} \
+    #            --batch_size ${batch_size} \
+    #            --manual_seed ${seed} \
+    #            --log_interval ${logging} \
+    #            --plot_resolution ${plot_resolution} \
+    #            --plot_interval ${plotting} &
+    # done
 done
+wait
+echo "Job complete"
 

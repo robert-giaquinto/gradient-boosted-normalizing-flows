@@ -1,4 +1,3 @@
-
 import argparse
 import datetime
 import torch
@@ -49,7 +48,7 @@ parser.add_argument('--num_workers', type=int, default=1,
                     help='How many CPU cores to run on. Setting to 0 uses os.cpu_count() - 1.')
 parser.add_argument('--no_cuda', action='store_true', default=False, help='disables CUDA training')
 
-# Reporting
+x# Reporting
 parser.add_argument('--log_interval', type=int, default=1000,
                     help='how many batches to wait before logging training status. Set to <0 to turn off.')
 parser.add_argument('--plot_interval', type=int, default=1000,

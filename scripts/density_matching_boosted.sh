@@ -17,9 +17,9 @@ logging=1000
 
 for u in 1 2 3 4
 do
-    for num_components in 2 4 8
+    for num_components in 2 4
     do
-        for regularization_rate in 0.25 0.5 0.75 0.8 0.9 1.0 1.1 1.25
+        for regularization_rate in 0.6 0.8 0.9 1.0 1.1 1.2
         do
             # realnvp and iaf with various h_sizes
             for h_size in 64 128 256
@@ -37,7 +37,6 @@ do
                                    --num_workers ${num_workers} \
                                    --num_steps ${num_steps} \
                                    --learning_rate ${learning_rate} \
-                                   --no_annealing \
                                    --flow boosted \
                                    --iters_per_component ${iters_per_component} \
                                    --num_components ${num_components} \
@@ -56,8 +55,6 @@ do
                     done
                 done
             done
-            wait
-
 
             # for flow_depth in 1 2 4 8 16 32
             # do
@@ -69,7 +66,6 @@ do
             #            --num_steps ${num_steps} \
             #            --learning_rate 0.0001 \
             #            --no_lr_schedule \
-            #            --no_annealing \
             #            --flow boosted \
             #            --iters_per_component ${iters_per_component} \
             #            --regularization_rate ${regularization_rate} \
@@ -90,8 +86,6 @@ do
             #        --num_workers ${num_workers} \
             #        --num_steps ${num_steps} \
             #        --learning_rate ${learning_rate} \
-            #        --no_lr_schedule \
-            #        --no_annealing \
             #        --flow boosted \
             #        --iters_per_component ${iters_per_component} \
             #        --regularization_rate ${regularization_rate} \
@@ -106,4 +100,6 @@ do
         done
     done
 done
+wait
+echo "Job complete"
 

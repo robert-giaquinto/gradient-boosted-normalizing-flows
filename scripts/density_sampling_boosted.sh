@@ -18,40 +18,45 @@ plot_resolution=500
 
 for dataset in 8gaussians 2gaussians swissroll rings moons pinwheel 2spirals checkerboard line circles joint_gaussian
 do
-    for regularization_rate in 0.01 0.05 0.25
-    do
-        for num_components in 2 4 8
-        do
 
-            # boosted RealNVPS
-            for h_size in 8 64
+    for num_components in 2 4 8
+    do
+        for regularization_rate in 0.6 0.8 0.9 1.0 1.1 1.2
+        do
+            # realnvp and iaf with various h_sizes
+            for h_size in 64 128 256
             do
-                
+                # realnvp
                 for num_flows in 1 2
                 do
-                    python -m density_experiment --dataset ${dataset} \
-                           --experiment_name ${exp_name} \
-                           --no_cuda \
-                           --no_lr_schedule \
-                           --num_workers ${num_workers} \
-                           --num_steps ${num_steps} \
-                           --no_annealing \
-                           --learning_rate ${learning_rate} \
-                           --iters_per_component ${iters_per_component} \
-                           --flow boosted \
-                           --num_components ${num_components} \
-                           --num_flows ${num_flows} \
-                           --component_type realnvp \
-                           --num_base_layers 1 \
-                           --base_network relu \
-                           --h_size ${h_size} \
-                           --regularization_rate ${regularization_rate} \
-                           --batch_size ${batch_size} \
-                           --manual_seed ${manual_seed} \
-                           --log_interval ${logging} \
-                           --plot_resolution ${plot_resolution} \
-                           --plot_interval ${iters_per_component} ;
-                    
+                    for network in tanh relu
+                    do
+                        for layers in 1 2
+                        do
+
+                            python -m density_experiment --dataset ${dataset} \
+                                   --experiment_name ${exp_name} \
+                                   --no_cuda \
+                                   --num_workers ${num_workers} \
+                                   --num_steps ${num_steps} \
+                                   --no_annealing \
+                                   --learning_rate ${learning_rate} \
+                                   --iters_per_component ${iters_per_component} \
+                                   --flow boosted \
+                                   --num_components ${num_components} \
+                                   --num_flows ${num_flows} \
+                                   --component_type realnvp \
+                                   --num_base_layers ${layers} \
+                                   --base_network ${network} \
+                                   --h_size ${h_size} \
+                                   --regularization_rate ${regularization_rate} \
+                                   --batch_size ${batch_size} \
+                                   --manual_seed ${manual_seed} \
+                                   --log_interval ${logging} \
+                                   --plot_resolution ${plot_resolution} \
+                                   --plot_interval ${iters_per_component} &
+                        done
+                    done
                 done
             done
             
@@ -59,7 +64,6 @@ do
             python -m density_experiment --dataset ${dataset} \
                    --experiment_name ${exp_name} \
                    --no_cuda \
-                   --no_lr_schedule \
                    --num_workers ${num_workers} \
                    --num_steps ${num_steps} \
                    --no_annealing \
@@ -74,7 +78,7 @@ do
                    --manual_seed ${manual_seed} \
                    --log_interval ${logging} \
                    --plot_resolution ${plot_resolution} \
-                   --plot_interval ${iters_per_component} ;
+                   --plot_interval ${iters_per_component} &
         done
     done
 done
