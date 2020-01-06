@@ -16,12 +16,12 @@ logging=1000
 iters_per_component=25000
 plot_resolution=500
 
-for dataset in 8gaussians 2gaussians swissroll rings moons pinwheel 2spirals checkerboard line circles joint_gaussian
+for dataset in 8gaussians swissroll moons pinwheel 2spirals checkerboard  circles #line joint_gaussian
 do
 
     for num_components in 2 4 8
     do
-        for regularization_rate in 0.6 0.8 0.9 1.0 1.1 1.2
+        for regularization_rate in 0.6 0.8 0.9 1.0 1.1
         do
             # realnvp and iaf with various h_sizes
             for h_size in 64 128 256
@@ -29,7 +29,7 @@ do
                 # realnvp
                 for num_flows in 1 2
                 do
-                    for network in tanh relu
+                    for network in relu tanh
                     do
                         for layers in 1 2
                         do
@@ -59,27 +59,27 @@ do
                     done
                 done
             done
-            
-            # affine (1 flow)
-            python -m density_experiment --dataset ${dataset} \
-                   --experiment_name ${exp_name} \
-                   --no_cuda \
-                   --num_workers ${num_workers} \
-                   --num_steps ${num_steps} \
-                   --no_annealing \
-                   --learning_rate ${learning_rate} \
-                   --iters_per_component ${iters_per_component} \
-                   --flow boosted \
-                   --num_components ${num_components} \
-                   --num_flows 1 \
-                   --component_type affine \
-                   --regularization_rate ${regularization_rate} \
-                   --batch_size ${batch_size} \
-                   --manual_seed ${manual_seed} \
-                   --log_interval ${logging} \
-                   --plot_resolution ${plot_resolution} \
-                   --plot_interval ${iters_per_component} &
         done
+            
+        # affine (1 flow)
+        python -m density_experiment --dataset ${dataset} \
+               --experiment_name ${exp_name} \
+               --no_cuda \
+               --num_workers ${num_workers} \
+               --num_steps ${num_steps} \
+               --no_annealing \
+               --learning_rate ${learning_rate} \
+               --iters_per_component ${iters_per_component} \
+               --flow boosted \
+               --num_components ${num_components} \
+               --num_flows 1 \
+               --component_type affine \
+               --regularization_rate 0.75 \
+               --batch_size ${batch_size} \
+               --manual_seed ${manual_seed} \
+               --log_interval ${logging} \
+               --plot_resolution ${plot_resolution} \
+               --plot_interval ${iters_per_component} &
     done
 done
 

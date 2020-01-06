@@ -14,8 +14,7 @@ num_steps=100001
 experiment_name=baseline_density_sampling
 plotting=25000
 
-
-for dataset in 8gaussians swissroll rings moons pinwheel cos 2spirals checkerboard line circles joint_gaussian
+for dataset in 8gaussians swissroll moons pinwheel 2spirals checkerboard circles #line joint_gaussian
 do
     # realnvp and iaf
     for h_size in 64 128 256

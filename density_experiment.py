@@ -343,10 +343,10 @@ def update_rho(model, target_or_sample_fn, args):
         print(f"\n\nUpdating weight for component {model.component} (all_trained={str(model.all_trained)})", file=rho_log)
         print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in model.rho.data]), file=rho_log)
             
-        step_size = 0.01
+        step_size = 0.005
         tolerance = 0.00001
         min_iters = 25
-        max_iters = 250 if model.all_trained else 100
+        max_iters = 200 if model.all_trained else 50
         prev_rho = model.rho.data[model.component].item()
         for batch_id in range(max_iters):
 
