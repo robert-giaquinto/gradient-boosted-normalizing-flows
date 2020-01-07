@@ -92,7 +92,8 @@ parser.add_argument('--num_householder', type=int, default=8, help="For Househol
 parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--num_base_layers', type=int, default=1, help='Number of layers in the base network of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual', 'tanh', 'random'])
-parser.add_argument('--batch_norm', action='store_true', default=False, help='Enables batch norm in realnvp layers')
+parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers')
+parser.set_defaults(batch_norm=True)
 
 # Boosting parameters
 parser.add_argument('--num_components', type=int, default=2, help='How many components are combined to form the flow')

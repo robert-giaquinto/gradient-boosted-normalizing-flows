@@ -179,7 +179,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
         prev_lr.append(args.learning_rate)
         optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
     for n, param in model.named_parameters():
-        param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
+        param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
 
     for epoch in range(1, args.epochs + 1):
 
@@ -229,8 +229,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
                 #optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
                 optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
             for n, param in model.named_parameters():
-                param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
-
+                param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
 
         logger.info(epoch_msg + f'{"| ": >4}')
         # early-stopping only after all components have been trained

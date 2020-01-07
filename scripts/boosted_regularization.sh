@@ -13,7 +13,7 @@ source ./scripts/experiment_config.sh
 experiment_name=regularization
 num_components=2
 epochs=600
-vae_layer=linear
+vae_layers=linear
 learning_rate=0.0005
 
 for regularization_rate in 0.1 0.25 0.5 0.75 0.9 1.0 1.1
