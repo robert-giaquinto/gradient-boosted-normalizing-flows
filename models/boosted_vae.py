@@ -113,6 +113,8 @@ class BoostedVAE(VAE):
         """
         Estimate gradient with Monte Carlo by drawing sample zK ~ g^c and sample zK ~ G^(c-1), and
         computing their densities under the full model G^c
+
+        TODO: Should x be repeated to better approximate mixture 1:c?
         """
         x = x.detach().to(self.args.device)
         h, z_mu, z_var = self.encode(x)

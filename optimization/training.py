@@ -174,8 +174,12 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
     converged = False
 
     model.component = 0
+    prev_lr = []
     for c in range(args.num_components):
+        prev_lr.append(args.learning_rate)
         optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
+    for n, param in model.named_parameters():
+        param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
 
     for epoch in range(1, args.epochs + 1):
 
@@ -208,11 +212,13 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
 
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_G.mean():12.3f}{tr_p.mean():12.3f}{tr_entropy.mean():12.3f}{tr_ratio:12.3f}'
         epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{prob_all:16.2f}  |  c={model.component}'
+        epoch_msg += f' | LR=' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.4f}" for c in range(model.num_components)])
 
         # is it time to update rho?
         time_to_update = check_time_to_update(epoch, args.annealing_schedule, args.burnin, model.component, converged_epoch)
         if time_to_update or converged:
             converged_epoch = epoch  # default convergence due to number of epochs elapsed
+            prev_lr[model.component] = optimizer.param_groups[model.component]['lr']  # save lr if using LR scheduler
             
             model.update_rho(train_loader)
             epoch_msg += '  | Rho: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data])
@@ -220,7 +226,11 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
 
             # set the learning rate of all but one component to zero
             for c in range(args.num_components):
-                optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
+                #optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
+                optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
+            for n, param in model.named_parameters():
+                param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
+
 
         logger.info(epoch_msg + f'{"| ": >4}')
         # early-stopping only after all components have been trained

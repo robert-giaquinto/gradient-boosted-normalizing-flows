@@ -272,18 +272,7 @@ def compute_kl_pq_loss(model, data_sampler, beta, args):
 def rho_gradient(model, target_or_sample_fn, args):
     if args.density_matching:
         # density matching of a target function
-        #z = model.base_dist.sample((args.batch_size,))
-        #q_log_prob = model.base_dist.log_prob(z).sum(1)
-
-        #g_zk, _, _, g_ldj = model.flow(z, sample_from="c", density_from="1:c", debug=False)
-        #p_log_prob_g = -1.0 * target_or_sample_fn(g_zk[-1])  # p = exp(-potential) => log_p = - potential
-        #loss_wrt_g = q_log_prob - g_ldj - p_log_prob_g
-
         fixed_components = "-c" if model.all_trained else "1:c-1"
-        #G_zk, _, _, G_ldj = model.flow(z, sample_from=fixed_components, density_from="1:c", debug=False)
-        #p_log_prob_G = -1.0 * target_or_sample_fn(G_zk[-1])  # p = exp(-potential) => log_p = - potential
-        #loss_wrt_G = q_log_prob - G_ldj - p_log_prob_G
-
         z0 = model.base_dist.sample((args.num_components * args.batch_size * 25,))
         g_zk, g_ldj = [], []
         G_zk, G_ldj = [], []
@@ -306,12 +295,6 @@ def rho_gradient(model, target_or_sample_fn, args):
         
     else:
         # estimate density from a sampler
-        # sample = target_or_sample_fn(args.batch_size).to(args.device)
-        # g_zk, _, _, g_ldj = model.flow(sample, sample_from="c", density_from="1:c")
-        # loss_wrt_g = -1.0 * (model.base_dist.log_prob(g_zk[-1]).sum(1) + g_ldj)
-        # G_zk, _, _, G_ldj = model.flow(sample, sample_from="1:c-1", density_from="1:c")
-        # loss_wrt_G = -1.0 * (model.base_dist.log_prob(G_zk[-1]).sum(1) + G_ldj)
-
         sample = target_or_sample_fn(args.num_components * args.batch_size * 25).to(args.device)
         g_zk, g_ldj = [], []
         G_zk, G_ldj = [], []
@@ -409,6 +392,7 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
         optimizer.zero_grad()
         beta = annealing_schedule(batch_id, args)
 
+        # for "training-wheels" expriments: change the data distribution after a few iterations
         if args.dataset == "1gaussian" and batch_id == args.iters_per_component + 1:
             args.dataset = "2gaussians"
             target_or_sample_fn = make_toy_sampler(args)
