@@ -175,12 +175,14 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
     total_prob = torch.zeros(n_pts, n_pts)
     num_components_to_plot = args.num_components if model.all_trained else model.component + 1
     for c in range(num_components_to_plot):
+        if model.rho[c] == 0.0:
+            continue
+        
         row = int(np.floor((c + num_fixed_plots) / plt_width))
         col = int((c + num_fixed_plots) % plt_width)
 
         zzk, logdet = [], []
         for zz_i in zz.split(batch_size, dim=0):
-            #ZZ_i, logdet_i, _, _ = model.flow(zz_i, sample_from="c")
             ZZ_i, logdet_i = model.component_forward_flow(zz_i, c)
             zzk += [ZZ_i[-1]]  # grab K-th element
             logdet += [logdet_i]
@@ -241,6 +243,9 @@ def plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, batch_size, args
     plt_width = max(1, int(np.ceil((args.num_components + num_fixed_plots) / plt_height)))
     num_components_to_plot = args.num_components if model.all_trained else model.component + 1
     for c in range(num_components_to_plot):
+        if model.rho[c] == 0.0:
+            continue
+        
         row = int(np.floor((c + num_fixed_plots) / plt_width))
         col = int((c + num_fixed_plots) % plt_width)
 

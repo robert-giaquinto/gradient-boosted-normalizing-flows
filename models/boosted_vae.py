@@ -29,8 +29,6 @@ class BoostedVAE(VAE):
         self.num_flows = args.num_flows
         self.component = 0  # current component being trained / number of components trained thus far
         #self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
-        #self.rho = self.FloatTensor(self.num_components).fill_(max(1.0 / (self.num_components), 0.05))
-        #self.rho[0] = 1.0
         self.rho = torch.clamp(1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(1.0) + torch.arange(self.num_components * 1.0)), min=0.05)
         
         if args.density_evaluation:

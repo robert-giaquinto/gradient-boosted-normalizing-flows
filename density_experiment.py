@@ -284,7 +284,7 @@ def rho_gradient(model, target_or_sample_fn, args):
         #p_log_prob_G = -1.0 * target_or_sample_fn(G_zk[-1])  # p = exp(-potential) => log_p = - potential
         #loss_wrt_G = q_log_prob - G_ldj - p_log_prob_G
 
-        z0 = model.base_dist.sample((args.num_components * args.batch_size * 50,))
+        z0 = model.base_dist.sample((args.num_components * args.batch_size * 25,))
         g_zk, g_ldj = [], []
         G_zk, G_ldj = [], []
         for z0_i in z0.split(args.batch_size, dim=0):
@@ -312,7 +312,7 @@ def rho_gradient(model, target_or_sample_fn, args):
         # G_zk, _, _, G_ldj = model.flow(sample, sample_from="1:c-1", density_from="1:c")
         # loss_wrt_G = -1.0 * (model.base_dist.log_prob(G_zk[-1]).sum(1) + G_ldj)
 
-        sample = target_or_sample_fn(args.num_components * args.batch_size * 50).to(args.device)
+        sample = target_or_sample_fn(args.num_components * args.batch_size * 25).to(args.device)
         g_zk, g_ldj = [], []
         G_zk, G_ldj = [], []
         for sample_i in sample.split(args.batch_size, dim=0):
@@ -353,11 +353,13 @@ def update_rho(model, target_or_sample_fn, args):
             loss_wrt_g, loss_wrt_G = rho_gradient(model, target_or_sample_fn, args)
             if math.isnan(loss_wrt_g) or math.isnan(loss_wrt_G):
                 print("NaN encountered, breaking", file=rho_log)
+                model.rho[model.component] = 0.0
                 break
             
             gradient = loss_wrt_g - loss_wrt_G                
             ss = step_size / (0.025 * batch_id + 1)
-            rho = min(max(prev_rho - ss * gradient, 0.01), 1.0)
+            clipped_gradient = max(min(ss * gradient, 0.01), -0.01)
+            rho = min(max(prev_rho - clipped_gradient, 0.01), 1.0) # projected SGD with gradient clipping
 
             grad_msg = f'{batch_id: >3}. rho = {prev_rho:5.3f} -  {gradient:4.2f} * {ss:5.3f} = {rho:5.3f}'
             loss_msg = f"\tg vs G. Loss: ({loss_wrt_g:5.1f}, {loss_wrt_G:5.1f})."
