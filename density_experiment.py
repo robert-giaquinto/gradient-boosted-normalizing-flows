@@ -94,7 +94,10 @@ parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', 
 parser.set_defaults(batch_norm=True)
 parser.add_argument('--z_size', type=int, default=2, help='how many stochastic hidden units')
 
-# Bagging/Boosting parameters
+# Boosting parameters
+parser.add_argument('--no_rho_update', action='store_true', default=False, help='Disable boosted rho update')
+parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
+                    help='Initialization scheme for boosted parameter rho') 
 parser.add_argument('--num_components', type=int, default=4,
                     help='How many components are combined to form the flow')
 parser.add_argument('--component_type', type=str, default='affine', choices=['liniaf', 'affine', 'nlsq', 'realnvp', 'realnvp2'],
@@ -387,7 +390,7 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
         for n, param in model.named_parameters():
             param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
             
-    for batch_id in range(args.num_steps):
+    for batch_id in range(args.num_steps+1):
         model.train()
         optimizer.zero_grad()
         beta = annealing_schedule(batch_id, args)
@@ -426,7 +429,9 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
             logger.info(msg)
 
         if boosted_component_converged:
-            update_rho(model, target_or_sample_fn, args)
+            if not args.no_rho_update:
+                update_rho(model, target_or_sample_fn, args)
+                
             model.increment_component()
 
             # update learning rates

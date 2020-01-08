@@ -96,6 +96,8 @@ parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', 
 parser.set_defaults(batch_norm=True)
 
 # Boosting parameters
+parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
+                    help='Initialization scheme for boosted parameter rho') 
 parser.add_argument('--num_components', type=int, default=2, help='How many components are combined to form the flow')
 parser.add_argument('--component_type', type=str, default='affine',
                     choices=['realnvp', 'liniaf', 'affine', 'nlsq', 'random'],

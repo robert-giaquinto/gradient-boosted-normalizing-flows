@@ -28,8 +28,13 @@ class BoostedVAE(VAE):
         self.num_components = args.num_components
         self.num_flows = args.num_flows
         self.component = 0  # current component being trained / number of components trained thus far
-        #self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)  # mixing weights for components
-        self.rho = torch.clamp(1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(1.0) + torch.arange(self.num_components * 1.0)), min=0.05)
+
+        if args.rho_init == "decreasing":
+            # each component is given half the weight of the previous one
+            self.rho = torch.clamp(1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(1.0) + torch.arange(self.num_components * 1.0)), min=0.05)
+        else:
+            # args.rho_init == "uniform"
+            self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)
         
         if args.density_evaluation:
             self.q_z_nn, self.q_z_mean, self.q_z_var = None, None, None
