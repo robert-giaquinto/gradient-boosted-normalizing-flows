@@ -10,15 +10,16 @@ conda activate env
 source ./scripts/experiment_config.sh
 
 # define variable specific to this experiment
-experiment_name=regularization
+experiment_name=learning_rate
 num_components=2
 annealing_schedule=100
 epochs_per_component=200
-epochs=600
+epochs=450
 vae_layers=linear
 learning_rate=0.0005
+regularization_rate=1.0
 
-for regularization_rate in 0.1 0.25 0.5 0.75 0.9 1.0 1.1
+for learning_rate in 0.01 0.005 0.001 0.0005 0.0001
 do
     python main_experiment.py --dataset mnist \
            --experiment_name ${experiment_name} \
@@ -26,6 +27,7 @@ do
            --no_cuda \
            --num_workers ${num_workers} \
            --no_lr_schedule \
+           --rho_init decreasing \
            --learning_rate ${learning_rate} \
            --epochs ${epochs} \
            --annealing_schedule ${annealing_schedule} \
@@ -38,7 +40,7 @@ do
            --h_size 128 \
            --num_components ${num_components} \
            --regularization_rate ${regularization_rate} \
-           --num_flows 1 \
+           --num_flows 2 \
            --z_size ${z_size} \
            --batch_size ${batch_size} \
            --manual_seed ${manual_seed} \
