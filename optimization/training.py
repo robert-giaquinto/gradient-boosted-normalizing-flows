@@ -184,10 +184,10 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
     for epoch in range(1, args.epochs + 1):
 
         # compute annealing rate for KL loss term
-        beta = kl_annealing_rate(epoch, model.component, model.all_trained, args)
+        beta = kl_annealing_rate(epoch - converged_epoch, model.component, model.all_trained, args)
 
         # occasionally sample from all components to keep decoder from focusing solely on new component
-        prob_all = sample_from_all_prob(epoch, converged_epoch, model.component, model.all_trained, args)
+        prob_all = sample_from_all_prob(epoch - converged_epoch, model.component, model.all_trained, args)
             
         t_start = time.time()
         tr_loss, tr_rec, tr_G, tr_p, tr_entropy, tr_ratio = train_epoch_boosted(
@@ -205,8 +205,10 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
         val_rec.append(v_rec)
         val_kl.append(v_kl)
 
-        # new component performance converged?
-        converged = check_convergence(tr_ratio, prev_tr_ratio, component_threshold, model.component, model.num_components, epoch, args.burnin)
+        # is it time to update rho?
+        time_to_update = check_time_to_update(epoch - converged_epoch, args)
+        # New component performance converged?
+        converged = check_convergence(tr_ratio, prev_tr_ratio, model.component, epoch - converged_epoch, args)
         if converged:
             converged_epoch = epoch
 
@@ -214,8 +216,6 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
         epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{prob_all:16.2f}  |  c={model.component}'
         epoch_msg += f' | LR=' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.4f}" for c in range(model.num_components)])
 
-        # is it time to update rho?
-        time_to_update = check_time_to_update(epoch, args.annealing_schedule, args.burnin, model.component, converged_epoch)
         if time_to_update or converged:
             converged_epoch = epoch  # default convergence due to number of epochs elapsed
             prev_lr[model.component] = optimizer.param_groups[model.component]['lr']  # save lr if using LR scheduler
@@ -263,7 +263,7 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
     is_first_component = model.component == 0 and not model.all_trained
     
     total_batches = len(train_loader)
-    total_samples = len(train_loader.sampler)
+    total_samples = len(train_loader.sampler) * 1.0
     train_loss = np.zeros(total_batches)
     train_rec = np.zeros(total_batches)
     train_p = np.zeros(total_batches)
@@ -302,79 +302,72 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
 
     train_G = np.array(train_G) if len(train_G) > 0 else np.zeros(1)
     train_ratio = np.array(train_ratio) if len(train_ratio) > 0 else np.zeros(1)
-    return train_loss, train_rec, train_G, train_p, train_entropy, train_ratio.mean()
+    return train_loss, train_rec, train_G, train_p, train_entropy, (train_ratio.sum() / total_samples)
 
 
-def kl_annealing_rate(epoch, component, all_trained, args):
-    if args.annealing_schedule == 1:
-        beta = epoch / (100.0 * args.num_components) if args.flow == "boosted" else epoch / 100.0
+def kl_annealing_rate(epochs_since_prev_convergence, component, all_trained, args):
+    """
+    TODO need to adjust this for when an previous component converged early
+    """
+    past_warmup =  ((epochs_since_prev_convergence - 1) % args.epochs_per_component) >= args.annealing_schedule
+    if all_trained or past_warmup:
+        # all trained or past the first args.annealing_schedule epochs of training this component, so no annealing
+        beta = 1.0
     else:
-        if all_trained:
-            beta = 1.0
-        else:
-            epochs_per_component = max(args.annealing_schedule + args.burnin if component == 0 else args.annealing_schedule, 1)
-            zero_offset = 1.0 / epochs_per_component  # don't want annealing rate to start at zero
-            beta = (((epoch - 1) % epochs_per_component) / epochs_per_component) + zero_offset
+        # within the first args.annealing_schedule epochs of training this component
+        beta = ((epochs_since_prev_convergence - 1) % args.annealing_schedule) / args.annealing_schedule
+        beta += 1.0 / args.annealing_schedule  # don't want annealing rate to start at zero
             
     beta = min(beta, args.max_beta)
     beta = max(beta, args.min_beta)
     return beta
 
 
-def sample_from_all_prob(epoch, converged_epoch, current_component, all_trained, args):
+def sample_from_all_prob(epochs_since_prev_convergence, current_component, all_trained, args):
     """
     Want to occasionally sample from all components so decoder doesn't solely focus on new component
     """
+    max_prob_all = min(0.75, 1.0 - (1.0 / (args.num_components)))
     if all_trained:
         # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
-        max_prob_all = min(0.5, 1.0 - (1.0 / (args.num_components))) if args.annealing_schedule > 1 else 0.25
-        prob_all = 1.0
+        return max_prob_all
 
     else:
-        max_prob_all = 1.0 - (1.0 / (current_component + 1.0))
         if current_component == 0:
-            # first component runs longer than the rest
-            epochs_per_component = max(args.annealing_schedule + args.burnin, 1)
-            epoch_offset = 1
+            return 0.0
         else:
-            epochs_per_component = max(args.annealing_schedule, 1)
-            epoch_offset = (args.burnin if converged_epoch == 0 else converged_epoch) + 1
+            pct_trained = ((epochs_since_prev_convergence - 1) % args.epochs_per_component) / args.epochs_per_component
+            pct_trained += (1.0 / args.epochs_per_component)  # non-zero offset (don't start at zero)
+            prob_all = min(pct_trained, 1.0) * max_prob_all
             
-        non_zero_offset = 1.0 / epochs_per_component
-        prob_all = (((epoch - epoch_offset) % epochs_per_component) / epochs_per_component) + non_zero_offset
-
-    prob_all = min(prob_all, max_prob_all)
-    return prob_all
+        return prob_all
 
 
-def check_convergence(tr_entropy, prev_tr_entropy, component_threshold, current_component, num_components, epoch, burnin):
-    converged = abs(tr_entropy - prev_tr_entropy) < component_threshold
-    performance_improved = prev_tr_entropy > tr_entropy
+def check_convergence(ratio, prev_ratio, current_component, epoch, args):
+    """
+    Verify if a boosted component has converged (log ratio between G and g stopped improving)
+    """
+    ratio_dif = abs(ratio - prev_ratio)
+    converged = ratio_dif < args.component_threshold
+    performance_improved = prev_ratio <= ratio
     
     # don't worry about convergence on the last component, we'll just let that one finish the annealing cycle
-    not_last_component = current_component < (num_components - 1)
+    #not_last_component = current_component < (args.num_components - 1)
 
-    # must be past to the burnin period to be considered converged
-    past_burnin = epoch > burnin
-
-    converged_flag = converged and performance_improved and not_last_component and past_burnin
+    converged_flag = converged and performance_improved #and not_last_component
     if converged_flag:
-        logger.info(f"\tComponent {current_component} (out of {num_components}) converged at epoch {epoch} ({abs(tr_entropy - prev_tr_entropy)} < {component_threshold}).")
+        logger.info(f"\tComponent {current_component} (out of {args.num_components}) converged at epoch {epoch} ({ratio_dif} < {args.component_threshold}).")
         
     return converged_flag
 
 
-def check_time_to_update(epoch, annealing_schedule, burnin, current_component, converged_epoch):
-    # has the anneal schedule concluded for this component
-    if current_component == 0:
-        annealing_schedule += burnin
-        offset = 0
-    else:
-        offset = burnin if converged_epoch == 0 else converged_epoch
+def check_time_to_update(epochs_since_prev_convergence, args):
+    """
+    Has the anneal schedule concluded for this component?
 
-    # must be past to the burnin period to update
-    past_burnin = epoch > burnin
-
-    time_to_update = ((epoch - offset) % annealing_schedule == 0) and past_burnin
-    return time_to_update
+    epochs_since_prev_convergence represents epochs since the last component converged
+    """
+    past_warmup =  epochs_since_prev_convergence >= args.annealing_schedule
+    time_to_update = epochs_since_prev_convergence % args.epochs_per_component == 0
+    return time_to_update and past_warmup
 

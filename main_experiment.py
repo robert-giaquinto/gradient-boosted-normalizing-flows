@@ -64,18 +64,14 @@ parser.set_defaults(testing=True)
 
 # optimization settings
 parser.add_argument('--epochs', type=int, default=100, help='number of epochs to train (default: 100)')
-parser.add_argument('--early_stopping_epochs', type=int, default=20, help='number of early stopping epochs')
+parser.add_argument('--early_stopping_epochs', type=int, default=0, help='number of early stopping epochs')
 parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
 parser.add_argument('--learning_rate', type=float, default=0.0005, help='learning rate')
-parser.add_argument('--annealing_schedule', type=int, default=100, help='number of epochs for warm-up. Set to 0 to turn beta annealing off.')
+parser.add_argument('--annealing_schedule', type=int, default=100, help='Number of epochs to anneal the KL term. Set to 0 to turn beta annealing off. Applies this annealing schedule to each component of a boosted model.')
 parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
 parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
 parser.add_argument('--no_annealing', action='store_true', default=False, help='disables annealing while training')
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
-
-# boosting optimization settings
-parser.add_argument('--regularization_rate', type=float, default=0.4, help='Regularization penalty for boosting.')
-parser.add_argument('--burnin', type=int, default=25, help='number of extra epochs to run the first component of a boosted model.')
 
 # model parameters
 parser.add_argument('--vae_layers', type=str, default='linear', choices=['linear', 'convolutional'], help="Type of layers in VAE's encoder and decoder.")
@@ -95,7 +91,10 @@ parser.add_argument('--base_network', type=str, default='relu', help='Base netwo
 parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers')
 parser.set_defaults(batch_norm=True)
 
-# Boosting parameters
+# Boosting parameters and optimization settings
+parser.add_argument('--component_threshold', type=float, default=0.0, help='Threshold for determining if a boosted component has converged.')
+parser.add_argument('--regularization_rate', type=float, default=0.4, help='Regularization penalty for boosting.')
+parser.add_argument('--epochs_per_component', type=int, default=100, help='Number of epochs to train each component of a boosted model. Defaults to max(annealing_schedule, epochs_per_component). Ignored for non-boosted models.')
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
                     help='Initialization scheme for boosted parameter rho') 
 parser.add_argument('--num_components', type=int, default=2, help='How many components are combined to form the flow')
@@ -113,6 +112,8 @@ def parse_args(main_args=None):
     args.device = torch.device("cuda" if args.cuda else "cpu")
     args.density_evaluation = False
     args.shuffle = True
+    args.annealing_schedule = max(args.annealing_schedule, 1)
+    args.epochs_per_component = max(args.epochs_per_component, args.annealing_schedule)
 
     # Set a random seed if not given one
     if args.manual_seed is None:
@@ -138,8 +139,10 @@ def parse_args(main_args=None):
     if args.flow == 'iaf':
         args.snap_dir += '_hidden' + str(args.num_base_layers) + '_hsize' + str(args.h_size)
     if args.flow == 'boosted':
+        if args.component_threshold < 0.0:
+            raise ValueError("For boosted the component_threshold must be greater than or equal to zero.")
         if args.regularization_rate < 0.0:
-            raise ValueError("For boosting the regularization rate should be greater than or equal to zero.")
+            raise ValueError("For boosting the regularization_rate should be greater than or equal to zero.")
         args.snap_dir += '_' + args.component_type + '_C' + str(args.num_components) + '_reg' + f'{int(100*args.regularization_rate):d}'
 
     if args.flow == "realnvp" or args.component_type == "realnvp":
