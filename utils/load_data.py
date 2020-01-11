@@ -34,18 +34,16 @@ def load_cifar10(args, **kwargs):
     indices = list(range(num_train))
     valid_size = 0.1
     num_val = int(np.floor(valid_size * num_train))
-    np.random.shuffle(indices)
+    if args.shuffle:
+        np.random.shuffle(indices)
 
     train_idx, valid_idx = indices[:-num_val], indices[-num_val:]
     train_sampler = data_utils.sampler.SubsetRandomSampler(train_idx)
     valid_sampler = data_utils.sampler.SubsetRandomSampler(valid_idx)
 
-    train_loader = data_utils.DataLoader(train_data, batch_size=args.batch_size,
-        sampler=train_sampler, shuffle=args.shuffle, **kwargs)
-    val_loader = data_utils.DataLoader(val_data, batch_size=args.batch_size,
-        sampler=valid_sampler, shuffle=False, **kwargs)
-    test_loader = data_utils.DataLoader(test_data, batch_size=args.batch_size,
-        shuffle=False, **kwargs)
+    train_loader = data_utils.DataLoader(train_data, batch_size=args.batch_size, sampler=train_sampler, **kwargs)
+    val_loader = data_utils.DataLoader(val_data, batch_size=args.batch_size, sampler=valid_sampler, **kwargs)
+    test_loader = data_utils.DataLoader(test_data, batch_size=args.batch_size, **kwargs)
     return train_loader, val_loader, test_loader, args
 
 
@@ -107,7 +105,7 @@ def load_freyfaces(args, **kwargs):
 
     # start processing
     with open('data/Freyfaces/freyfaces.pkl', 'rb') as f:
-        data = pickle.load(f)[0]
+        data = pickle.load(f, encoding='latin1')[0]
 
     data = data/ 255.
 

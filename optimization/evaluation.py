@@ -34,6 +34,8 @@ def evaluate(data_loader, model, args, epoch=None, results_type=None):
 
         if args.vae_layers == 'convolutional':
             x = x.view(-1, *args.input_size)
+        else:
+            x = x.view(-1, np.prod(args.input_size))
 
         if args.flow == 'boosted':
             x_recon, z_mu, z_var, Z, ldj, _, _ = model(x, prob_all=1.0)
@@ -58,14 +60,16 @@ def evaluate(data_loader, model, args, epoch=None, results_type=None):
     avg_kl = kl / len(data_loader)
 
     if results_type is not None:
-        # plots of the model
-        plot_decoded_random_sample(args, model, size_x=5, size_y=5)
-        if model.z_size == 2:
-            plot_decoded_manifold(model, args)
-            plot_data_manifold(model, data_loader, args)
 
-        results_msg = f'{results_type} set loss: {avg_loss:.4f}, Reconstruction: {avg_rec:.4f}, KL-Divergence: {avg_kl:.4f}\n'
-        logger.info(results_msg)
+        if args.dataset == "mnist":
+            plot_decoded_random_sample(args, model, size_x=5, size_y=5)
+            if model.z_size == 2:
+                plot_decoded_manifold(model, args)
+                plot_data_manifold(model, data_loader, args)
+
+        results_msg = f'{results_type} set loss: {avg_loss:.4f}, Reconstruction: {avg_rec:.4f}, KL-Divergence: {avg_kl:.4f}'
+        results_msg += f', BPD: {avg_loss / (np.prod(args.input_size) * np.log(2.0)):.4f}' if args.input_type != "binary" else ''
+        logger.info(results_msg + "\n")
 
         if args.save_results:
             with open(args.exp_log, 'a') as ff:
@@ -78,7 +82,6 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000, results_type=
     """
     Calculate negative log likelihood using importance sampling
     """
-
     model.eval()
 
     X = torch.cat([x for x, y in list(data_loader)], 0).to(args.device)
@@ -96,16 +99,25 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000, results_type=
 
     for j in range(N_test):
         if j % 100 == 0:
-            print('Progress: {:.2f}%'.format(j / (1. * N_test) * 100))
+            print('Progress: {:.2f}%'.format(j / (1.0 * N_test) * 100))
 
         x_single = X[j].unsqueeze(0)
+        if args.vae_layers == 'convolutional':
+            x_single = x_single.view(1, *args.input_size)
+        else:
+            x_single = x_single.view(1, np.prod(args.input_size))
 
         a = []
         for r in range(0, R):
             # Repeat it for all training points
             x = x_single.expand(S, *x_single.size()[1:]).contiguous()
 
-            x_mean, z_mu, z_var, ldj, z0, zk = model(x)    
+            if args.flow == 'boosted':
+                x_mean, z_mu, z_var, Z, ldj, _, _ = model(x, prob_all=1.0)
+                z0, zk = Z[0], Z[-1]
+            else:
+                x_mean, z_mu, z_var, ldj, z0, zk = model(x)
+            
             a_tmp = calculate_loss_array(x_mean, x, z_mu, z_var, z0, zk, ldj, args)
             a.append(-a_tmp.cpu().data.numpy())
 

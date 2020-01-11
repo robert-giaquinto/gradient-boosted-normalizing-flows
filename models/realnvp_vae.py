@@ -42,8 +42,13 @@ class RealNVPVAE(VAE):
         Encoder that ouputs parameters for base distribution of z
         """
         batch_size = x.size(0)
+        
         h = self.q_z_nn(x)
-        h = h.view(-1, self.q_z_nn_output_dim)
+        if not self.use_linear_layers:
+            h = h.view(h.size(0), -1)
+        else:
+            h = h.view(-1, self.q_z_nn_output_dim)
+            
         z_mu = self.q_z_mean(h)
         z_var = self.q_z_var(h)
         return z_mu, z_var

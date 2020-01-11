@@ -74,7 +74,8 @@ parser.add_argument('--no_annealing', action='store_true', default=False, help='
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
 
 # model parameters
-parser.add_argument('--vae_layers', type=str, default='linear', choices=['linear', 'convolutional'], help="Type of layers in VAE's encoder and decoder.")
+parser.add_argument('--vae_layers', type=str, default='linear', choices=['linear', 'convolutional'],
+                    help="Type of layers in VAE's encoder and decoder.")
 parser.add_argument('--z_size', type=int, default=64, help='how many stochastic hidden units')
 parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
 parser.add_argument('--flow', type=str, default='no_flow', help="Type of flows to use, no flows can also be selected",
@@ -86,7 +87,7 @@ parser.add_argument('--num_householder', type=int, default=8, help="For Househol
 
 # RealNVP (and IAF) parameters
 parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
-parser.add_argument('--num_base_layers', type=int, default=1, help='Number of layers in the base network of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--num_base_layers', type=int, default=0, help='Number of extra hidden layers in the base network of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual', 'tanh', 'random'])
 parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers')
 parser.set_defaults(batch_norm=True)
@@ -183,8 +184,12 @@ def parse_args(main_args=None):
         torch.set_num_threads(num_workers)
         logger_msg += "\n\tConfirmed Number of CPU threads: {}".format(torch.get_num_threads())
 
-    logger.info(logger_msg + "\n")
+    #args.num_data_workers = min(4, os.cpu_count() - 1)
+    #logger_msg += f"\n\tUsing {args.num_data_workers} cores for loading and preprocessing data"
+    #kwargs = {'num_workers': args.num_data_workers, 'pin_memory': True} if args.cuda else {'num_workers': args.num_data_workers}
     kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
+
+    logger.info(logger_msg + "\n")
     return args, kwargs
 
 
@@ -327,7 +332,7 @@ def main(main_args=None):
     # =========================================================================
     if args.testing:
         logger.info("TESTING:")
-        test_nll = evaluate_likelihood(test_loader, final_model, args, results_type='Test')
+        test_nll = evaluate_likelihood(test_loader, final_model, args, S=2000, MB=500, results_type='Test')
 
 
 if __name__ == "__main__":

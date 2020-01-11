@@ -66,108 +66,71 @@ class VAE(nn.Module):
         Helper function to create the elemental blocks for the encoder. Creates a gated convnet encoder.
         the encoder expects data as input of shape (batch_size, num_channels, width, height).
         """
-        if self.input_type == 'binary':
-            if self.use_linear_layers:
-                q_z_nn = nn.Sequential(
-                    nn.Linear(self.input_size, self.q_z_nn_hidden_dim),
-                    nn.ReLU(),
-                    nn.Linear(self.q_z_nn_hidden_dim, self.q_z_nn_output_dim),
-                    nn.Softplus(),
-                )
-                q_z_mean = nn.Linear(self.q_z_nn_output_dim, self.z_size)
-                q_z_var = nn.Sequential(
-                    nn.Linear(self.q_z_nn_output_dim, self.z_size),
-                    nn.Softplus(),
-                )
-            else:
-                q_z_nn = nn.Sequential(
-                    GatedConv2d(self.input_size, 32, 5, 1, 2),
-                    GatedConv2d(32, 32, 5, 2, 2),
-                    GatedConv2d(32, 64, 5, 1, 2),
-                    GatedConv2d(64, 64, 5, 2, self.last_pad),
-                    GatedConv2d(64, 64, 5, 1, 2),
-                    GatedConv2d(64, self.q_z_nn_output_dim, self.last_kernel_size, 1, 0),
-                )
-                q_z_mean = nn.Linear(self.q_z_nn_output_dim, self.z_size)
-                q_z_var = nn.Sequential(
-                    nn.Linear(self.q_z_nn_output_dim, self.z_size),
-                    nn.Softplus(),
-                )
-            return q_z_nn, q_z_mean, q_z_var
+        q_z_mean = nn.Linear(self.q_z_nn_output_dim, self.z_size)
+        q_z_var = [nn.Linear(self.q_z_nn_output_dim, self.z_size), nn.Softplus()]
+                    
+        if self.use_linear_layers:
+            q_z_nn = nn.Sequential(
+                nn.Linear(self.input_size, self.q_z_nn_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(self.q_z_nn_hidden_dim, self.q_z_nn_output_dim),
+                nn.Softplus())
 
-        elif self.input_type == 'multinomial':
+        else:
             act = None
             q_z_nn = nn.Sequential(
-                GatedConv2d(self.input_size, 32, 5, 1, 2, activation=act),
-                GatedConv2d(32, 32, 5, 2, 2, activation=act),
-                GatedConv2d(32, 64, 5, 1, 2, activation=act),
-                GatedConv2d(64, 64, 5, 2, self.last_pad, activation=act),
-                GatedConv2d(64, 64, 5, 1, 2, activation=act),
-                GatedConv2d(64, 256, self.last_kernel_size, 1, 0, activation=act)
-            )
-            q_z_mean = nn.Linear(256, self.z_size)
-            q_z_var = nn.Sequential(
-                nn.Linear(256, self.z_size),
-                nn.Softplus(),
-                nn.Hardtanh(min_val=0.01, max_val=7.)
+                    GatedConv2d(self.input_size, 32, 5, 1, 2, activation=act),
+                    GatedConv2d(32, 32, 5, 2, 2, activation=act),
+                    GatedConv2d(32, 64, 5, 1, 2, activation=act),
+                    GatedConv2d(64, 64, 5, 2, self.last_pad, activation=act),
+                    GatedConv2d(64, 64, 5, 1, 2, activation=act),
+                    GatedConv2d(64, self.q_z_nn_output_dim, self.last_kernel_size, 1, 0, activation=act))
 
-            )
-            return q_z_nn, q_z_mean, q_z_var
+            if self.input_type == 'multinomial':
+                q_z_var += [nn.Hardtanh(min_val=0.01, max_val=7.)]
+
+        q_z_var = nn.Sequential(*q_z_var)
+        return q_z_nn, q_z_mean, q_z_var
 
     def create_decoder(self):
         """
         Helper function to create the elemental blocks for the decoder. Creates a gated convnet decoder.
         """
-
-        num_classes = 256
-
-        if self.input_type == 'binary':
-            if self.use_linear_layers:
-                p_x_nn = nn.Sequential(
-                    nn.Linear(self.z_size, self.q_z_nn_hidden_dim),
-                    nn.ReLU(),
-                    nn.Linear(self.q_z_nn_hidden_dim, self.q_z_nn_output_dim),
-                    nn.Softplus(),
-                )
-                p_x_mean = nn.Sequential(
-                    nn.Linear(self.q_z_nn_output_dim, self.input_size),
-                    nn.Sigmoid()
-                )
-            else:
-                p_x_nn = nn.Sequential(
-                    GatedConvTranspose2d(self.z_size, 64, self.last_kernel_size, 1, 0),
-                    GatedConvTranspose2d(64, 64, 5, 1, 2),
-                    GatedConvTranspose2d(64, 32, 5, 2, 2, 1),
-                    GatedConvTranspose2d(32, 32, 5, 1, 2),
-                    GatedConvTranspose2d(32, 32, 5, 2, 2, 1),
-                    GatedConvTranspose2d(32, 32, 5, 1, 2)
-                )
-                p_x_mean = nn.Sequential(
-                    nn.Conv2d(32, self.input_size, 1, 1, 0),
-                    nn.Sigmoid()
-                )
-            return p_x_nn, p_x_mean
-
-        elif self.input_type == 'multinomial':
-            act = None
+        output_shape = 256 * self.input_size if self.input_type == 'multinomial' else self.input_size
+        
+        if self.use_linear_layers:
+            p_x_nn = nn.Sequential(
+                nn.Linear(self.z_size, self.q_z_nn_hidden_dim),
+                nn.ReLU(),
+                nn.Linear(self.q_z_nn_hidden_dim, self.q_z_nn_output_dim),
+                nn.Softplus())
+            p_x_mean = nn.Sequential(
+                nn.Linear(self.q_z_nn_output_dim, output_shape),
+                nn.Sigmoid())
+        
+        else:
+            act = None  # possibly change for multinomial
             p_x_nn = nn.Sequential(
                 GatedConvTranspose2d(self.z_size, 64, self.last_kernel_size, 1, 0, activation=act),
                 GatedConvTranspose2d(64, 64, 5, 1, 2, activation=act),
                 GatedConvTranspose2d(64, 32, 5, 2, self.last_pad, 1, activation=act),
                 GatedConvTranspose2d(32, 32, 5, 1, 2, activation=act),
                 GatedConvTranspose2d(32, 32, 5, 2, 2, 1, activation=act),
-                GatedConvTranspose2d(32, 32, 5, 1, 2, activation=act)
-            )
-            p_x_mean = nn.Sequential(
-                nn.Conv2d(32, 256, 5, 1, 2),
-                nn.Conv2d(256, self.input_size * num_classes, 1, 1, 0),
+                GatedConvTranspose2d(32, 32, 5, 1, 2, activation=act))
+
+            if self.input_type == 'binary':
+                p_x_mean = nn.Sequential(
+                    nn.Conv2d(32, output_shape, 1, 1, 0),
+                    nn.Sigmoid())
+            elif self.input_type == 'multinomial':
                 # output shape: batch_size, num_channels * num_classes, pixel_width, pixel_height
-            )
+                p_x_mean = nn.Sequential(
+                    nn.Conv2d(32, 256, 5, 1, 2),
+                    nn.Conv2d(256, output_shape, 1, 1, 0))
+            else:
+                raise ValueError('Invalid data input type.')
 
-            return p_x_nn, p_x_mean
-
-        else:
-            raise ValueError('invalid input type!!')
+        return p_x_nn, p_x_mean
 
     def reparameterize(self, mu, var):
         """

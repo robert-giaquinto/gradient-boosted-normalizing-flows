@@ -31,7 +31,8 @@ class BoostedVAE(VAE):
 
         if args.rho_init == "decreasing":
             # each component is given half the weight of the previous one
-            self.rho = torch.clamp(1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(1.0) + torch.arange(self.num_components * 1.0)), min=0.05).to(self.args.device)
+            self.rho = torch.clamp(1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(1.0) + \
+                                                   torch.arange(self.num_components * 1.0, device=args.device)), min=0.05).to(args.device)
         else:
             # args.rho_init == "uniform"
             self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)
@@ -155,7 +156,7 @@ class BoostedVAE(VAE):
             tolerance = 0.00001
             step_size = 0.005
             min_iters = 15
-            max_iters = 250 if self.all_trained else 50
+            max_iters = 150 if self.all_trained else 50
 
             prev_rho = self.rho[self.component].item()
             for batch_id, (x, _) in enumerate(data_loader):
@@ -184,6 +185,9 @@ class BoostedVAE(VAE):
         Encoder that ouputs parameters for base distribution of z and flow parameters.
         """        
         h = self.q_z_nn(x).view(-1, self.q_z_nn_output_dim)
+        if not self.use_linear_layers:
+            h = h.view(h.size(0), -1)
+
         z_mu = self.q_z_mean(h)
         z_var = self.q_z_var(h)
         return h, z_mu, z_var

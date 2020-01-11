@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from utils.utilities import safe_log
 
 
-def binary_neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, beta=1.0):
+def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
     """
     Computes the binary loss function while summing over batch dimension, not averaged!
     :param x_recon: shape: (batch_size, num_channels, pixel_width, pixel_height), bernoulli parameters p(x=1)
@@ -19,9 +19,28 @@ def binary_neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, beta=1.0):
     :param beta: beta for kl loss
     :return: loss, ce, kl
     """
-    # - N E_q0 [ ln p(x|z_k) ]
-    reconstruction_function = nn.BCELoss(reduction='sum')
-    recon_loss = reconstruction_function(x_recon, x)
+    if args.input_type == "binary":
+        # - N E_q0 [ ln p(x|z_k) ]
+        reconstruction_function = nn.BCELoss(reduction='sum')
+        recon_loss = reconstruction_function(x_recon, x)
+    elif args.input_type == "multinomial":
+        num_classes = 256
+        batch_size = x.size(0)
+        
+        if args.vae_layers == "convolutional":
+            x_recon = x_recon.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
+        else:
+            x_recon = x_recon.view(batch_size, num_classes, np.prod(args.input_size))
+
+        # make integer class labels
+        target = (x * (num_classes-1)).long()
+        
+        # - N E_q0 [ ln p(x|z_k) ]
+        # sums over batch dimension (and feature dimension)
+        recon_loss = cross_entropy(x=x_recon, target=target, reduction='sum')
+    else:
+        raise ValueError('Invalid input type for calculate loss: %s.' % args.input_type)
+
 
     # ln p(z_k)  (not averaged)
     log_p_zk = log_normal_standard(z_k, dim=1)
@@ -45,9 +64,28 @@ def binary_neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, beta=1.0):
     return loss, recon_loss, kl
 
 
-def boosted_binary_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regularization_rate, first_component, beta=1.0):
-    reconstruction_function = nn.BCELoss(reduction='sum')
-    recon_loss = reconstruction_function(x_recon, x)
+def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regularization_rate, first_component, args, beta=1.0):
+
+    if args.input_type == "binary":
+        reconstruction_function = nn.BCELoss(reduction='sum')
+        recon_loss = reconstruction_function(x_recon, x)
+    elif args.input_type == "multinomial":
+        num_classes = 256
+        batch_size = x.size(0)
+
+        if args.vae_layers == "convolutional":
+            x_recon = x_recon.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
+        else:
+            x_recon = x_recon.view(batch_size, num_classes, np.prod(args.input_size))
+
+        # make integer class labels
+        target = (x * (num_classes-1)).long()
+
+        # - N E_q0 [ ln p(x|z_k) ]
+        # sums over batch dimension (and feature dimension)
+        recon_loss = cross_entropy(x=x_recon, target=target, reduction='sum')
+    else:
+        raise ValueError('Invalid input type for calculate loss: %s.' % args.input_type)
 
     # prior: ln p(z_k)  (not averaged)
     log_p_zk = torch.sum(log_normal_standard(z_g[-1], dim=1))
@@ -86,53 +124,6 @@ def boosted_binary_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, reg
     return loss, recon_loss, log_G_z, log_p_zk, entropy, log_ratio
 
 
-def multinomial_neg_elbo(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):
-    """
-    Computes the cross entropy loss function while summing over batch dimension, not averaged!
-    :param x_logit: shape: (batch_size, num_classes * num_channels, pixel_width, pixel_height), real valued logits
-    :param x: shape (batchsize, num_channels, pixel_width, pixel_height), pixel values rescaled between [0, 1].
-    :param z_mu: mean of z_0
-    :param z_var: variance of z_0
-    :param z_0: first stochastic latent variable
-    :param z_k: last stochastic latent variable
-    :param ldj: log det jacobian
-    :param args: global parameter settings
-    :param beta: beta for kl loss
-    :return: loss, ce, kl
-    """
-    num_classes = 256
-    batch_size = x.size(0)
-
-    x_logit = x_logit.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
-
-    # make integer class labels
-    target = (x * (num_classes-1)).long()
-
-    # - N E_q0 [ ln p(x|z_k) ]
-    # sums over batch dimension (and feature dimension)
-    ce = cross_entropy(input=x_logit, target=target, reduction='sum')
-
-    # ln p(z_k)  (not averaged)
-    log_p_zk = log_normal_standard(z_k, dim=1)
-    # ln q(z_0)  (not averaged)
-    log_q_z0 = log_normal_diag(z_0, mean=z_mu, log_var=safe_log(z_var), dim=1)
-    # N E_q0[ ln q(z_0) - ln p(z_k) ]
-    summed_logs = torch.sum(log_q_z0 - log_p_zk)
-
-    # sum over batches
-    summed_ldj = torch.sum(ldj)
-
-    # ldj = N E_q_z0[\sum_k log |det dz_k/dz_k-1| ]
-    kl = (summed_logs - summed_ldj)
-    loss = ce + beta * kl
-
-    loss = loss / float(batch_size)
-    ce = ce / float(batch_size)
-    kl = kl / float(batch_size)
-
-    return loss, ce, kl
-
-
 def binary_loss_array(x_recon, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
     """
     Computes the binary loss without averaging or summing over the batch dimension.
@@ -165,7 +156,10 @@ def multinomial_loss_array(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.
     num_classes = 256
     batch_size = x.size(0)
 
-    x_logit = x_logit.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
+    if args.vae_layers == "convolutional":
+        x_logit = x_logit.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
+    else:
+        x_logit = x_logit.view(batch_size, num_classes, np.prod(args.input_size))
 
     # make integer class labels
     target = (x * (num_classes - 1)).long()
@@ -174,7 +168,7 @@ def multinomial_loss_array(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.
     # computes cross entropy over all dimensions separately:
     # ce = cross_entropy(x_logit, target, reduction='none')
     ce_loss_function = nn.CrossEntropyLoss(reduction='none')
-    ce = ce_loss_function(x_logit, target, reduction='none')
+    ce = ce_loss_function(x_logit, target)
     # sum over feature dimension
     ce = ce.view(batch_size, -1).sum(dim=1)
 
@@ -194,9 +188,9 @@ def multinomial_loss_array(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.
 
 def cross_entropy(x, target, reduction='none'):
     """
-        input: Variable :math:`(N, C)` where `C = number of classes`
-        target: Variable :math:`(N)` where each value is
-            `0 <= targets[i] <= C-1`
+    input: Variable :math:`(N, C)` where `C = number of classes`
+    target: Variable :math:`(N)` where each value is
+        `0 <= targets[i] <= C-1`
     """
     log_softmax_x = F.log_softmax(x, 1)
     n = log_softmax_x.size(0)
@@ -211,29 +205,14 @@ def cross_entropy(x, target, reduction='none'):
 
 
 def calculate_boosted_loss(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, first_component, beta=1.0):
-
-    if args.input_type == "binary":
-        loss, recon, log_G, log_p, entropy, log_ratio = boosted_binary_neg_elbo(
-            x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args.regularization_rate, first_component, beta)
-
-    else:
-        ValueError(f"Invalid inpt type for calculate_boosted_loss: {args.input_type}")
+    loss, recon, log_G, log_p, entropy, log_ratio = boosted_neg_elbo(
+        x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args.regularization_rate, first_component, args, beta)
 
     return loss, recon, log_G, log_p, entropy, log_ratio
         
 
 def calculate_loss(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.):
-    """
-    Picks the correct loss depending on the input type.
-    """
-
-    if args.input_type == 'binary':
-        loss, rec, kl = binary_neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, beta=beta)
-    elif args.input_type == 'multinomial':
-        loss, rec, kl = multinomial_neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=beta)
-    else:
-        raise ValueError('Invalid input type for calculate loss: %s.' % args.input_type)
-
+    loss, rec, kl = neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=beta)
     return loss, rec, kl
 
 
