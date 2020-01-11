@@ -332,7 +332,7 @@ def update_rho(model, target_or_sample_fn, args):
         step_size = 0.005
         tolerance = 0.00001
         min_iters = 25
-        max_iters = 200 if model.all_trained else 50
+        max_iters = 200 if model.all_trained else 100
         prev_rho = model.rho.data[model.component].item()
         for batch_id in range(max_iters):
 
@@ -440,7 +440,7 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
             for n, param in model.named_parameters():
                 param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
 
-        if (batch_id % args.plot_interval == 0) or boosted_component_converged:
+        if (batch_id > 0 and batch_id % args.plot_interval == 0) or boosted_component_converged:
             with torch.no_grad():
                 plot(batch_id, model, target_or_sample_fn, args)
 

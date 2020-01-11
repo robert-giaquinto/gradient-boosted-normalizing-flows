@@ -18,6 +18,8 @@ realnvp_iaf_activation=relu
 for dataset in mnist freyfaces omniglot caltech #cifar10
 do
 
+    echo "Running models on ${dataset}"
+    
     # no flow
     python main_experiment.py --dataset ${dataset} \
            --experiment_name ${experiment_name} \
@@ -35,12 +37,12 @@ do
            --flow no_flow \
            --plot_interval ${plotting} &    
 
-    for flow_depth in 4 8 16
+    for flow_depth in 4 #8 16
     do
         # realnvp and iaf with various h_sizes
         for flow in realnvp iaf
         do
-            for h_size in 128 256 512
+            for h_size in 128 #256 512
             do
                 python main_experiment.py --dataset ${dataset} \
                        --experiment_name ${experiment_name} \
