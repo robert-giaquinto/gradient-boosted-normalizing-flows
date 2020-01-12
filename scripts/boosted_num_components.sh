@@ -11,34 +11,37 @@ source ./scripts/experiment_config.sh
 
 # define variable specific to this experiment
 exp_name=num_components
-epochs=600
 vae_layers=linear
 regularization_rate=1.0
+annealing_schedule=100
+epochs_per_component=400
+
 
 for num_components in 2 4 8
 do
-    for num_flows in 1 2
-    do
-        for h_size in 64 128 256
-        do
-            for base_network in tanh relu
+    epochs=$((num_components * epochs_per_component))
+
+    for dataset in mnist freyfaces omniglot caltech #cifar10
+    do  
+        for num_flows in 4 8 16
+        do  
+            for h_size in 256 #128 256 512
             do
                 python main_experiment.py --dataset mnist \
                        --experiment_name ${experiment_name} \
-                       --validation \
+                       --testing \
                        --no_cuda \
-                       --num_workers ${num_workers} \
+                       --num_workers 1 \
                        --no_lr_schedule \
-                       --learning_rate 0.0005 \
+                       --learning_rate ${learning_rate} \
+                       --annealing_schedule ${annealing_schedule} \
+                       --epochs_per_component ${epochs_per_component} \
                        --epochs ${epochs} \
-                       --early_stopping_epochs 0 \
-                       --burnin 0 \
-                       --annealing_schedule 100 \
                        --vae_layers ${vae_layers} \
                        --flow boosted \
                        --component_type realnvp \
-                       --num_base_layers 1 \
-                       --base_network ${base_network} \
+                       --num_base_layers 0 \
+                       --base_network tanh \
                        --h_size ${h_size} \
                        --num_components ${num_components} \
                        --regularization_rate ${regularization_rate} \
@@ -50,6 +53,8 @@ do
             done
         done
     done
+    wait
+
 done
 wait
 echo "Job complete"
