@@ -31,11 +31,12 @@ class BoostedVAE(VAE):
 
         if args.rho_init == "decreasing":
             # each component is given half the weight of the previous one
-            self.rho = torch.clamp(1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(1.0) + \
-                                                   torch.arange(self.num_components * 1.0, device=args.device)), min=0.05).to(args.device)
+            self.register_buffer('rho', torch.clamp(
+                1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(1.0) + \
+                                torch.arange(self.num_components * 1.0, device=args.device)), min=0.05).to(args.device))
         else:
             # args.rho_init == "uniform"
-            self.rho = self.FloatTensor(self.num_components).fill_(1.0 / self.num_components)
+            self.register_buffer('rho', self.FloatTensor(self.num_components).fill_(1.0 / self.num_components))
         
         if args.density_evaluation:
             self.q_z_nn, self.q_z_mean, self.q_z_var = None, None, None
@@ -155,12 +156,21 @@ class BoostedVAE(VAE):
 
             tolerance = 0.00001
             step_size = 0.005
-            min_iters = 15
-            max_iters = 150 if self.all_trained else 50
+            min_iters = 25
+            max_iters = 150 if self.all_trained else 75
 
             prev_rho = self.rho[self.component].item()
             for batch_id, (x, _) in enumerate(data_loader):
                 x = x.detach().to(self.args.device)
+
+                if self.args.dynamic_binarization:
+                    x = torch.bernoulli(x)
+
+                if self.args.vae_layers == 'convolutional':
+                    x = x.view(-1, *self.args.input_size)
+                else:
+                    x = x.view(-1, np.prod(self.args.input_size))
+
                 g_loss, G_loss = self._rho_gradient(x)
                 gradient = g_loss - G_loss
                 step_size = step_size / (0.025 * batch_id + 1)

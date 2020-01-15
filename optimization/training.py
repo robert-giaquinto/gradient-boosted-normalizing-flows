@@ -10,6 +10,7 @@ from optimization.loss import calculate_loss, calculate_loss_array, calculate_bo
 from utils.plotting import plot_training_curve
 from scipy.special import logsumexp
 from optimization.evaluation import evaluate
+from utils.utilities import load, save
 
 logger = logging.getLogger(__name__)
 
@@ -99,7 +100,7 @@ def train_vae(train_loader, val_loader, model, optimizer, scheduler, args):
         if v_loss < best_loss:
             e = 0
             best_loss = v_loss
-            torch.save(model, args.snap_dir + 'model.pt')
+            save(model, optimizer, args.snap_dir + 'model.pt')
         elif (args.early_stopping_epochs > 0) and (epoch >= args.annealing_schedule):
             e += 1
             if e > args.early_stopping_epochs:
@@ -126,7 +127,7 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
     train_kl = np.zeros(total_batches)
 
     # set beta annealing coefficient
-    beta = max(min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta]), args.min_beta)
+    beta = max(min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta]), args.min_beta) if args.load is not None else 1.0
 
     for batch_id, (x, _) in enumerate(train_loader):
         x = x.to(args.device)
@@ -195,17 +196,12 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
         tr_loss, tr_rec, tr_G, tr_p, tr_entropy, tr_ratio = train_epoch_boosted(
             epoch, train_loader, model, optimizer, scheduler, beta, prob_all, args)
         train_times.append(time.time() - t_start)
-        
         train_loss.append(tr_loss)
         train_rec.append(tr_rec)
         train_G.append(tr_G)
         train_p.append(tr_p)
         train_entropy.append(tr_entropy)
-
-        v_loss, v_rec, v_kl = evaluate(val_loader, model, args, epoch=epoch)
-        val_loss.append(v_loss)
-        val_rec.append(v_rec)
-        val_kl.append(v_kl)
+        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_G.mean():12.3f}{tr_p.mean():12.3f}{tr_entropy.mean():12.3f}{tr_ratio:12.3f}'
 
         # is it time to update rho?
         time_to_update = check_time_to_update(epoch - converged_epoch, args)
@@ -214,32 +210,40 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
         if converged:
             converged_epoch = epoch
 
-        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_G.mean():12.3f}{tr_p.mean():12.3f}{tr_entropy.mean():12.3f}{tr_ratio:12.3f}'
-        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{prob_all:16.2f}  |  c={model.component}'
-        epoch_msg += f' | LR=' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.4f}" for c in range(model.num_components)])
-
+        param_msg = f'  | c={model.component}'
         if time_to_update or converged:
-            converged_epoch = epoch  # default convergence due to number of epochs elapsed
+            converged_epoch = epoch
             prev_lr[model.component] = optimizer.param_groups[model.component]['lr']  # save lr if using LR scheduler
             
             model.update_rho(train_loader)
-            epoch_msg += '  | Rho: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data])
+            param_msg += ' | Rho=' + ' '.join([f"{val:1.2f}" for val in model.rho.data])
             model.increment_component()
+            param_msg += f', AT={str(model.all_trained)}'
 
-            # set the learning rate of all but one component to zero
+            # freeze all but one component
             for c in range(args.num_components):
-                #optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
                 optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
             for n, param in model.named_parameters():
                 param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
 
-        logger.info(epoch_msg + f'{"| ": >4}')
+            # save model at this training point
+            save(model, optimizer, args.snap_dir + f'model_step_{epoch}.pt')
+
+        # Evaluate model
+        v_loss, v_rec, v_kl = evaluate(val_loader, model, args, epoch=epoch)
+        val_loss.append(v_loss)
+        val_rec.append(v_rec)
+        val_kl.append(v_kl)
+        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{prob_all:16.2f}'
+        lr_msg = f' | LR=' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.4f}" for c in range(model.num_components)])
+        logger.info(epoch_msg + param_msg + lr_msg + f'{"| ": >4}')
+        
         # early-stopping only after all components have been trained
         if v_loss < best_loss:
             e = 0
             best_loss = v_loss
-            torch.save(model, args.snap_dir + 'model.pt')
-        elif (args.early_stopping_epochs > 0) and (model.component == model.num_components and beta == 1.0):
+            save(model, optimizer, args.snap_dir + 'model.pt')
+        elif args.early_stopping_epochs > 0 and model.all_trained:
             e += 1
             if e > args.early_stopping_epochs:
                 break
@@ -314,7 +318,7 @@ def kl_annealing_rate(epochs_since_prev_convergence, component, all_trained, arg
     TODO need to adjust this for when an previous component converged early
     """
     past_warmup =  ((epochs_since_prev_convergence - 1) % args.epochs_per_component) >= args.annealing_schedule
-    if all_trained or past_warmup:
+    if all_trained or past_warmup or args.load is not None:
         # all trained or past the first args.annealing_schedule epochs of training this component, so no annealing
         beta = 1.0
     else:

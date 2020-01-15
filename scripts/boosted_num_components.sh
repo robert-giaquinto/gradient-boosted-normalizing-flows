@@ -10,7 +10,7 @@ conda activate env
 source ./scripts/experiment_config.sh
 
 # define variable specific to this experiment
-exp_name=num_components
+experiment_name=num_components
 vae_layers=linear
 regularization_rate=1.0
 annealing_schedule=100

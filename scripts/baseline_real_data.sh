@@ -10,12 +10,12 @@ conda activate env
 source ./scripts/experiment_config.sh
 
 # variables specific to this experiment
-experiment_name=baseline_run1
+experiment_name=baseline_linear_run1
 vae_layers=linear
 realnvp_iaf_hidden_layers=0
-realnvp_iaf_activation=relu
+realnvp_iaf_activation=tanh
 
-for dataset in mnist freyfaces omniglot caltech #cifar10
+for dataset in mnist freyfaces omniglot caltech
 do
 
     echo "Running models on ${dataset}"
@@ -37,12 +37,12 @@ do
            --flow no_flow \
            --plot_interval ${plotting} &    
 
-    for flow_depth in 4 #8 16
+    for flow_depth in 16 #4 8 16
     do
         # realnvp and iaf with various h_sizes
         for flow in realnvp iaf
         do
-            for h_size in 128 #256 512
+            for h_size in 512 #128 256 512
             do
                 python main_experiment.py --dataset ${dataset} \
                        --experiment_name ${experiment_name} \
@@ -121,7 +121,7 @@ do
                --vae_layers ${vae_layers} \
                --batch_size ${batch_size} \
                --flow orthogonal \
-               --num_ortho_vecs 16 \
+               --num_ortho_vecs 32 \
                --num_flows ${flow_depth} \
                --plot_interval ${plotting} &
     done

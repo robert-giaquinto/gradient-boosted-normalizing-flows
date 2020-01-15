@@ -22,6 +22,7 @@ from models.nlsq_vae import NLSqVAE
 from optimization.training import train
 from optimization.evaluation import evaluate, evaluate_likelihood
 from utils.load_data import load_dataset
+from utils.utilities import load, save
 
 
 logger = logging.getLogger(__name__)
@@ -30,9 +31,9 @@ logger = logging.getLogger(__name__)
 parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')
 parser.add_argument('--experiment_name', type=str, default=None,
                     help="A name to help identify the experiment being run when training this model.")
-
 parser.add_argument('--dataset', type=str, default='mnist', help='Dataset choice.',
                     choices=['mnist', 'freyfaces', 'omniglot', 'caltech', 'cifar10'])
+
 parser.add_argument('--manual_seed', type=int, default=123, help='manual seed, if not given resorts to random seed.')
 parser.add_argument('--freyseed', type=int, default=123, help="Seed for shuffling frey face dataset for test split.")
 
@@ -51,6 +52,7 @@ parser.add_argument('--exp_log', type=str, default='./results/experiment_log.txt
 parser.add_argument('--print_log', dest="save_log", action="store_false", help='Add this flag to have progress printed to log (rather than saved to a file).')
 parser.set_defaults(save_log=True)
 
+parser.add_argument('--load', type=str, default=None, help='Path to load the model from')
 sr = parser.add_mutually_exclusive_group(required=False)
 sr.add_argument('--save_results', action='store_true', dest='save_results', help='Save results from experiments.')
 sr.add_argument('--discard_results', action='store_false', dest='save_results', help='Do NOT save results from experiments.')
@@ -59,6 +61,8 @@ parser.set_defaults(save_results=True)
 # testing vs. just validation
 fp = parser.add_mutually_exclusive_group(required=False)
 fp.add_argument('--testing', action='store_true', dest='testing', help='evaluate on test set after training')
+parser.add_argument('--nll_samples', type=int, default=2000, help='Number of samples to use in evaluating NLL')
+parser.add_argument('--nll_mb', type=int, default=500, help='Number of mini-batches to use in evaluating NLL')
 fp.add_argument('--validation', action='store_false', dest='testing', help='only evaluate on validation set')
 parser.set_defaults(testing=True)
 
@@ -314,25 +318,32 @@ def main(main_args=None):
     num_params = sum([param.nelement() for param in model.parameters()])
     logger.info(f"MODEL:\nNumber of model parameters={num_params}\n{model}\n")
 
+    if args.load:
+        logger.info(f'LOADING CHECKPOINT FROM PRE-TRAINED MODEL: {args.load}')
+        load(model, optimizer, args.load)
+
     # =========================================================================
     # TRAINING
     # =========================================================================
-    logger.info('TRAINING:')
-    train_loss, val_loss = train(train_loader, val_loader, model, optimizer, scheduler, args)
+    training_required = args.epochs > 0 or args.load is None
+    if training_required:
+        logger.info('TRAINING:')
+        train_loss, val_loss = train(train_loader, val_loader, model, optimizer, scheduler, args)
 
     # =========================================================================
     # VALIDATION
     # =========================================================================
     logger.info('VALIDATION:')
-    final_model = torch.load(args.snap_dir + 'model.pt')
-    val_loss, val_rec, val_kl = evaluate(val_loader, final_model, args, results_type='Validation')
+    if training_required:
+        load(model, optimizer, args.snap_dir + 'model.pt')
+    val_loss, val_rec, val_kl = evaluate(val_loader, model, args, results_type='Validation')
 
     # =========================================================================
     # TESTING
     # =========================================================================
     if args.testing:
         logger.info("TESTING:")
-        test_nll = evaluate_likelihood(test_loader, final_model, args, S=2000, MB=500, results_type='Test')
+        test_nll = evaluate_likelihood(test_loader, model, args, S=args.nll_samples, MB=args.nll_mb, results_type='Test')
 
 
 if __name__ == "__main__":

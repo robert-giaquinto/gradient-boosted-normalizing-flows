@@ -38,6 +38,7 @@ def evaluate(data_loader, model, args, epoch=None, results_type=None):
             x = x.view(-1, np.prod(args.input_size))
 
         if args.flow == 'boosted':
+            # report performance of current component or the full model? currently doing full model
             x_recon, z_mu, z_var, Z, ldj, _, _ = model(x, prob_all=1.0)
             z0, zk = Z[0], Z[-1]
         else:
@@ -98,8 +99,8 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000, results_type=
         S = MB
 
     for j in range(N_test):
-        if j % 100 == 0:
-            print('Progress: {:.2f}%'.format(j / (1.0 * N_test) * 100))
+        if j % (int(N_test / 10.0)) == 0:
+            logger.info('Progress: {:.1f}%'.format(100.0 * j / (1.0 * N_test))) 
 
         x_single = X[j].unsqueeze(0)
         if args.vae_layers == 'convolutional':

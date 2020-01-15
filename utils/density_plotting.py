@@ -24,11 +24,11 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     if args.density_matching:
         if args.flow == "boosted":
             plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + 2))))
-            plt_width = max(1, int(np.ceil((args.num_components + 2) / plt_height)))
+            plt_width = max(2, int(np.ceil((args.num_components + 2) / plt_height)))
             fig, axs = plt.subplots(plt_height, plt_width, figsize=(12,12), subplot_kw={'aspect': 'equal'}, squeeze=False)
             plot_potential(potential_or_sampling_fn, axs[0, 0], test_grid, n_pts)
             plot_flow_samples(model, axs[0, 1], n_pts, args.batch_size, args)
-            plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, args.batch_size, args)
+            plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, args.batch_size, args, plt_height, plt_width)
         else:
             fig, axs = plt.subplots(1, 3, figsize=(16,8), subplot_kw={'aspect': 'equal'}, squeeze=False)
             plot_potential(potential_or_sampling_fn, axs[0, 0], test_grid, n_pts)
@@ -65,6 +65,15 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     fname += '_lr_scheduling' if not args.no_lr_schedule else ''
     plt.savefig(os.path.join(args.snap_dir, fname + f'_step{batch_id}.png'))
     plt.close()
+
+
+    # plot densities using gaussian interpolation
+    if args.density_matching:
+        if args.flow == "boosted":
+            plot_boosted_inv_flow(model, batch_id, 5000, args.batch_size, args)
+        else:
+            plot_inv_flow(model, batch_id, 5000, args.batch_size, args)
+    
 
     # PLOT THE FINAL RESULT IF THIS IS THE LAST BATCH
     if batch_id == args.num_steps:
@@ -232,15 +241,32 @@ def plot_inv_flow_density(model, ax, test_grid, n_pts, batch_size, args):
     ax.set_facecolor(plt.cm.viridis(0.0))
     ax.set_title('Flow Density', fontdict={'fontsize': 20})
 
+    
+def plot_inv_flow(model, batch_id, n_pts, batch_size, args):
+    fname = f'{args.dataset}_{args.flow}_K{args.num_flows}_bs{args.batch_size}'
+    fname += f'_{args.base_network}{args.num_base_layers}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
+    fname += f'_hidden{args.num_base_layers}_hsize{args.h_size}' if args.flow == 'iaf' else ''
+    fname += '_annealed' if args.min_beta < 1.0 else ''
+    fname += '_lr_scheduling' if not args.no_lr_schedule else ''
 
-def plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, batch_size, args):
+    Z = np.hstack([model.flow(torch.randn(n_pts, 2).to(args.device))[0].t().cpu().data.numpy()
+                   for _ in range(n_pts)])
+        
+    H, _, _ = np.histogram2d(Z[0], Z[1], bins=(np.arange(-4, 4, 0.05), np.arange(-4, 4, 0.05)))
+    plt.figure(figsize=(12, 12))
+    plt.imshow(H.T, interpolation='gaussian')
+    plt.axis('off')
+    plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
+    plt.savefig(os.path.join(args.snap_dir, f'final_{fname}_step{batch_id}.png'))
+
+
+def plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, batch_size, args, plt_height, plt_width):
     """
     plots transformed grid and density; where density is exp(loq_flow_base_dist - logdet)
     """
     xx, yy, zz = test_grid
     num_fixed_plots = 2  # every image will show the true density and samples from the full model
-    plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + num_fixed_plots))))
-    plt_width = max(1, int(np.ceil((args.num_components + num_fixed_plots) / plt_height)))
+
     num_components_to_plot = args.num_components if model.all_trained else model.component + 1
     for c in range(num_components_to_plot):
         if model.rho[c] == 0.0:
@@ -249,7 +275,6 @@ def plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, batch_size, args
         row = int(np.floor((c + num_fixed_plots) / plt_width))
         col = int((c + num_fixed_plots) % plt_width)
 
-        test_grid = setup_grid(4, n_pts, args)
         zzk, logdet = [], []
         for zz_i in zz.split(batch_size, dim=0):
             ZZ_i, logdet_i = model.component_forward_flow(zz_i, c)
@@ -267,6 +292,43 @@ def plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, batch_size, args
                                 cmap=plt.cm.viridis)
         axs[row,col].set_facecolor(plt.cm.viridis(0.0))
         axs[row,col].set_title(f'Boosted Flow Density for c={c}', fontdict={'fontsize': 20})
+
+
+def plot_boosted_inv_flow(model, batch_id, n_pts, batch_size, args):
+    """
+    plots transformed grid and density; where density is a gaussian interpolation of the model's samples
+    """
+    fname = f'{args.dataset}_{args.flow}_K{args.num_flows}_bs{args.batch_size}'
+    fname += f'_C{args.num_components}_reg{int(100*args.regularization_rate):d}_{args.component_type}'
+    fname += f'_{args.base_network}{args.num_base_layers}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
+    fname += '_annealed' if args.min_beta < 1.0 else ''
+    fname += '_lr_scheduling' if not args.no_lr_schedule else ''
+
+    Z = []
+    num_components_to_plot = args.num_components if model.all_trained else model.component + 1
+    for c in range(num_components_to_plot):
+        zc = np.hstack([model.component_forward_flow(torch.randn(n_pts, 2).to(args.device), c)[0][-1].t().cpu().data.numpy()
+                        for _ in range(n_pts)])
+        
+        num_sampled = int(np.ceil(( model.rho[c] / model.rho.sum() ) * n_pts * n_pts))
+        Z.append(zc[:, 0:num_sampled])
+
+        # plot component c
+        Hc, _, _ = np.histogram2d(zc[0], zc[1], bins=(np.arange(-4, 4, 0.05), np.arange(-4, 4, 0.05)))
+        plt.figure(figsize=(12, 12))
+        plt.imshow(Hc.T, interpolation='gaussian')
+        plt.axis('off')
+        plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
+        plt.savefig(os.path.join(args.snap_dir, f'{c}_{fname}_step{batch_id}.png'))
+
+    # plot full model
+    Z = np.hstack(Z)
+    H, _, _ = np.histogram2d(Z[0], Z[1], bins=(np.arange(-4, 4, 0.05), np.arange(-4, 4, 0.05)))
+    plt.figure(figsize=(12, 12))
+    plt.imshow(H.T, interpolation='gaussian')
+    plt.axis('off')
+    plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
+    plt.savefig(os.path.join(args.snap_dir, f'final_{fname}_step{batch_id}.png'))
 
 
 def plot_q0_density(model, ax, test_grid, n_pts, batch_size, args):
