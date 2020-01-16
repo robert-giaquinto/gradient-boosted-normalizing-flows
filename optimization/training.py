@@ -169,9 +169,9 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
 
     # for early stopping
     best_loss = np.inf
-    prev_tr_ratio = np.inf
-    component_threshold = 0.0 #0.0001
-    e = 0
+    best_tr_ratio = -np.inf
+
+    early_stop_count = 0
     epoch = 0
     converged_epoch = 0  # corrects the annealing schedule when a component converges early
     converged = False
@@ -191,7 +191,8 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
 
         # occasionally sample from all components to keep decoder from focusing solely on new component
         prob_all = sample_from_all_prob(epoch - converged_epoch, model.component, model.all_trained, args)
-            
+
+        # Train model
         t_start = time.time()
         tr_loss, tr_rec, tr_G, tr_p, tr_entropy, tr_ratio = train_epoch_boosted(
             epoch, train_loader, model, optimizer, scheduler, beta, prob_all, args)
@@ -201,56 +202,48 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
         train_G.append(tr_G)
         train_p.append(tr_p)
         train_entropy.append(tr_entropy)
-        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_G.mean():12.3f}{tr_p.mean():12.3f}{tr_entropy.mean():12.3f}{tr_ratio:12.3f}'
-
-        # is it time to update rho?
-        time_to_update = check_time_to_update(epoch - converged_epoch, args)
-        # New component performance converged?
-        converged = check_convergence(tr_ratio, prev_tr_ratio, model.component, epoch - converged_epoch, args)
-        if converged:
-            converged_epoch = epoch
-
-        param_msg = f'  | c={model.component}'
-        if time_to_update or converged:
-            converged_epoch = epoch
-            prev_lr[model.component] = optimizer.param_groups[model.component]['lr']  # save lr if using LR scheduler
-            
-            model.update_rho(train_loader)
-            param_msg += ' | Rho=' + ' '.join([f"{val:1.2f}" for val in model.rho.data])
-            model.increment_component()
-            param_msg += f', AT={str(model.all_trained)}'
-
-            # freeze all but one component
-            for c in range(args.num_components):
-                optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
-            for n, param in model.named_parameters():
-                param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
-
-            # save model at this training point
-            save(model, optimizer, args.snap_dir + f'model_step_{epoch}.pt')
 
         # Evaluate model
         v_loss, v_rec, v_kl = evaluate(val_loader, model, args, epoch=epoch)
         val_loss.append(v_loss)
         val_rec.append(v_rec)
         val_kl.append(v_kl)
-        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{prob_all:16.2f}'
-        lr_msg = f' | LR=' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.4f}" for c in range(model.num_components)])
-        logger.info(epoch_msg + param_msg + lr_msg + f'{"| ": >4}')
-        
-        # early-stopping only after all components have been trained
-        if v_loss < best_loss:
-            e = 0
-            best_loss = v_loss
+
+        epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_G.mean():12.3f}{tr_p.mean():12.3f}{tr_entropy.mean():12.3f}{tr_ratio:12.3f}'
+        epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{prob_all:16.2f}  |  c={model.component} | AT={str(model.all_trained)}'
+
+        # Assess convergence
+        component_converged, model_improved, early_stop_count, best_loss, best_tr_ratio = check_convergence(
+            early_stop_count, v_loss, best_loss, tr_ratio, best_tr_ratio, epoch - converged_epoch, model, args)
+
+        if model_improved:
             save(model, optimizer, args.snap_dir + 'model.pt')
-        elif args.early_stopping_epochs > 0 and model.all_trained:
-            e += 1
-            if e > args.early_stopping_epochs:
+
+        if component_converged:
+            converged_epoch = epoch
+            prev_lr[model.component] = optimizer.param_groups[model.component]['lr']  # save LR for LR scheduler
+            model.update_rho(train_loader)
+            model.increment_component()
+
+            save(model, optimizer, args.snap_dir + f'model_step_{epoch}.pt')            
+            epoch_msg += '  | Rho=' + ' '.join([f"{val:1.2f}" for val in model.rho.data])
+
+            if early_stop_count > args.early_stopping_epochs and model.all_trained:
+                # early-stopping of the full model happens only after all components have been trained
+                logger.info(epoch_msg + f'{"| ": >4}')
+                logger.info("Model converged early.")
                 break
+            
+            # reset early_stop_count and train the next component
+            early_stop_count = 0
+            # freeze all but the new component being trained
+            for c in range(args.num_components):
+                optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
+            for n, param in model.named_parameters():
+                param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
 
-        # save log g(z|x) to check for convergence of new component
-        prev_tr_ratio = tr_ratio
-
+        logger.info(epoch_msg + f'{"| ": >4}')
+        
     train_loss = np.hstack(train_loss)
     train_rec = np.hstack(train_rec)
     train_G = np.hstack(train_G)
@@ -351,22 +344,36 @@ def sample_from_all_prob(epochs_since_prev_convergence, current_component, all_t
         return prob_all
 
 
-def check_convergence(ratio, prev_ratio, current_component, epoch, args):
+def check_convergence(early_stop_count, v_loss, best_loss, tr_ratio, best_tr_ratio, epochs_since_prev_convergence, model, args):
     """
     Verify if a boosted component has converged (log ratio between G and g stopped improving)
     """
-    ratio_dif = abs(ratio - prev_ratio)
-    converged = ratio_dif < args.component_threshold
-    performance_improved = prev_ratio <= ratio
-    
-    # don't worry about convergence on the last component, we'll just let that one finish the annealing cycle
-    #not_last_component = current_component < (args.num_components - 1)
+    first_component_trained = model.component > 0 or model.all_trained
+    model_improved = False
+    early_stop_flag = False
+    if first_component_trained and (v_loss < best_loss and tr_ratio > best_tr_ratio):
+        # already trained more than one component, boosted component improved
+        early_stop_count = 0
+        best_loss = v_loss
+        best_tr_ratio = tr_ratio
+        model_improved = True
+    elif not first_component_trained and v_loss < best_loss:
+        # training only the first component (for the first time), and it improved
+        early_stop_count = 0
+        best_loss = v_loss
+        model_improved = True
+    elif args.early_stopping_epochs > 0:
+        # model didn't improve, do we consider it converged yet?
+        early_stop_count += 1        
+        early_stop_flag = early_stop_count > args.early_stopping_epochs
 
-    converged_flag = converged and performance_improved #and not_last_component
-    if converged_flag:
-        logger.info(f"\tComponent {current_component} (out of {args.num_components}) converged at epoch {epoch} ({ratio_dif} < {args.component_threshold}).")
-        
-    return converged_flag
+    # Lastly, we consider the model converged if a pre-set number of epochs have elapsed
+    past_warmup =  epochs_since_prev_convergence >= args.annealing_schedule
+    time_to_update = epochs_since_prev_convergence % args.epochs_per_component == 0
+
+    converged = early_stop_flag or (time_to_update and past_warmup)
+    return converged, model_improved, early_stop_count, best_loss, best_tr_ratio
+
 
 
 def check_time_to_update(epochs_since_prev_convergence, args):
@@ -375,7 +382,4 @@ def check_time_to_update(epochs_since_prev_convergence, args):
 
     epochs_since_prev_convergence represents epochs since the last component converged
     """
-    past_warmup =  epochs_since_prev_convergence >= args.annealing_schedule
-    time_to_update = epochs_since_prev_convergence % args.epochs_per_component == 0
-    return time_to_update and past_warmup
 

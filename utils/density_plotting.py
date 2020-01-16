@@ -70,9 +70,9 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     # plot densities using gaussian interpolation
     if args.density_matching:
         if args.flow == "boosted":
-            plot_boosted_inv_flow(model, batch_id, 5000, args.batch_size, args)
+            plot_boosted_inv_flow(model, batch_id, 1000, args.batch_size, args)
         else:
-            plot_inv_flow(model, batch_id, 5000, args.batch_size, args)
+            plot_inv_flow(model, batch_id, 1000, args.batch_size, args)
     
 
     # PLOT THE FINAL RESULT IF THIS IS THE LAST BATCH
@@ -249,8 +249,7 @@ def plot_inv_flow(model, batch_id, n_pts, batch_size, args):
     fname += '_annealed' if args.min_beta < 1.0 else ''
     fname += '_lr_scheduling' if not args.no_lr_schedule else ''
 
-    Z = np.hstack([model.flow(torch.randn(n_pts, 2).to(args.device))[0].t().cpu().data.numpy()
-                   for _ in range(n_pts)])
+    Z = np.hstack([model.flow(torch.randn(n_pts, 2).to(args.device) * model.base_dist_var + model.base_dist_mean)[0].t().cpu().data.numpy() for _ in range(n_pts)])
         
     H, _, _ = np.histogram2d(Z[0], Z[1], bins=(np.arange(-4, 4, 0.05), np.arange(-4, 4, 0.05)))
     plt.figure(figsize=(12, 12))
@@ -306,9 +305,9 @@ def plot_boosted_inv_flow(model, batch_id, n_pts, batch_size, args):
 
     Z = []
     num_components_to_plot = args.num_components if model.all_trained else model.component + 1
-    for c in range(num_components_to_plot):
-        zc = np.hstack([model.component_forward_flow(torch.randn(n_pts, 2).to(args.device), c)[0][-1].t().cpu().data.numpy()
-                        for _ in range(n_pts)])
+    for c in range(num_components_to_plot):        
+        zc = np.hstack([model.component_forward_flow(
+            torch.randn(n_pts, 2).to(args.device) * model.base_dist_var + model.base_dist_mean, c)[0][-1].t().cpu().data.numpy() for _ in range(n_pts)])
         
         num_sampled = int(np.ceil(( model.rho[c] / model.rho.sum() ) * n_pts * n_pts))
         Z.append(zc[:, 0:num_sampled])
@@ -320,6 +319,11 @@ def plot_boosted_inv_flow(model, batch_id, n_pts, batch_size, args):
         plt.axis('off')
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
         plt.savefig(os.path.join(args.snap_dir, f'{c}_{fname}_step{batch_id}.png'))
+
+        if model.component == 0 and not model.all_trained:
+            # don't bother plotting components that haven't been trained at all
+            break
+
 
     # plot full model
     Z = np.hstack(Z)
