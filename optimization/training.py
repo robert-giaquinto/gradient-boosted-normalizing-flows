@@ -228,8 +228,8 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
             save(model, optimizer, args.snap_dir + f'model_step_{epoch}.pt')            
             epoch_msg += '  | Rho=' + ' '.join([f"{val:1.2f}" for val in model.rho.data])
 
-            if early_stop_count > args.early_stopping_epochs and model.all_trained:
-                # early-stopping of the full model happens only after all components have been trained
+            if early_stop_count > args.early_stopping_epochs and model.all_trained and model.component == (args.num_components - 1):
+                # early-stopping of the full model happens only after all components have been trained 2x
                 logger.info(epoch_msg + f'{"| ": >4}')
                 logger.info("Model converged early.")
                 break
@@ -368,18 +368,11 @@ def check_convergence(early_stop_count, v_loss, best_loss, tr_ratio, best_tr_rat
         early_stop_flag = early_stop_count > args.early_stopping_epochs
 
     # Lastly, we consider the model converged if a pre-set number of epochs have elapsed
-    past_warmup =  epochs_since_prev_convergence >= args.annealing_schedule
     time_to_update = epochs_since_prev_convergence % args.epochs_per_component == 0
 
-    converged = early_stop_flag or (time_to_update and past_warmup)
+    # But, model must have exceeded the warmup period before "converging"
+    past_warmup = (epochs_since_prev_convergence >= args.annealing_schedule) or model.all_trained
+    
+    converged = (early_stop_flag or time_to_update) and past_warmup
     return converged, model_improved, early_stop_count, best_loss, best_tr_ratio
-
-
-
-def check_time_to_update(epochs_since_prev_convergence, args):
-    """
-    Has the anneal schedule concluded for this component?
-
-    epochs_since_prev_convergence represents epochs since the last component converged
-    """
 

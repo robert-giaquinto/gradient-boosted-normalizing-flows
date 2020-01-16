@@ -156,8 +156,8 @@ class BoostedVAE(VAE):
 
             tolerance = 0.00001
             step_size = 0.005
-            min_iters = 25
-            max_iters = 150 if self.all_trained else 75
+            min_iters = 50
+            max_iters = 200 if self.all_trained else 100
 
             prev_rho = self.rho[self.component].item()
             for batch_id, (x, _) in enumerate(data_loader):
@@ -176,7 +176,7 @@ class BoostedVAE(VAE):
                 step_size = step_size / (0.025 * batch_id + 1)
                 rho = min(max(prev_rho - step_size * gradient, 0.001), 0.999)
 
-                grad_msg = f'{batch_id: >3}. rho = {prev_rho:5.3f} -  {gradient:4.2f} * {step_size:5.3f} = {rho:5.3f}'
+                grad_msg = f'{batch_id: >3}. rho = {prev_rho:6.4f} -  {gradient:6.4f} * {step_size:8.6f} = {rho:6.4f}'
                 loss_msg = f"\tg vs G. Loss: ({g_loss:6.1f}, {G_loss:6.1f})."
                 print(grad_msg + loss_msg, file=rho_log)
 
