@@ -10,7 +10,7 @@ from optimization.loss import calculate_loss, calculate_loss_array, calculate_bo
 from utils.plotting import plot_training_curve
 from scipy.special import logsumexp
 from optimization.evaluation import evaluate
-from utils.utilities import load, save
+from utils.utilities import save
 
 logger = logging.getLogger(__name__)
 

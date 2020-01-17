@@ -23,12 +23,14 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     # plot
     if args.density_matching:
         if args.flow == "boosted":
-            plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + 2))))
-            plt_width = max(2, int(np.ceil((args.num_components + 2) / plt_height)))
+            #plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + 2))))
+            #plt_width = max(2, int(np.ceil((args.num_components + 2) / plt_height)))
+            plt_width = 2
+            plt_height = 1
             fig, axs = plt.subplots(plt_height, plt_width, figsize=(12,12), subplot_kw={'aspect': 'equal'}, squeeze=False)
             plot_potential(potential_or_sampling_fn, axs[0, 0], test_grid, n_pts)
             plot_flow_samples(model, axs[0, 1], n_pts, args.batch_size, args)
-            plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, args.batch_size, args, plt_height, plt_width)
+            #plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, args.batch_size, args, plt_height, plt_width)
         else:
             fig, axs = plt.subplots(1, 3, figsize=(16,8), subplot_kw={'aspect': 'equal'}, squeeze=False)
             plot_potential(potential_or_sampling_fn, axs[0, 0], test_grid, n_pts)

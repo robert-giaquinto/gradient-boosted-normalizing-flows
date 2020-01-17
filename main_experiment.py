@@ -53,6 +53,13 @@ parser.add_argument('--print_log', dest="save_log", action="store_false", help='
 parser.set_defaults(save_log=True)
 
 parser.add_argument('--load', type=str, default=None, help='Path to load the model from')
+at = parser.add_mutually_exclusive_group(required=False)
+at.add_argument('--loaded_is_not_all_trained', action="store_false", dest='loaded_is_all_trained',
+                help="Set this if you don't want the loaded boosted model to be consider all_trained (default=True)")
+at.add_argument('--loaded_is_all_trained', action='store_true', dest='loaded_is_all_trained',
+                help='Default setting, which assumes the loaded boosted model is all_trained.')
+parser.set_defaults(loaded_is_all_trained=True)
+
 sr = parser.add_mutually_exclusive_group(required=False)
 sr.add_argument('--save_results', action='store_true', dest='save_results', help='Save results from experiments.')
 sr.add_argument('--discard_results', action='store_false', dest='save_results', help='Do NOT save results from experiments.')
@@ -225,6 +232,10 @@ def init_model(args):
     else:
         raise ValueError('Invalid flow choice')
 
+    if torch.cuda.device_count() > 1:
+        logger.info("Let's use", torch.cuda.device_count(), "GPUs!")
+        model = nn.DataParallel(model).to(args.device)
+
     return model
 
 
@@ -320,7 +331,7 @@ def main(main_args=None):
 
     if args.load:
         logger.info(f'LOADING CHECKPOINT FROM PRE-TRAINED MODEL: {args.load}')
-        load(model, optimizer, args.load)
+        load(model, optimizer, args.load, args)
 
     # =========================================================================
     # TRAINING
@@ -335,7 +346,7 @@ def main(main_args=None):
     # =========================================================================
     logger.info('VALIDATION:')
     if training_required:
-        load(model, optimizer, args.snap_dir + 'model.pt')
+        load(model, optimizer, args.snap_dir + 'model.pt', args)
     val_loss, val_rec, val_kl = evaluate(val_loader, model, args, results_type='Validation')
 
     # =========================================================================
