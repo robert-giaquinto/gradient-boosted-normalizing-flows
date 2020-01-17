@@ -18,7 +18,6 @@ def load(model, optimizer, path, args):
         model = checkpoint
     
     model.all_trained = args.loaded_is_all_trained
-    model = nn.DataParallel(model)
     model.to(args.device)
     
     
@@ -27,3 +26,14 @@ def save(model, optimizer, path):
         'model': model.state_dict(),
         'optimizer': optimizer.state_dict()
     }, path)
+
+
+class MyDataParallel(torch.nn.DataParallel):
+    """
+    Allow nn.DataParallel to call model's attributes.
+    """
+    def __getattr__(self, name):
+        try:
+            return super().__getattr__(name)
+        except AttributeError:
+            return getattr(self.module, name)

@@ -23,7 +23,7 @@ from models.nlsq_vae import NLSqVAE
 from optimization.training import train
 from optimization.evaluation import evaluate, evaluate_likelihood
 from utils.load_data import load_dataset
-from utils.utilities import load, save
+from utils.utilities import load, save, MyDataParallel
 
 
 logger = logging.getLogger(__name__)
@@ -232,10 +232,6 @@ def init_model(args):
         model = TriangularSylvesterVAE(args).to(args.device)
     else:
         raise ValueError('Invalid flow choice')
-
-    if torch.cuda.device_count() > 1:
-        logger.info("Let's use", torch.cuda.device_count(), "GPUs!")
-        model = nn.DataParallel(model).to(args.device)
 
     return model
 
