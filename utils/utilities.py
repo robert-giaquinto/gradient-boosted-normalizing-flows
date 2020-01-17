@@ -11,8 +11,12 @@ def safe_log(z):
 
 def load(model, optimizer, path, args):
     checkpoint = torch.load(path, map_location=args.device)
-    model.load_state_dict(checkpoint['model'])
-    optimizer.load_state_dict(checkpoint['optimizer'])
+    if type(checkpoint) is dict:
+        model.load_state_dict(checkpoint['model'])
+        optimizer.load_state_dict(checkpoint['optimizer'])
+    else:
+        model = checkpoint
+    
     model.all_trained = args.loaded_is_all_trained
     model = nn.DataParallel(model)
     model.to(args.device)

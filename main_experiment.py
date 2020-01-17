@@ -355,6 +355,7 @@ def main(main_args=None):
     # =========================================================================
     if args.testing:
         logger.info("TESTING:")
+        test_loss, test_rec, test_kl = evaluate(test_loader, model, args, results_type='Test')
         test_nll = evaluate_likelihood(test_loader, model, args, S=args.nll_samples, MB=args.nll_mb, results_type='Test')
 
 
