@@ -1,6 +1,7 @@
 import argparse
 import datetime
 import torch
+import torch.nn as nn
 import torch.utils.data
 import torch.optim as optim
 import numpy as np
