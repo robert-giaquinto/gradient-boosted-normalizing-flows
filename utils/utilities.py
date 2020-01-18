@@ -3,6 +3,8 @@ Utility functions
 """
 import torch
 import torch.nn as nn
+import logging
+logger = logging.getLogger(__name__)
 
 
 def safe_log(z):
@@ -18,6 +20,12 @@ def load(model, optimizer, path, args):
         model = checkpoint
     
     model.all_trained = args.loaded_is_all_trained
+    if args.loaded_init_component is not None:
+        logger.info(f"Initializing the loaded boosted model with component={args.loaded_init_component}")
+        model.component = args.loaded_init_component
+    elif args.epochs > 0:
+        logger.info("Loaded model's component attribute is intialized to zero (by default), this will be the first component trained")
+        
     model.to(args.device)
     
     

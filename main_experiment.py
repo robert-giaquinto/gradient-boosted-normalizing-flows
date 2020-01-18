@@ -60,6 +60,7 @@ at.add_argument('--loaded_is_not_all_trained', action="store_false", dest='loade
 at.add_argument('--loaded_is_all_trained', action='store_true', dest='loaded_is_all_trained',
                 help='Default setting, which assumes the loaded boosted model is all_trained.')
 parser.set_defaults(loaded_is_all_trained=True)
+parser.add_argument('--loaded_init_component', default=None, type=int, help='Boosted component to begin training on first from a loaded model.')
 
 sr = parser.add_mutually_exclusive_group(required=False)
 sr.add_argument('--save_results', action='store_true', dest='save_results', help='Save results from experiments.')
