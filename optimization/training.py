@@ -349,19 +349,17 @@ def check_convergence(early_stop_count, v_loss, best_loss, tr_ratio, best_tr_rat
     Verify if a boosted component has converged (log ratio between G and g stopped improving)
     """
     first_component_trained = model.component > 0 or model.all_trained
-    model_improved = False
+    model_improved = v_loss < best_loss
     early_stop_flag = False
     if first_component_trained and (v_loss < best_loss and tr_ratio > best_tr_ratio):
         # already trained more than one component, boosted component improved
         early_stop_count = 0
         best_loss = v_loss
         best_tr_ratio = tr_ratio
-        model_improved = True
     elif not first_component_trained and v_loss < best_loss:
         # training only the first component (for the first time), and it improved
         early_stop_count = 0
         best_loss = v_loss
-        model_improved = True
     elif args.early_stopping_epochs > 0:
         # model didn't improve, do we consider it converged yet?
         early_stop_count += 1        
