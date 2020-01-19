@@ -168,13 +168,10 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
     val_kl = []
 
     # for early stopping
-    best_loss = np.inf
-    best_tr_ratio = -np.inf
-
+    best_loss = np.array([np.inf] * args.num_components)
+    best_tr_ratio = np.array([-np.inf] * args.num_components)
     early_stop_count = 0
-    epoch = 0
     converged_epoch = 0  # corrects the annealing schedule when a component converges early
-    converged = False
 
     prev_lr = []
     for c in range(args.num_components):
@@ -216,24 +213,30 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
             early_stop_count, v_loss, best_loss, tr_ratio, best_tr_ratio, epoch - converged_epoch, model, args)
 
         if model_improved:
-            save(model, optimizer, args.snap_dir + 'model.pt')
+            epoch_msg += f' Improved'
+            save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', boosted=True)
 
         if component_converged:
             converged_epoch = epoch
             prev_lr[model.component] = optimizer.param_groups[model.component]['lr']  # save LR for LR scheduler
-            model.update_rho(train_loader)
-            model.increment_component()
 
-            save(model, optimizer, args.snap_dir + f'model_step_{epoch}.pt')            
+            # revert back to the last best version of the model and update rho
+            load(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', args)
+            model.update_rho(train_loader)
             epoch_msg += '  | Rho=' + ' '.join([f"{val:1.2f}" for val in model.rho.data])
 
-            if early_stop_count > args.early_stopping_epochs and model.all_trained and model.component == (args.num_components - 1):
-                # early-stopping of the full model happens only after all components have been trained 2x
+            if model.component == (args.num_components - 1):
+                # stop the full model after all components have been trained
                 logger.info(epoch_msg + f'{"| ": >4}')
-                logger.info("Model converged early.")
+                logger.info("Model converged.")
+                model.all_trained = True
+                save(model, optimizer, args.snap_dir + f'model.pt', boosted=True)
                 break
-            
+
+            # save model with update rho
+            save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', boosted=True)
             # reset early_stop_count and train the next component
+            model.increment_component()
             early_stop_count = 0
             # freeze all but the new component being trained
             for c in range(args.num_components):
@@ -327,7 +330,7 @@ def sample_from_all_prob(epochs_since_prev_convergence, current_component, all_t
     """
     Want to occasionally sample from all components so decoder doesn't solely focus on new component
     """
-    max_prob_all = min(0.75, 1.0 - (1.0 / (args.num_components)))
+    max_prob_all = min(0.5, 1.0 - (1.0 / (args.num_components)))
     if all_trained:
         # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
         return max_prob_all
@@ -347,18 +350,19 @@ def check_convergence(early_stop_count, v_loss, best_loss, tr_ratio, best_tr_rat
     """
     Verify if a boosted component has converged (log ratio between G and g stopped improving)
     """
+    c = model.component
     first_component_trained = model.component > 0 or model.all_trained
-    model_improved = v_loss < best_loss
+    model_improved = v_loss < best_loss[c]
     early_stop_flag = False
-    if first_component_trained and (v_loss < best_loss and tr_ratio > best_tr_ratio):
+    if first_component_trained and (v_loss < best_loss[c] and tr_ratio > best_tr_ratio[c]):
         # already trained more than one component, boosted component improved
         early_stop_count = 0
-        best_loss = v_loss
-        best_tr_ratio = tr_ratio
-    elif not first_component_trained and v_loss < best_loss:
+        best_loss[c] = v_loss
+        best_tr_ratio[c] = tr_ratio
+    elif not first_component_trained and v_loss < best_loss[c]:
         # training only the first component (for the first time), and it improved
         early_stop_count = 0
-        best_loss = v_loss
+        best_loss[c] = v_loss
     elif args.early_stopping_epochs > 0:
         # model didn't improve, do we consider it converged yet?
         early_stop_count += 1        

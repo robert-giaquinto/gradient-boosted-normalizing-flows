@@ -13,27 +13,36 @@ def safe_log(z):
 
 def load(model, optimizer, path, args):
     checkpoint = torch.load(path, map_location=args.device)
-    if type(checkpoint) is dict:
-        model.load_state_dict(checkpoint['model'])
-        optimizer.load_state_dict(checkpoint['optimizer'])
+    model.load_state_dict(checkpoint['model'])
+    optimizer.load_state_dict(checkpoint['optimizer'])
+
+    if 'all_trained' in checkpoint:
+        model.all_trained = checkpoint['all_trained']
     else:
-        model = checkpoint
-    
-    model.all_trained = args.loaded_is_all_trained
-    if args.loaded_init_component is not None:
+        model.all_trained = args.loaded_is_all_trained
+        
+    if 'component' in checkpoint:
+        model.component = checkpoint['component']
+    elif args.loaded_init_component is not None:
         logger.info(f"Initializing the loaded boosted model with component={args.loaded_init_component}")
-        model.component = args.loaded_init_component
-    elif args.epochs > 0:
-        logger.info("Loaded model's component attribute is intialized to zero (by default), this will be the first component trained")
+        model.component = args.loaded_init_component        
         
     model.to(args.device)
     
     
-def save(model, optimizer, path):
-    torch.save({
-        'model': model.state_dict(),
-        'optimizer': optimizer.state_dict()
-    }, path)
+def save(model, optimizer, path, boosted=False):
+    if boosted:
+        torch.save({
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict(),
+            'all_trained': model.all_trained,
+            'component': model.component
+        }, path)
+    else:
+        torch.save({
+            'model': model.state_dict(),
+            'optimizer': optimizer.state_dict()
+        }, path)
 
 
 class MyDataParallel(torch.nn.DataParallel):
