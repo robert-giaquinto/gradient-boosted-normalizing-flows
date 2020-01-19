@@ -176,7 +176,6 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
     converged_epoch = 0  # corrects the annealing schedule when a component converges early
     converged = False
 
-    model.component = 0
     prev_lr = []
     for c in range(args.num_components):
         prev_lr.append(args.learning_rate)
