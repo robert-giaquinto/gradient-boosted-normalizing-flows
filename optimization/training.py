@@ -5,6 +5,7 @@ import random
 import datetime
 import time
 import logging
+from shutil import copyfile
 
 from optimization.loss import calculate_loss, calculate_loss_array, calculate_boosted_loss
 from utils.plotting import plot_training_curve
@@ -214,27 +215,29 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
 
         if model_improved:
             epoch_msg += f' Improved'
-            save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', boosted=True)
+            save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt')
 
         if component_converged:
+            logger.info(epoch_msg + f'{"| ": >4}')
+            
             converged_epoch = epoch
             prev_lr[model.component] = optimizer.param_groups[model.component]['lr']  # save LR for LR scheduler
 
             # revert back to the last best version of the model and update rho
             load(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', args)
             model.update_rho(train_loader)
-            epoch_msg += '  | Rho=' + ' '.join([f"{val:1.2f}" for val in model.rho.data])
+            logger.info('Rho Updated: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]))
 
-            if model.component == (args.num_components - 1):
+            train_components_once = args.epochs <= (args.epochs_per_component * args.num_components)
+            if model.component == (args.num_components - 1) and (model.all_trained or train_components_once):
                 # stop the full model after all components have been trained
-                logger.info(epoch_msg + f'{"| ": >4}')
-                logger.info("Model converged.")
+                logger.info(f"Model converged, stopping training and saving final model to: {args.snap_dir + 'model.pt'}")
                 model.all_trained = True
-                save(model, optimizer, args.snap_dir + f'model.pt', boosted=True)
+                save(model, optimizer, args.snap_dir + f'model.pt')
                 break
 
-            # save model with update rho
-            save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', boosted=True)
+            # save model with updated rho
+            save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt')
             # reset early_stop_count and train the next component
             model.increment_component()
             early_stop_count = 0
@@ -243,8 +246,15 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
                 optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
             for n, param in model.named_parameters():
                 param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
+        else:
+            logger.info(epoch_msg + f'{"| ": >4}')
+            if epoch == args.epochs:
+                # Save the best version of the model trained up to the current component with filename model.pt
+                # This is to protect against times when the model is trained/re-trained but doesn't run long enough
+                #   for all components to converge / train completely
+                copyfile(args.snap_dir + f'model_c{model.component}.pt', args.snap_dir + 'model.pt')
+                logger.info(f"Resaving last improved version of {f'model_c{model.component}.pt'} as 'model.pt' for future testing") 
 
-        logger.info(epoch_msg + f'{"| ": >4}')
         
     train_loss = np.hstack(train_loss)
     train_rec = np.hstack(train_rec)
@@ -313,7 +323,7 @@ def kl_annealing_rate(epochs_since_prev_convergence, component, all_trained, arg
     TODO need to adjust this for when an previous component converged early
     """
     past_warmup =  ((epochs_since_prev_convergence - 1) % args.epochs_per_component) >= args.annealing_schedule
-    if all_trained or past_warmup or args.load is not None:
+    if all_trained or past_warmup:
         # all trained or past the first args.annealing_schedule epochs of training this component, so no annealing
         beta = 1.0
     else:

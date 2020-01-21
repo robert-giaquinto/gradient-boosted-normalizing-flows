@@ -155,9 +155,10 @@ class BoostedVAE(VAE):
             print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=rho_log)
 
             tolerance = 0.00001
-            step_size = 0.0005
-            min_iters = 25
+            step_size = 0.001
+            min_iters = 50
             max_iters = 200 if self.all_trained else 100
+            num_repeats = self.num_components * 5
 
             prev_rho = self.rho[self.component].item()
             for batch_id, (x, _) in enumerate(data_loader):
@@ -171,13 +172,20 @@ class BoostedVAE(VAE):
                 else:
                     x = x.view(-1, np.prod(self.args.input_size))
 
-                g_loss, G_loss = self._rho_gradient(x)
-                gradient = g_loss - G_loss
-                step_size = step_size / (0.025 * batch_id + 1)
-                rho = min(max(prev_rho - step_size * gradient, 0.001), 0.999)
+                g_loss, G_loss = [], []
+                for r in range(num_repeats):
+                    g, G = self._rho_gradient(x)
+                    g_loss.append(g)
+                    G_loss.append(G)
+
+                g_loss = np.array(g_loss)
+                G_loss = np.array(G_loss)
+                gradient = g_loss.mean() - G_loss.mean()
+                step_size = step_size / (0.01 * batch_id + 1)
+                rho = min(max(prev_rho - step_size * gradient, 0.0005), 0.999)
 
                 grad_msg = f'{batch_id: >3}. rho = {prev_rho:6.4f} -  {gradient:6.4f} * {step_size:8.6f} = {rho:6.4f}'
-                loss_msg = f"\tg vs G. Loss: ({g_loss:6.1f}, {G_loss:6.1f})."
+                loss_msg = f"\tg vs G. Loss: ({g_loss.mean():6.1f} +/- {g_loss.std():3.1f}, {G_loss.mean():6.1f}  +/- {g_loss.std():3.1f})."
                 print(grad_msg + loss_msg, file=rho_log)
 
                 self.rho[self.component] = rho

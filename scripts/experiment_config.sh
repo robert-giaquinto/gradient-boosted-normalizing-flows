@@ -1,7 +1,7 @@
 dataset=mnist
 plotting=10
 z_size=64
-early_stop=100
+early_stop=50
 epochs=500
 batch_size=64
 manual_seed=123

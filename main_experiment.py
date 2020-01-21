@@ -55,11 +55,11 @@ parser.set_defaults(save_log=True)
 
 parser.add_argument('--load', type=str, default=None, help='Path to load the model from')
 at = parser.add_mutually_exclusive_group(required=False)
-at.add_argument('--loaded_is_not_all_trained', action="store_false", dest='loaded_is_all_trained',
+at.add_argument('--loaded_is_not_all_trained', action="store_false", dest='loaded_all_trained',
                 help="Set this if you don't want the loaded boosted model to be consider all_trained (default=True)")
-at.add_argument('--loaded_is_all_trained', action='store_true', dest='loaded_is_all_trained',
+at.add_argument('--loaded_is_all_trained', action='store_true', dest='loaded_all_trained',
                 help='Default setting, which assumes the loaded boosted model is all_trained.')
-parser.set_defaults(loaded_is_all_trained=True)
+parser.set_defaults(loaded_all_trained=None)
 parser.add_argument('--loaded_init_component', default=None, type=int, help='Boosted component to begin training on first from a loaded model.')
 
 sr = parser.add_mutually_exclusive_group(required=False)
@@ -329,7 +329,8 @@ def main(main_args=None):
 
     if args.load:
         logger.info(f'LOADING CHECKPOINT FROM PRE-TRAINED MODEL: {args.load}')
-        load(model, optimizer, args.load, args)
+        init_with_args = args.flow == "boosted" and args.loaded_init_component is not None and args.loaded_all_trained is not None
+        load(model, optimizer, args.load, args, init_with_args)
 
     # =========================================================================
     # TRAINING
