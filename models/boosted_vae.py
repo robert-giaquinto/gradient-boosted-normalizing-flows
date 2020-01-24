@@ -154,14 +154,23 @@ class BoostedVAE(VAE):
             print(f"\n\nUpdating weight for component {self.component} (all_trained={str(self.all_trained)})", file=rho_log)
             print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=rho_log)
 
-            tolerance = 0.00001
-            step_size = 0.001
-            min_iters = 50
-            max_iters = 200 if self.all_trained else 100
-            num_repeats = self.num_components * 5
-
+            tolerance = 0.0001
+            init_step_size = 0.001
+            min_iters = 25
+            max_iters = 100
+            num_repeats = self.num_components * 3
             prev_rho = self.rho[self.component].item()
-            for batch_id, (x, _) in enumerate(data_loader):
+
+            # create dataloader-iterator
+            data_iter = iter(data_loader)
+            
+            for batch_id in range(max_iters):
+                try:
+                    (x, _) = next(data_iter) 
+                except StopIteration:
+                    data_iter = iter(data_loader)
+                    (x, _) = next(data_iter)
+
                 x = x.detach().to(self.args.device)
 
                 if self.args.dynamic_binarization:
@@ -181,10 +190,10 @@ class BoostedVAE(VAE):
                 g_loss = np.array(g_loss)
                 G_loss = np.array(G_loss)
                 gradient = g_loss.mean() - G_loss.mean()
-                step_size = step_size / (0.01 * batch_id + 1)
+                step_size = init_step_size / (0.05 * batch_id + 1)
                 rho = min(max(prev_rho - step_size * gradient, 0.0005), 0.999)
 
-                grad_msg = f'{batch_id: >3}. rho = {prev_rho:6.4f} -  {gradient:6.4f} * {step_size:8.6f} = {rho:6.4f}'
+                grad_msg = f'{batch_id: >3}. rho = {prev_rho:6.4f} -  {gradient:6.3f} * {step_size:7.5f} = {rho:6.4f} '
                 loss_msg = f"\tg vs G. Loss: ({g_loss.mean():6.1f} +/- {g_loss.std():3.1f}, {G_loss.mean():6.1f}  +/- {g_loss.std():3.1f})."
                 print(grad_msg + loss_msg, file=rho_log)
 
@@ -351,7 +360,6 @@ class BoostedVAE(VAE):
         else:
             # compute likelihood of sampled z_K w.r.t fixed components:
             # inverse step: flow_inv(zg[k]) to get zG_0
-            # TODO should zG0 be clamped to avoid wild inverse mappings?
             self.eval()  # turn off batch-norm updates
             density_component = self._sample_component(sampling_components=density_from)
             zG_0, _ = self.component_inverse_flow(zg[-1], density_component, h)

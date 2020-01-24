@@ -6,6 +6,8 @@ import torch.nn.functional as F
 from utils.utilities import safe_log
 
 
+G_MAX_LOSS = -30.0
+
 def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
     """
     Computes the binary loss function while summing over batch dimension, not averaged!
@@ -21,7 +23,8 @@ def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
     """
     if args.input_type == "binary":
         # - N E_q0 [ ln p(x|z_k) ]
-        reconstruction_function = nn.BCELoss(reduction='sum')
+        #reconstruction_function = nn.BCELoss(reduction='sum')
+        reconstruction_function = nn.BCEWithLogitsLoss(reduction='sum')
         recon_loss = reconstruction_function(x_recon, x)
     elif args.input_type == "multinomial":
         num_classes = 256
@@ -40,7 +43,6 @@ def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
         recon_loss = cross_entropy(x=x_recon, target=target, reduction='sum')
     else:
         raise ValueError('Invalid input type for calculate loss: %s.' % args.input_type)
-
 
     # ln p(z_k)  (not averaged)
     log_p_zk = log_normal_standard(z_k, dim=1)
@@ -67,7 +69,8 @@ def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
 def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regularization_rate, first_component, args, beta=1.0):
 
     if args.input_type == "binary":
-        reconstruction_function = nn.BCELoss(reduction='sum')
+        #reconstruction_function = nn.BCELoss(reduction='sum')
+        reconstruction_function = nn.BCEWithLogitsLoss(reduction='sum')
         recon_loss = reconstruction_function(x_recon, x)
     elif args.input_type == "multinomial":
         num_classes = 256
@@ -105,10 +108,11 @@ def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regulariza
         # all other components are trained using the boosted loss
         # loss w.r.t. fixed component terms:
         log_G_base = log_normal_diag(z_G[0], mean=z_mu, log_var=safe_log(z_var), dim=1)
-        # limit log likelihoods to a small number for numerical stability
-        log_G_z = torch.sum(torch.max(log_G_base - G_ldj, torch.ones_like(G_ldj) * -10.0))
-        #log_ratio = torch.sum(regularization_rate * log_g_z.data - log_G_z.data).detach()
+        log_G_z = log_G_base - G_ldj
         log_ratio = torch.sum(log_G_z.data - log_g_z.data).detach()
+
+        # limit log likelihoods to a small number for numerical stability
+        log_G_z = torch.sum(torch.max(log_G_z, torch.ones_like(G_ldj) * G_MAX_LOSS))
         entropy = torch.sum(regularization_rate * log_g_z)
 
     loss = recon_loss + log_G_z + beta*(entropy - log_p_zk)
@@ -136,11 +140,17 @@ def binary_loss_array(x_recon, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
 
     # TODO: upgrade to newest pytorch version on master branch, there the nn.BCELoss comes with the option
     # reduce, which when set to False, does no sum over batch dimension.
-    bce = - log_bernoulli(x.view(batch_size, -1), x_recon.view(batch_size, -1), dim=1)
+    #bce = - log_bernoulli(x.view(batch_size, -1), x_recon.view(batch_size, -1), dim=1)
+    reconstruction_function = nn.BCEWithLogitsLoss(reduction='none')
+    bce = reconstruction_function(x_recon.view(batch_size, -1), x.view(batch_size, -1))
+    # sum over feature dimension
+    bce = bce.view(batch_size, -1).sum(dim=1)
+    
     # ln p(z_k)  (not averaged)
     log_p_zk = log_normal_standard(z_k, dim=1)
     # ln q(z_0)  (not averaged)
     log_q_z0 = log_normal_diag(z_0, mean=z_mu, log_var=safe_log(z_var), dim=1)
+
     #  ln q(z_0) - ln p(z_k) ]
     logs = log_q_z0 - log_p_zk
 
@@ -220,12 +230,10 @@ def calculate_loss_array(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args):
     """
     Picks the correct loss depending on the input type.
     """
-
     if args.input_type == 'binary':
         loss = binary_loss_array(x_recon, x, z_mu, z_var, z_0, z_k, ldj)
     elif args.input_type == 'multinomial':
         loss = multinomial_loss_array(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args)
-
     else:
         raise ValueError('Invalid input type for calculate loss: %s.' % args.input_type)
 

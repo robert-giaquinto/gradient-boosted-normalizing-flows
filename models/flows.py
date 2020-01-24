@@ -498,7 +498,6 @@ class NLSq(nn.Module):
         return z_new, log_det_jacobian
 
         
-
 class RealNVP(nn.Module):
     """
     Non-volume preserving flow.

@@ -29,7 +29,7 @@ class VAE(nn.Module):
             self.last_pad = 2
             
         self.q_z_nn_output_dim = 256
-        self.q_z_nn_hidden_dim = 128
+        self.q_z_nn_hidden_dim = 256
 
         if not args.density_evaluation:
             self.use_linear_layers = args.vae_layers == "linear"
@@ -105,8 +105,8 @@ class VAE(nn.Module):
                 nn.Linear(self.q_z_nn_hidden_dim, self.q_z_nn_output_dim),
                 nn.Softplus())
             p_x_mean = nn.Sequential(
-                nn.Linear(self.q_z_nn_output_dim, output_shape),
-                nn.Sigmoid())
+                nn.Linear(self.q_z_nn_output_dim, output_shape)) #,
+                #nn.Sigmoid())
         
         else:
             act = None  # possibly change for multinomial
@@ -120,8 +120,8 @@ class VAE(nn.Module):
 
             if self.input_type == 'binary':
                 p_x_mean = nn.Sequential(
-                    nn.Conv2d(32, output_shape, 1, 1, 0),
-                    nn.Sigmoid())
+                    nn.Conv2d(32, output_shape, 1, 1, 0)) #,
+                    #nn.Sigmoid())
             elif self.input_type == 'multinomial':
                 # output shape: batch_size, num_channels * num_classes, pixel_width, pixel_height
                 p_x_mean = nn.Sequential(

@@ -77,7 +77,7 @@ parser.set_defaults(testing=True)
 
 # optimization settings
 parser.add_argument('--epochs', type=int, default=100, help='number of epochs to train (default: 100)')
-parser.add_argument('--early_stopping_epochs', type=int, default=0, help='number of early stopping epochs')
+parser.add_argument('--early_stopping_epochs', type=int, default=100, help='number of early stopping epochs')
 parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
 parser.add_argument('--learning_rate', type=float, default=0.0005, help='learning rate')
 parser.add_argument('--annealing_schedule', type=int, default=100, help='Number of epochs to anneal the KL term. Set to 0 to turn beta annealing off. Applies this annealing schedule to each component of a boosted model.')

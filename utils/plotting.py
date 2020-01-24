@@ -122,7 +122,7 @@ def plot_reconstructions(data, recon_mean, loss, args, epoch, size_x=4, size_y=4
         recon_mean = tmp.float() / (num_classes - 1.)
 
     # VISUALIZATION: plot reconstructions
-    epoch_label = 'final' if epoch is None else f"{epoch:03d}"
+    epoch_label = 'final' if epoch is None else f"{epoch:04d}"
     if args.input_type == 'multinomial':
         fname = epoch_label + '_bpd_%5.3f' % loss.item()
     elif args.input_type == 'binary':

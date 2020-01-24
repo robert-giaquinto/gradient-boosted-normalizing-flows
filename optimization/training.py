@@ -145,9 +145,10 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
         x_mean, z_mu, z_var, ldj, z0, zk = model(x)
         loss, rec, kl = calculate_loss(x_mean, x, z_mu, z_var, z0, zk, ldj, args, beta=beta)
         loss.backward()
+        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
-        if not args.no_lr_schedule:
-            scheduler.step(loss)
+        #if not args.no_lr_schedule:
+        #    scheduler.step(loss)
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
@@ -298,10 +299,10 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
         loss, rec, log_G, log_p, entropy, log_ratio = calculate_boosted_loss(
             x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, is_first_component, beta)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
-        if not args.no_lr_schedule:
-            scheduler.step(loss)
+        #if not args.no_lr_schedule:
+        #    scheduler.step(loss)
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
@@ -325,10 +326,10 @@ def kl_annealing_rate(epochs_since_prev_convergence, component, all_trained, arg
     past_warmup =  ((epochs_since_prev_convergence - 1) % args.epochs_per_component) >= args.annealing_schedule
     if all_trained or past_warmup:
         # all trained or past the first args.annealing_schedule epochs of training this component, so no annealing
-        beta = 1.0
+        beta = args.max_beta
     else:
         # within the first args.annealing_schedule epochs of training this component
-        beta = ((epochs_since_prev_convergence - 1) % args.annealing_schedule) / args.annealing_schedule
+        beta = (((epochs_since_prev_convergence - 1) % args.annealing_schedule) / args.annealing_schedule) * args.max_beta
         beta += 1.0 / args.annealing_schedule  # don't want annealing rate to start at zero
             
     beta = min(beta, args.max_beta)
@@ -364,7 +365,7 @@ def check_convergence(early_stop_count, v_loss, best_loss, tr_ratio, best_tr_rat
     first_component_trained = model.component > 0 or model.all_trained
     model_improved = v_loss < best_loss[c]
     early_stop_flag = False
-    if first_component_trained and (v_loss < best_loss[c] and tr_ratio > best_tr_ratio[c]):
+    if first_component_trained and v_loss < best_loss[c]: # and tr_ratio > best_tr_ratio[c]):
         # already trained more than one component, boosted component improved
         early_stop_count = 0
         best_loss[c] = v_loss

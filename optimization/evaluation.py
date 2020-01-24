@@ -38,9 +38,32 @@ def evaluate(data_loader, model, args, epoch=None, results_type=None):
             x = x.view(-1, np.prod(args.input_size))
 
         if args.flow == 'boosted':
-            # report performance of current component or the full model? currently doing full model
-            x_recon, z_mu, z_var, Z, ldj, _, _ = model(x, prob_all=1.0)
-            z0, zk = Z[0], Z[-1]
+            if model.component == 0 and not model.all_trained:
+                # only one component trained so no need for multiple sampling
+                x_recon, z_mu, z_var, Z, ldj, _, _ = model(x, prob_all=1.0)
+                z0, zk = Z[0], Z[-1]
+            else:
+                # take multiple samples from the mixture model
+                num_repeats = args.num_components * 3
+
+                h, z_mu, z_var = model.encode(x)
+                z_0 = model.reparameterize(z_mu, z_var)
+
+                x_recon, zk, ldj = [], [], []
+                for i in range(num_repeats):
+                    zk_i, ldj_i, _, _ = model.flow(z_0, sample_from="1:c", density_from=None, h=h)
+                    zk += [zk_i[-1]]
+                    ldj += [ldj_i]
+                    x_recon_i = model.decode(zk_i[-1])
+                    x_recon += [x_recon_i]
+
+                x = torch.cat(num_repeats * [x])
+                z_mu = torch.cat(num_repeats * [z_mu])
+                z_var = torch.cat(num_repeats * [z_var])
+                z0 = torch.cat(num_repeats * [z_0])
+                zk = torch.cat(zk, 0)
+                ldj = torch.cat(ldj, 0)
+                x_recon = torch.cat(x_recon, 0)
         else:
             x_recon, z_mu, z_var, ldj, z0, zk = model(x)
             
