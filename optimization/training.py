@@ -101,7 +101,7 @@ def train_vae(train_loader, val_loader, model, optimizer, scheduler, args):
         if v_loss < best_loss:
             e = 0
             best_loss = v_loss
-            save(model, optimizer, args.snap_dir + 'model.pt')
+            save(model, optimizer, args.snap_dir + 'model.pt', scheduler)
         elif (args.early_stopping_epochs > 0) and (epoch >= args.annealing_schedule):
             e += 1
             if e > args.early_stopping_epochs:
@@ -145,10 +145,10 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
         x_mean, z_mu, z_var, ldj, z0, zk = model(x)
         loss, rec, kl = calculate_loss(x_mean, x, z_mu, z_var, z0, zk, ldj, args, beta=beta)
         loss.backward()
-        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
-        #if not args.no_lr_schedule:
-        #    scheduler.step(loss)
+        if not args.no_lr_schedule:
+            scheduler.step(loss)
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
@@ -216,13 +216,14 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
 
         if model_improved:
             epoch_msg += f' Improved'
-            save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt')
+            save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', scheduler)
 
+        epoch_msg += ' | Flow LRs: ' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.5f}" for c in range(model.num_components)]) + f", VAE LRs: {optimizer.param_groups[args.num_components]['lr']:6.5f}"
         if component_converged:
             logger.info(epoch_msg + f'{"| ": >4}')
             
             converged_epoch = epoch
-            prev_lr[model.component] = optimizer.param_groups[model.component]['lr']  # save LR for LR scheduler
+            prev_lr[model.component] = optimizer.param_groups[model.component]['lr']  # save LR for LR scheduler in case we train this component again
 
             # revert back to the last best version of the model and update rho
             load(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', args)
@@ -234,19 +235,23 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
                 # stop the full model after all components have been trained
                 logger.info(f"Model converged, stopping training and saving final model to: {args.snap_dir + 'model.pt'}")
                 model.all_trained = True
-                save(model, optimizer, args.snap_dir + f'model.pt')
+                save(model, optimizer, args.snap_dir + f'model.pt', scheduler)
                 break
 
+            # else if not done training:
             # save model with updated rho
-            save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt')
+            save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', scheduler)
             # reset early_stop_count and train the next component
             model.increment_component()
             early_stop_count = 0
             # freeze all but the new component being trained
             for c in range(args.num_components):
                 optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
+            # reset VAE's learning rate too since it may have been reduced
+            optimizer.param_groups[args.num_components]['lr'] = max(optimizer.param_groups[args.num_components]['lr'], args.learning_rate / 2.0)
             for n, param in model.named_parameters():
                 param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
+            logger.info('New Learning Rates. Flows: ' + ' '.join([f"{optimizer.param_groups[c]['lr']:8.6f}" for c in range(model.num_components)]) + f", VAE: {optimizer.param_groups[args.num_components]['lr']:8.6f}")
         else:
             logger.info(epoch_msg + f'{"| ": >4}')
             if epoch == args.epochs:
@@ -300,10 +305,10 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
         loss, rec, log_G, log_p, entropy, log_ratio = calculate_boosted_loss(
             x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, is_first_component, beta)
         loss.backward()
-        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
-        #if not args.no_lr_schedule:
-        #    scheduler.step(loss)
+        if not args.no_lr_schedule:
+            scheduler.step(loss)
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()

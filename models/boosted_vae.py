@@ -211,7 +211,6 @@ class BoostedVAE(VAE):
         """
         Encoder that ouputs parameters for base distribution of z and flow parameters.
         """
-
         h = self.q_z_nn(x).view(-1, self.q_z_nn_output_dim)
         if not self.use_linear_layers:
             h = h.view(h.size(0), -1)

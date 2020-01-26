@@ -17,6 +17,11 @@ def load(model, optimizer, path, args, init_with_args=False):
     checkpoint = torch.load(path, map_location=args.device)
     model.load_state_dict(checkpoint['model'])
     optimizer.load_state_dict(checkpoint['optimizer'])
+
+    # if scheduler is not None:
+    #     if 'scheduler' in checkpoint and checkpoint['scheduler'] is not None:
+    #         scheduler.load_state_dict(checkpoint['scheduler'])
+        
     msg = f"Loaded pre-trained {os.path.split(path)[-1]}"
 
     if init_with_args and args.flow == "boosted":
@@ -41,18 +46,20 @@ def load(model, optimizer, path, args, init_with_args=False):
     model.to(args.device)
     
     
-def save(model, optimizer, path):
+def save(model, optimizer, path, scheduler=None):
     if hasattr(model, 'component') and hasattr(model, 'all_trained'):
         torch.save({
             'model': model.state_dict(),
             'optimizer': optimizer.state_dict(),
+            'scheduler': scheduler.state_dict() if scheduler is not None else None,
             'all_trained': model.all_trained,
             'component': model.component
         }, path)
     else:
         torch.save({
             'model': model.state_dict(),
-            'optimizer': optimizer.state_dict()
+            'optimizer': optimizer.state_dict(),
+            'scheduler': scheduler.state_dict() if scheduler is not None else None,
         }, path)
 
 

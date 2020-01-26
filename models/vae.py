@@ -79,10 +79,15 @@ class VAE(nn.Module):
 
         elif self.vae_layers == "simple":
             act = None
+            #q_z_nn = nn.Sequential(
+            #    GatedConv2d(self.input_size, 32, 5, 2, 2, activation=act),
+            #    GatedConv2d(32, 64, 5, 2, 2, activation=act),
+            #    GatedConv2d(64, self.q_z_nn_output_dim, self.last_kernel_size, 1, 0, activation=act))
             q_z_nn = nn.Sequential(
-                GatedConv2d(self.input_size, 32, 5, 2, 2, activation=act),
-                GatedConv2d(32, 64, 5, 2, 2, activation=act),
-                GatedConv2d(64, self.q_z_nn_output_dim, self.last_kernel_size, 1, 0, activation=act))
+                GatedConv2d(self.input_size, 16, 5, 2, 2, activation=act),
+                GatedConv2d(16, 32, 5, 2, 2, activation=act),
+                GatedConv2d(32, self.q_z_nn_output_dim, self.last_kernel_size, 1, 0, activation=act))
+
             if self.input_type == 'multinomial':
                 q_z_var += [nn.Hardtanh(min_val=0.01, max_val=7.)]
             
@@ -118,18 +123,28 @@ class VAE(nn.Module):
                 
         elif self.vae_layers == "simple":
             act = None  # possibly change for multinomial
+            # p_x_nn = nn.Sequential(
+            #     GatedConvTranspose2d(self.z_size, 64, self.last_kernel_size, 2, 0, activation=act),
+            #     GatedConvTranspose2d(64, 32, 5, 2, self.last_pad, 0, activation=act),
+            #     GatedConvTranspose2d(32, 32, 5, 2, 1, 1, activation=act))
             p_x_nn = nn.Sequential(
-                GatedConvTranspose2d(self.z_size, 64, self.last_kernel_size, 2, 0, activation=act),
-                GatedConvTranspose2d(64, 32, 5, 2, self.last_pad, 0, activation=act),
-                GatedConvTranspose2d(32, 32, 5, 2, 1, 1, activation=act))
+                GatedConvTranspose2d(self.z_size, 32, self.last_kernel_size, 2, 0, activation=act),
+                GatedConvTranspose2d(32, 16, 5, 2, self.last_pad, 0, activation=act),
+                GatedConvTranspose2d(16, 16, 5, 2, 1, 1, activation=act))
+
 
             if self.input_type == 'binary':
-                p_x_mean = nn.Sequential(nn.Conv2d(32, output_shape, 1, 1, 0))
+                #p_x_mean = nn.Sequential(nn.Conv2d(32, output_shape, 1, 1, 0))
+                p_x_mean = nn.Sequential(nn.Conv2d(16, output_shape, 1, 1, 0))
             elif self.input_type == 'multinomial':
                 # output shape: batch_size, num_channels * num_classes, pixel_width, pixel_height
+                # p_x_mean = nn.Sequential(
+                #     nn.Conv2d(32, 256, 5, 1, 2),
+                #     nn.Conv2d(256, output_shape, 1, 1, 0))
                 p_x_mean = nn.Sequential(
-                    nn.Conv2d(32, 256, 5, 1, 2),
+                    nn.Conv2d(16, 256, 5, 1, 2),
                     nn.Conv2d(256, output_shape, 1, 1, 0))
+
 
         else:
             act = None  # possibly change for multinomial

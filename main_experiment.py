@@ -140,7 +140,15 @@ def parse_args(main_args=None):
     # intialize snapshots directory for saving models and results
     args.model_signature = str(datetime.datetime.now())[0:19].replace(' ', '_').replace(':', '_').replace('-', '_')
     args.experiment_name = args.experiment_name + "_" if args.experiment_name is not None else ""
-    vae_type = "vae_" if args.vae_layers == "linear" else "cvae_"
+    if args.vae_layers == "linear":
+        vae_type = "vae_"
+    elif args.vae_layers == "simple":
+        vae_type = "scvae_"
+    elif args.vae_layers == "convolutional":
+        vae_type = "cvae_"
+    else:
+        raise ValueError("vae_layers argument must be ['linear', 'convolutional', 'simple']")
+    
     args.snap_dir = os.path.join(args.out_dir, args.experiment_name + vae_type + args.flow + '_')
 
     if args.flow != 'no_flow':
@@ -278,8 +286,8 @@ def init_optimizer(model, args):
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                            factor=0.5,
-                                                           patience=2000,
-                                                           min_lr=5e-5,
+                                                           patience=250,
+                                                           min_lr=1e-5,
                                                            verbose=False,
                                                            threshold_mode='abs')
 

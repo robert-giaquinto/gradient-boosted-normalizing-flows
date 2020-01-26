@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from utils.utilities import safe_log
 
 
-G_MAX_LOSS = -5.0
+G_MAX_LOSS = -10.0
 
 def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
     """
@@ -112,7 +112,7 @@ def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regulariza
         # all other components are trained using the boosted loss
         # loss w.r.t. fixed component terms:
         log_G_base = log_normal_diag(z_G[0], mean=z_mu, log_var=safe_log(z_var), dim=1)
-        log_G_z = (log_G_base - G_ldj)
+        log_G_z = torch.clamp(log_G_base - G_ldj, min=-1000.0)
         log_ratio = torch.sum(log_G_z.data - log_g_z.data).detach()
 
         # limit log likelihoods to a small number for numerical stability
