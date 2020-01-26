@@ -176,10 +176,10 @@ class BoostedVAE(VAE):
                 if self.args.dynamic_binarization:
                     x = torch.bernoulli(x)
 
-                if self.args.vae_layers == 'convolutional':
-                    x = x.view(-1, *self.args.input_size)
-                else:
+                if self.args.vae_layers == 'linear':
                     x = x.view(-1, np.prod(self.args.input_size))
+                else:
+                    x = x.view(-1, *self.args.input_size)
 
                 g_loss, G_loss = [], []
                 for r in range(num_repeats):
@@ -210,7 +210,8 @@ class BoostedVAE(VAE):
     def encode(self, x):
         """
         Encoder that ouputs parameters for base distribution of z and flow parameters.
-        """        
+        """
+
         h = self.q_z_nn(x).view(-1, self.q_z_nn_output_dim)
         if not self.use_linear_layers:
             h = h.view(h.size(0), -1)
@@ -268,7 +269,7 @@ class BoostedVAE(VAE):
         Can compute parameters based on output of encoder (requires h), or just pull
         the randomly initialized parameters (if doing density evaluation)
         """
-        if self.args.density_evaluation or self.component_type == "realnvp":
+        if self.args.density_evaluation or self.component_type in ["realnvp", "realnvp2"]:
             flow_param_c = self.flow_param[c]
             
         else:
@@ -388,6 +389,7 @@ class BoostedVAE(VAE):
             density_from = None
 
         z_g, g_ldj, z_G, G_ldj = self.flow(z_0, sample_from=sample_from, density_from=density_from, h=h)
+
         x_recon = self.decode(z_g[-1])
         return x_recon, z_mu, z_var, z_g, g_ldj, z_G, G_ldj
     

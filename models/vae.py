@@ -32,6 +32,7 @@ class VAE(nn.Module):
         self.q_z_nn_hidden_dim = 256
 
         if not args.density_evaluation:
+            self.vae_layers = args.vae_layers
             self.use_linear_layers = args.vae_layers == "linear"
             if self.use_linear_layers:
                 self.input_size = np.prod(args.input_size)
@@ -76,6 +77,15 @@ class VAE(nn.Module):
                 nn.Linear(self.q_z_nn_hidden_dim, self.q_z_nn_output_dim),
                 nn.Softplus())
 
+        elif self.vae_layers == "simple":
+            act = None
+            q_z_nn = nn.Sequential(
+                GatedConv2d(self.input_size, 32, 5, 2, 2, activation=act),
+                GatedConv2d(32, 64, 5, 2, 2, activation=act),
+                GatedConv2d(64, self.q_z_nn_output_dim, self.last_kernel_size, 1, 0, activation=act))
+            if self.input_type == 'multinomial':
+                q_z_var += [nn.Hardtanh(min_val=0.01, max_val=7.)]
+            
         else:
             act = None
             q_z_nn = nn.Sequential(
@@ -104,10 +114,23 @@ class VAE(nn.Module):
                 nn.ReLU(),
                 nn.Linear(self.q_z_nn_hidden_dim, self.q_z_nn_output_dim),
                 nn.Softplus())
-            p_x_mean = nn.Sequential(
-                nn.Linear(self.q_z_nn_output_dim, output_shape)) #,
-                #nn.Sigmoid())
-        
+            p_x_mean = nn.Sequential(nn.Linear(self.q_z_nn_output_dim, output_shape))
+                
+        elif self.vae_layers == "simple":
+            act = None  # possibly change for multinomial
+            p_x_nn = nn.Sequential(
+                GatedConvTranspose2d(self.z_size, 64, self.last_kernel_size, 2, 0, activation=act),
+                GatedConvTranspose2d(64, 32, 5, 2, self.last_pad, 0, activation=act),
+                GatedConvTranspose2d(32, 32, 5, 2, 1, 1, activation=act))
+
+            if self.input_type == 'binary':
+                p_x_mean = nn.Sequential(nn.Conv2d(32, output_shape, 1, 1, 0))
+            elif self.input_type == 'multinomial':
+                # output shape: batch_size, num_channels * num_classes, pixel_width, pixel_height
+                p_x_mean = nn.Sequential(
+                    nn.Conv2d(32, 256, 5, 1, 2),
+                    nn.Conv2d(256, output_shape, 1, 1, 0))
+
         else:
             act = None  # possibly change for multinomial
             p_x_nn = nn.Sequential(
@@ -160,6 +183,7 @@ class VAE(nn.Module):
         """
         if not self.use_linear_layers:
             z = z.view(z.size(0), self.z_size, 1, 1)
+
         h = self.p_x_nn(z)
         x_mean = self.p_x_mean(h)
         return x_mean

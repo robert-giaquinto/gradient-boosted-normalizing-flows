@@ -32,10 +32,10 @@ def evaluate(data_loader, model, args, epoch=None, results_type=None):
     for batch_id, (x, _) in enumerate(data_loader):
         x = x.to(args.device)
 
-        if args.vae_layers == 'convolutional':
-            x = x.view(-1, *args.input_size)
-        else:
+        if args.vae_layers == 'linear':
             x = x.view(-1, np.prod(args.input_size))
+        else:
+            x = x.view(-1, *args.input_size)
 
         if args.flow == 'boosted':
             if model.component == 0 and not model.all_trained:
@@ -122,14 +122,15 @@ def evaluate_likelihood(data_loader, model, args, S=5000, MB=1000, results_type=
         S = MB
 
     for j in range(N_test):
-        if j % (int(N_test / 10.0)) == 0:
-            logger.info('Progress: {:.1f}%'.format(100.0 * j / (1.0 * N_test))) 
+        #if j % (int(N_test / 10.0)) == 0:
+        #    logger.info('Progress: {:.1f}%'.format(100.0 * j / (1.0 * N_test))) 
 
         x_single = X[j].unsqueeze(0)
-        if args.vae_layers == 'convolutional':
-            x_single = x_single.view(1, *args.input_size)
+
+        if args.vae_layers == 'linear':
+            x_single = x_single.view(-1, np.prod(args.input_size))
         else:
-            x_single = x_single.view(1, np.prod(args.input_size))
+            x_single = x_single.view(-1, *args.input_size)
 
         a = []
         for r in range(0, R):

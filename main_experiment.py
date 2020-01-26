@@ -87,7 +87,7 @@ parser.add_argument('--no_annealing', action='store_true', default=False, help='
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
 
 # model parameters
-parser.add_argument('--vae_layers', type=str, default='linear', choices=['linear', 'convolutional'],
+parser.add_argument('--vae_layers', type=str, default='linear', choices=['linear', 'convolutional', 'simple'],
                     help="Type of layers in VAE's encoder and decoder.")
 parser.add_argument('--z_size', type=int, default=64, help='how many stochastic hidden units')
 parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
@@ -113,7 +113,7 @@ parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decr
                     help='Initialization scheme for boosted parameter rho') 
 parser.add_argument('--num_components', type=int, default=2, help='How many components are combined to form the flow')
 parser.add_argument('--component_type', type=str, default='affine',
-                    choices=['realnvp', 'liniaf', 'affine', 'nlsq', 'random'],
+                    choices=['realnvp', 'realnvp2', 'liniaf', 'affine', 'nlsq', 'random'],
                     help='When flow is boosted -- what type of flow should each component implement.')
 
 
@@ -159,7 +159,7 @@ def parse_args(main_args=None):
             raise ValueError("For boosting the regularization_rate should be greater than or equal to zero.")
         args.snap_dir += '_' + args.component_type + '_C' + str(args.num_components) + '_reg' + f'{int(100*args.regularization_rate):d}'
 
-    if args.flow == "realnvp" or args.component_type == "realnvp":
+    if args.flow in ["realnvp", "realnvp2"] or args.component_type in ["realnvp", "realnvp2"]:
         args.snap_dir += '_' + args.base_network + str(args.num_base_layers) + '_hsize' + str(args.h_size)
 
     is_annealed = ""

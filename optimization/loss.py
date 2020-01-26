@@ -6,7 +6,7 @@ import torch.nn.functional as F
 from utils.utilities import safe_log
 
 
-G_MAX_LOSS = -30.0
+G_MAX_LOSS = -5.0
 
 def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
     """
@@ -30,10 +30,10 @@ def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
         num_classes = 256
         batch_size = x.size(0)
         
-        if args.vae_layers == "convolutional":
-            x_recon = x_recon.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
-        else:
+        if args.vae_layers == "linear":
             x_recon = x_recon.view(batch_size, num_classes, np.prod(args.input_size))
+        else:
+            x_recon = x_recon.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
 
         # make integer class labels
         target = (x * (num_classes-1)).long()
@@ -76,10 +76,10 @@ def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regulariza
         num_classes = 256
         batch_size = x.size(0)
 
-        if args.vae_layers == "convolutional":
-            x_recon = x_recon.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
-        else:
+        if args.vae_layers == "linear":
             x_recon = x_recon.view(batch_size, num_classes, np.prod(args.input_size))
+        else:
+            x_recon = x_recon.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
 
         # make integer class labels
         target = (x * (num_classes-1)).long()
@@ -89,6 +89,10 @@ def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regulariza
         recon_loss = cross_entropy(x=x_recon, target=target, reduction='sum')
     else:
         raise ValueError('Invalid input type for calculate loss: %s.' % args.input_type)
+
+    if torch.isnan(recon_loss).any().item():
+        print(x_recon.data,"\n", x.data)
+        raise SystemExit
 
     # prior: ln p(z_k)  (not averaged)
     log_p_zk = torch.sum(log_normal_standard(z_g[-1], dim=1))
@@ -108,7 +112,7 @@ def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regulariza
         # all other components are trained using the boosted loss
         # loss w.r.t. fixed component terms:
         log_G_base = log_normal_diag(z_G[0], mean=z_mu, log_var=safe_log(z_var), dim=1)
-        log_G_z = log_G_base - G_ldj
+        log_G_z = (log_G_base - G_ldj)
         log_ratio = torch.sum(log_G_z.data - log_g_z.data).detach()
 
         # limit log likelihoods to a small number for numerical stability
@@ -166,10 +170,10 @@ def multinomial_loss_array(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.
     num_classes = 256
     batch_size = x.size(0)
 
-    if args.vae_layers == "convolutional":
-        x_logit = x_logit.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
-    else:
+    if args.vae_layers == "linear":
         x_logit = x_logit.view(batch_size, num_classes, np.prod(args.input_size))
+    else:
+        x_logit = x_logit.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
 
     # make integer class labels
     target = (x * (num_classes - 1)).long()

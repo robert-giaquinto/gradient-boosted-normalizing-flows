@@ -136,10 +136,10 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
         if args.dynamic_binarization:
             x = torch.bernoulli(x)
 
-        if args.vae_layers == 'convolutional':
-            x = x.view(-1, *args.input_size)
-        else:
+        if args.vae_layers == 'linear':
             x = x.view(-1, np.prod(args.input_size))
+        else:
+            x = x.view(-1, *args.input_size)
 
         optimizer.zero_grad()
         x_mean, z_mu, z_var, ldj, z0, zk = model(x)
@@ -289,13 +289,14 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
         if args.dynamic_binarization:
             x = torch.bernoulli(x)
 
-        if args.vae_layers == 'convolutional':
-            x = x.view(-1, *args.input_size)
-        else:
+        if args.vae_layers == 'linear':
             x = x.view(-1, np.prod(args.input_size))
+        else:
+            x = x.view(-1, *args.input_size)
 
         optimizer.zero_grad()
         x_recon, z_mu, z_var, z_g, g_ldj, z_G, G_ldj = model(x, prob_all=prob_all)
+
         loss, rec, log_G, log_p, entropy, log_ratio = calculate_boosted_loss(
             x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, is_first_component, beta)
         loss.backward()
