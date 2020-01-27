@@ -6,5 +6,5 @@ batch_size=64
 manual_seed=123
 num_workers=1
 annealing_schedule=250
-learning_rate=0.0005
+learning_rate=0.001
 

@@ -155,7 +155,7 @@ class BoostedVAE(VAE):
             print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=rho_log)
 
             tolerance = 0.001
-            init_step_size = 0.0005
+            init_step_size = 0.0001
             min_iters = 10
             max_iters = 100
             num_repeats = self.num_components * 3
