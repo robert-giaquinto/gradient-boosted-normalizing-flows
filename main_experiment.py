@@ -160,8 +160,6 @@ def parse_args(main_args=None):
     if args.flow == 'iaf':
         args.snap_dir += '_hidden' + str(args.num_base_layers) + '_hsize' + str(args.h_size)
     if args.flow == 'boosted':
-        if args.component_threshold < 0.0:
-            raise ValueError("For boosted the component_threshold must be greater than or equal to zero.")
         if args.regularization_rate < 0.0:
             raise ValueError("For boosting the regularization_rate should be greater than or equal to zero.")
         args.snap_dir += '_' + args.component_type + '_C' + str(args.num_components) + '_reg' + f'{int(100*args.regularization_rate):d}'
