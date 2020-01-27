@@ -154,9 +154,9 @@ class BoostedVAE(VAE):
             print(f"\n\nUpdating weight for component {self.component} (all_trained={str(self.all_trained)})", file=rho_log)
             print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=rho_log)
 
-            tolerance = 0.0001
-            init_step_size = 0.001
-            min_iters = 25
+            tolerance = 0.001
+            init_step_size = 0.0005
+            min_iters = 10
             max_iters = 100
             num_repeats = self.num_components * 3
             prev_rho = self.rho[self.component].item()
@@ -190,7 +190,7 @@ class BoostedVAE(VAE):
                 g_loss = np.array(g_loss)
                 G_loss = np.array(G_loss)
                 gradient = g_loss.mean() - G_loss.mean()
-                step_size = init_step_size / (0.05 * batch_id + 1)
+                step_size = init_step_size / (0.1 * batch_id + 1)
                 rho = min(max(prev_rho - step_size * gradient, 0.0005), 0.999)
 
                 grad_msg = f'{batch_id: >3}. rho = {prev_rho:6.4f} -  {gradient:6.3f} * {step_size:7.5f} = {rho:6.4f} '
