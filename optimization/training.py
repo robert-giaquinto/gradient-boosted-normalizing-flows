@@ -218,7 +218,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
             epoch_msg += f' Improved'
             save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', scheduler)
 
-        epoch_msg += ' | Flow LRs: ' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.5f}" for c in range(model.num_components)]) + f", VAE LRs: {optimizer.param_groups[args.num_components]['lr']:6.5f}"
+        #epoch_msg += ' | Flow LRs: ' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.5f}" for c in range(model.num_components)]) + f", VAE LRs: {optimizer.param_groups[args.num_components]['lr']:6.5f}"
         if component_converged:
             logger.info(epoch_msg + f'{"| ": >4}')
             

@@ -95,19 +95,18 @@ parser.add_argument('--flow', type=str, default='no_flow', help="Type of flows t
                     choices=['planar', 'radial', 'iaf', 'liniaf', 'affine', 'nlsq', 'realnvp', 'householder', 'orthogonal', 'triangular', 'no_flow', 'boosted'])
 
 # Sylvester parameters
-parser.add_argument('--num_ortho_vecs', type=int, default=8, help=" For orthogonal flow: Number of orthogonal vectors per flow.")
+parser.add_argument('--num_ortho_vecs', type=int, default=32, help=" For orthogonal flow: Number of orthogonal vectors per flow.")
 parser.add_argument('--num_householder', type=int, default=8, help="For Householder Sylvester flow: Number of Householder matrices per flow.")
 
 # RealNVP (and IAF) parameters
-parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
-parser.add_argument('--num_base_layers', type=int, default=0, help='Number of extra hidden layers in the base network of iaf and realnvp. Ignored for all other flows.')
-parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual', 'tanh', 'random'])
+parser.add_argument('--h_size', type=int, default=256, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--num_base_layers', type=int, default=1, help='Number of extra hidden layers in the base network of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--base_network', type=str, default='tanh', help='Base network for RealNVP coupling layers', choices=['relu', 'residual', 'tanh', 'random'])
 parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers')
 parser.set_defaults(batch_norm=True)
 
 # Boosting parameters and optimization settings
-parser.add_argument('--component_threshold', type=float, default=0.0, help='Threshold for determining if a boosted component has converged.')
-parser.add_argument('--regularization_rate', type=float, default=0.4, help='Regularization penalty for boosting.')
+parser.add_argument('--regularization_rate', type=float, default=1.0, help='Regularization penalty for boosting.')
 parser.add_argument('--epochs_per_component', type=int, default=100, help='Number of epochs to train each component of a boosted model. Defaults to max(annealing_schedule, epochs_per_component). Ignored for non-boosted models.')
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
                     help='Initialization scheme for boosted parameter rho') 
@@ -286,9 +285,9 @@ def init_optimizer(model, args):
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                            factor=0.5,
-                                                           patience=250,
-                                                           min_lr=1e-5,
-                                                           verbose=False,
+                                                           patience=100,
+                                                           min_lr=1e-4,
+                                                           verbose=True,
                                                            threshold_mode='abs')
 
     return optimizer, scheduler
