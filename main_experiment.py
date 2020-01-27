@@ -283,7 +283,7 @@ def init_optimizer(model, args):
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                            factor=0.5,
-                                                           patience=100,
+                                                           patience=200,
                                                            min_lr=1e-4,
                                                            verbose=True,
                                                            threshold_mode='abs')
