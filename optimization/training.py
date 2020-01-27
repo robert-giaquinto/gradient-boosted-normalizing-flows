@@ -145,7 +145,7 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
         x_mean, z_mu, z_var, ldj, z0, zk = model(x)
         loss, rec, kl = calculate_loss(x_mean, x, z_mu, z_var, z0, zk, ldj, args, beta=beta)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
         if not args.no_lr_schedule:
             scheduler.step(loss)
@@ -305,7 +305,7 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
         loss, rec, log_G, log_p, entropy, log_ratio = calculate_boosted_loss(
             x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, is_first_component, beta)
         loss.backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
         if not args.no_lr_schedule:
             scheduler.step(loss)
