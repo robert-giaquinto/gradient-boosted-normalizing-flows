@@ -182,7 +182,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
     for n, param in model.named_parameters():
         param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
 
-    for epoch in range(1, args.epochs + 1):
+    for epoch in range(args.init_epoch, args.epochs + 1):
 
         # compute annealing rate for KL loss term
         beta = kl_annealing_rate(epoch - converged_epoch, model.component, model.all_trained, args)

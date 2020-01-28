@@ -61,6 +61,7 @@ at.add_argument('--loaded_is_all_trained', action='store_true', dest='loaded_all
                 help='Default setting, which assumes the loaded boosted model is all_trained.')
 parser.set_defaults(loaded_all_trained=None)
 parser.add_argument('--loaded_init_component', default=None, type=int, help='Boosted component to begin training on first from a loaded model.')
+parser.add_argument('--init_epoch', default=1, type=int, help='Epoch number to start at (helpful if loading a model')
 
 sr = parser.add_mutually_exclusive_group(required=False)
 sr.add_argument('--save_results', action='store_true', dest='save_results', help='Save results from experiments.')
@@ -127,6 +128,7 @@ def parse_args(main_args=None):
     args.shuffle = True
     args.annealing_schedule = max(args.annealing_schedule, 1)
     args.epochs_per_component = max(args.epochs_per_component, args.annealing_schedule)
+    args.init_epoch = min(max(1, args.init_epoch), args.epochs)
 
     # Set a random seed if not given one
     if args.manual_seed is None:
