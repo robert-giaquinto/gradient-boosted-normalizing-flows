@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 
 
 TOY_DATASETS = ["8gaussians", "2gaussians", "1gaussian",  "swissroll", "rings", "moons", "pinwheel", "cos", "2spirals", "checkerboard", "line", "circles", "joint_gaussian"]
-ENERGY_FUNS = ['u0', 'u1', 'u2', 'u3', 'u4', 'u5']
+ENERGY_FUNS = ['u0', 'u1', 'u2', 'u3', 'u4', 'u5', 'u6']
 G_MAX_LOSS = -10.0
 
 parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')

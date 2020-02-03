@@ -61,6 +61,8 @@ at.add_argument('--loaded_is_all_trained', action='store_true', dest='loaded_all
                 help='Default setting, which assumes the loaded boosted model is all_trained.')
 parser.set_defaults(loaded_all_trained=None)
 parser.add_argument('--loaded_init_component', default=None, type=int, help='Boosted component to begin training on first from a loaded model.')
+parser.add_argument('--loaded_num_components', default=None, type=int,
+                    help='If loading a boosted model, this will limit the loaded model to only use the first "loaded_num_components" components in all tasks.')
 parser.add_argument('--init_epoch', default=1, type=int, help='Epoch number to start at (helpful if loading a model')
 
 sr = parser.add_mutually_exclusive_group(required=False)
@@ -285,7 +287,7 @@ def init_optimizer(model, args):
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                            factor=0.5,
-                                                           patience=100,
+                                                           patience=500,
                                                            min_lr=1e-4,
                                                            verbose=True,
                                                            threshold_mode='abs')

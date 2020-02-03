@@ -31,7 +31,9 @@ def load(model, optimizer, path, args, init_with_args=False):
 
         model.component = args.loaded_init_component
         model.all_trained = args.loaded_all_trained
-        msg += f"  and initialized with passed argument component={model.component} and all_trained={str(model.all_trained)}"
+        if args.loaded_num_components is not None:
+            model.num_components = args.loaded_num_components
+        msg += f"  and initialized with passed argument component={model.component} (of {model.num_components}) and all_trained={str(model.all_trained)}"
 
     else:
         msg = f"Restoring {os.path.split(path)[-1]}"

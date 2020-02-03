@@ -42,6 +42,12 @@ def make_toy_density(args):
             for (mix_props_i, mu_i, sigma_i) in zip(mix_props, mu, sigma)))
 
         return u_z
+    elif args.dataset == 'u6':
+        u_z = lambda z: 0.5 * ((torch.norm(z, p=2, dim=1) - 1.0) / 0.5)**2 - \
+            torch.log(torch.exp(-0.5*((z[:,0] - 1.0) / 0.2)**2) + \
+                      torch.exp(-0.5*((z[:,0] + 1.0) / 0.2)**2) + 1e-10)
+
+
     else:
         raise ValueError("Unacceptable choice of target density to sample from")
 
