@@ -426,9 +426,9 @@ class NLSq(nn.Module):
 
     def get_params(self, flow_coef):
         a = flow_coef[..., 0]
-        log_b = flow_coef[..., 1] #* 0.4
-        c_prime = flow_coef[..., 2] #* 0.3
-        log_d = flow_coef[..., 3] #* 0.4
+        log_b = flow_coef[..., 1]
+        c_prime = flow_coef[..., 2]
+        log_d = flow_coef[..., 3]
         g = flow_coef[..., 4]
 
         b = torch.exp(log_b)
@@ -477,8 +477,6 @@ class NLSq(nn.Module):
 
         arg = d * z_new + g
         denom = 1 + arg.pow(2)
-        #log_det_jacobian = torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
-        #maybe:
         log_det_jacobian = safe_log(torch.abs(b - 2 * c * d * arg / denom.pow(2))).sum(-1)
         
         return z_new.float(), log_det_jacobian.float()
@@ -492,8 +490,6 @@ class NLSq(nn.Module):
         z_new = a + b*z + c/denom
         z_new = torch.clamp(z_new, min=-25.0, max=25.0)
         
-        #log_det_jacobian = torch.log(b - 2 * c * d * arg / denom.pow(2)).sum(-1)
-        # maybe:
         log_det_jacobian = safe_log(torch.abs(b - 2 * c * d * arg / denom.pow(2))).sum(-1)
         return z_new, log_det_jacobian
 

@@ -5,8 +5,9 @@ from utils.distributions import log_normal_diag, log_normal_standard, log_bernou
 import torch.nn.functional as F
 from utils.utilities import safe_log
 
-
+# Global constant to keep boosted model from ONLY trying to push new component away from fixed components, any finite negative number works fine
 G_MAX_LOSS = -10.0
+
 
 def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
     """
@@ -23,7 +24,6 @@ def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
     """
     if args.input_type == "binary":
         # - N E_q0 [ ln p(x|z_k) ]
-        #reconstruction_function = nn.BCELoss(reduction='sum')
         reconstruction_function = nn.BCEWithLogitsLoss(reduction='sum')
         recon_loss = reconstruction_function(x_recon, x)
     elif args.input_type == "multinomial":
@@ -69,7 +69,6 @@ def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
 def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regularization_rate, first_component, args, beta=1.0):
 
     if args.input_type == "binary":
-        #reconstruction_function = nn.BCELoss(reduction='sum')
         reconstruction_function = nn.BCEWithLogitsLoss(reduction='sum')
         recon_loss = reconstruction_function(x_recon, x)
     elif args.input_type == "multinomial":
@@ -142,9 +141,6 @@ def binary_loss_array(x_recon, x, z_mu, z_var, z_0, z_k, ldj, beta=1.):
     if len(ldj.size()) > 1:
         ldj = ldj.view(ldj.size(0), -1).sum(-1)
 
-    # TODO: upgrade to newest pytorch version on master branch, there the nn.BCELoss comes with the option
-    # reduce, which when set to False, does no sum over batch dimension.
-    #bce = - log_bernoulli(x.view(batch_size, -1), x_recon.view(batch_size, -1), dim=1)
     reconstruction_function = nn.BCEWithLogitsLoss(reduction='none')
     bce = reconstruction_function(x_recon.view(batch_size, -1), x.view(batch_size, -1))
     # sum over feature dimension
@@ -180,7 +176,6 @@ def multinomial_loss_array(x_logit, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.
 
     # - N E_q0 [ ln p(x|z_k) ]
     # computes cross entropy over all dimensions separately:
-    # ce = cross_entropy(x_logit, target, reduction='none')
     ce_loss_function = nn.CrossEntropyLoss(reduction='none')
     ce = ce_loss_function(x_logit, target)
     # sum over feature dimension

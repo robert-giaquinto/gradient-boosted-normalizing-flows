@@ -53,7 +53,6 @@ class VAE(nn.Module):
 
         # base distribution for calculation of log prob under the model
         self.register_buffer('base_dist_mean', torch.randn(self.z_size, device=args.device).normal_(0, 0.1))
-        #self.register_buffer('base_dist_mean', torch.ones(self.z_size, device=args.device))
         self.register_buffer('base_dist_var', 3.0 * torch.ones(self.z_size, device=args.device))
 
     @property
@@ -78,11 +77,8 @@ class VAE(nn.Module):
                 nn.Softplus())
 
         elif self.vae_layers == "simple":
+            # simple convolutional encoder with just 3 layers
             act = None
-            #q_z_nn = nn.Sequential(
-            #    GatedConv2d(self.input_size, 32, 5, 2, 2, activation=act),
-            #    GatedConv2d(32, 64, 5, 2, 2, activation=act),
-            #    GatedConv2d(64, self.q_z_nn_output_dim, self.last_kernel_size, 1, 0, activation=act))
             q_z_nn = nn.Sequential(
                 GatedConv2d(self.input_size, 16, 5, 2, 2, activation=act),
                 GatedConv2d(16, 32, 5, 2, 2, activation=act),
@@ -92,6 +88,7 @@ class VAE(nn.Module):
                 q_z_var += [nn.Hardtanh(min_val=0.01, max_val=7.)]
             
         else:
+            # convolutional encoder used in Sylvester and BNAF papers
             act = None
             q_z_nn = nn.Sequential(
                     GatedConv2d(self.input_size, 32, 5, 1, 2, activation=act),
@@ -122,32 +119,21 @@ class VAE(nn.Module):
             p_x_mean = nn.Sequential(nn.Linear(self.q_z_nn_output_dim, output_shape))
                 
         elif self.vae_layers == "simple":
-            act = None  # possibly change for multinomial
-            # p_x_nn = nn.Sequential(
-            #     GatedConvTranspose2d(self.z_size, 64, self.last_kernel_size, 2, 0, activation=act),
-            #     GatedConvTranspose2d(64, 32, 5, 2, self.last_pad, 0, activation=act),
-            #     GatedConvTranspose2d(32, 32, 5, 2, 1, 1, activation=act))
+            act = None
             p_x_nn = nn.Sequential(
                 GatedConvTranspose2d(self.z_size, 32, self.last_kernel_size, 2, 0, activation=act),
                 GatedConvTranspose2d(32, 16, 5, 2, self.last_pad, 0, activation=act),
                 GatedConvTranspose2d(16, 16, 5, 2, 1, 1, activation=act))
 
-
             if self.input_type == 'binary':
-                #p_x_mean = nn.Sequential(nn.Conv2d(32, output_shape, 1, 1, 0))
                 p_x_mean = nn.Sequential(nn.Conv2d(16, output_shape, 1, 1, 0))
             elif self.input_type == 'multinomial':
-                # output shape: batch_size, num_channels * num_classes, pixel_width, pixel_height
-                # p_x_mean = nn.Sequential(
-                #     nn.Conv2d(32, 256, 5, 1, 2),
-                #     nn.Conv2d(256, output_shape, 1, 1, 0))
                 p_x_mean = nn.Sequential(
                     nn.Conv2d(16, 256, 5, 1, 2),
                     nn.Conv2d(256, output_shape, 1, 1, 0))
 
-
         else:
-            act = None  # possibly change for multinomial
+            act = None
             p_x_nn = nn.Sequential(
                 GatedConvTranspose2d(self.z_size, 64, self.last_kernel_size, 1, 0, activation=act),
                 GatedConvTranspose2d(64, 64, 5, 1, 2, activation=act),
@@ -158,8 +144,7 @@ class VAE(nn.Module):
 
             if self.input_type == 'binary':
                 p_x_mean = nn.Sequential(
-                    nn.Conv2d(32, output_shape, 1, 1, 0)) #,
-                    #nn.Sigmoid())
+                    nn.Conv2d(32, output_shape, 1, 1, 0))
             elif self.input_type == 'multinomial':
                 # output shape: batch_size, num_channels * num_classes, pixel_width, pixel_height
                 p_x_mean = nn.Sequential(

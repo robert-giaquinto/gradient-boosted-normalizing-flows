@@ -175,6 +175,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
     early_stop_count = 0
     converged_epoch = 0  # corrects the annealing schedule when a component converges early
 
+    # initialize learning rates for boosted components
     prev_lr = []
     for c in range(args.num_components):
         prev_lr.append(args.learning_rate)
@@ -260,7 +261,6 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
                 #   for all components to converge / train completely
                 copyfile(args.snap_dir + f'model_c{model.component}.pt', args.snap_dir + 'model.pt')
                 logger.info(f"Resaving last improved version of {f'model_c{model.component}.pt'} as 'model.pt' for future testing") 
-
         
     train_loss = np.hstack(train_loss)
     train_rec = np.hstack(train_rec)
@@ -365,13 +365,13 @@ def sample_from_all_prob(epochs_since_prev_convergence, current_component, all_t
 
 def check_convergence(early_stop_count, v_loss, best_loss, tr_ratio, best_tr_ratio, epochs_since_prev_convergence, model, args):
     """
-    Verify if a boosted component has converged (log ratio between G and g stopped improving)
+    Verify if a boosted component has converged
     """
     c = model.component
     first_component_trained = model.component > 0 or model.all_trained
     model_improved = v_loss < best_loss[c]
     early_stop_flag = False
-    if first_component_trained and v_loss < best_loss[c]: # and tr_ratio > best_tr_ratio[c]):
+    if first_component_trained and v_loss < best_loss[c]: # tried also checking: tr_ratio > best_tr_ratio[c]), but simpler is better
         # already trained more than one component, boosted component improved
         early_stop_count = 0
         best_loss[c] = v_loss

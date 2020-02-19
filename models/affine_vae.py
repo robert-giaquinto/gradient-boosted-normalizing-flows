@@ -16,7 +16,7 @@ class AffineVAE(VAE):
         super(AffineVAE, self).__init__(args)
         self.num_flows = args.num_flows
         self.density_evaluation = args.density_evaluation
-        self.num_coefs = 2
+        self.num_coefs = 2  # scale and shift 
         
         # Amortized flow parameters
         if args.density_evaluation:

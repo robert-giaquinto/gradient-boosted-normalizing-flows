@@ -16,7 +16,7 @@ class RadialVAE(VAE):
         super(RadialVAE, self).__init__(args)
         self.num_flows = args.num_flows
         self.density_evaluation = args.density_evaluation
-        self.single_reference_point = False
+        self.single_reference_point = False  # if false, each of the k flows warps the density around a different (learned) reference point
 
         # Normalizing flow layers
         self.flow_transformation = flows.Radial()

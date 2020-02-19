@@ -120,8 +120,6 @@ class BoostedVAE(VAE):
         """
         Estimate gradient with Monte Carlo by drawing sample zK ~ g^c and sample zK ~ G^(c-1), and
         computing their densities under the full model G^c
-
-        TODO: Should x be repeated to better approximate mixture 1:c?
         """
         x = x.detach().to(self.args.device)
         h, z_mu, z_var = self.encode(x)
@@ -142,7 +140,7 @@ class BoostedVAE(VAE):
         
     def update_rho(self, data_loader):
         """
-        Update rho using equation ___TBD___ with SGD
+        Learn weights rho using algorithm and updates from Section 3.3
         """
         if self.component == 0 and self.all_trained == False:
             return
@@ -165,6 +163,8 @@ class BoostedVAE(VAE):
             data_iter = iter(data_loader)
             
             for batch_id in range(max_iters):
+
+                # may need to iterate over the dataset multiple times (in the case of very small test-datasets)
                 try:
                     (x, _) = next(data_iter) 
                 except StopIteration:
@@ -221,12 +221,12 @@ class BoostedVAE(VAE):
 
     def _sample_component(self, sampling_components, batch_size=1):
         """
-        Given the keyword "sampling_components" (such as "1:c", "1:c-1", or "-c"), sample a component id from the possible
+        Given the argument sampling_components (such as "1:c", "1:c-1", or "-c"), sample a component id from the possible
         components specified by the keyword.
 
-        "1:c":   sample from any of the first c components
-        "1:c-1": sample from any of the first c-1 components
-        "-c":    sample from any component except the c-th component
+        "1:c":   sample from any of the first c components 
+        "1:c-1": sample from any of the first c-1 components 
+        "-c":    sample from any component except the c-th component (used during a second pass when fine-tuning components)
 
         Returns the integer id of the sampled component
         """
@@ -283,9 +283,9 @@ class BoostedVAE(VAE):
 
     def component_forward_flow(self, z_0, component, h=None):
         """
-        Get the corresponding flow component's parameters, then apply the flow
+        Extracts the corresponding flow component's parameters, then applies that flow transformation.
 
-        Returns a list of [z_0, ..., z_k] and the log det jacobian
+        Returns a list of [zc_0, ..., zc_k] and the log det jacobian
         """
         batch_size = z_0.size(0)
         Z = [z_0]
@@ -304,7 +304,7 @@ class BoostedVAE(VAE):
                     flow_param_k = [flow_param[k], ((component * self.args.num_flows) + k) % 2]
                 else:
                     if self.density_evaluation:
-                        flow_param_k = flow_param[k,...].expand(batch_size, self.z_size, self.num_coefs)  # repeat coefs for each batch element
+                        flow_param_k = flow_param[k,...].expand(batch_size, self.z_size, self.num_coefs)  # repeat coefs for each batch element since there is no encoder to amortize the params
                     else:
                         flow_param_k = flow_param[:, k, :, :]
 
@@ -335,7 +335,7 @@ class BoostedVAE(VAE):
 
             else:
                 if self.component_type == "realnvp":
-                    flow_param_k = [flow_param[k-1], ((component * self.args.num_flows) + k) % 2]
+                    flow_param_k = [flow_param[k-1], ((component * self.args.num_flows) + k) % 2] # second element tells when to flip the ordering
                 else:
                     if self.density_evaluation:
                         flow_param_k = flow_param[k-1, ...].expand(batch_size, self.z_size, self.num_coefs)

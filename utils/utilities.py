@@ -39,7 +39,7 @@ def load(model, optimizer, path, args, init_with_args=False):
         msg = f"Restoring {os.path.split(path)[-1]}"
         if 'component' in checkpoint:
             model.component = checkpoint['component']
-            msg += f", and initialized with pre-saved component={model.component}"
+            msg += f", and initialized with pre-saved component={model.component}  (of {model.num_components})"
         if 'all_trained' in checkpoint:
             model.all_trained = checkpoint['all_trained']
             msg += f" and all_trained={str(model.all_trained)}"

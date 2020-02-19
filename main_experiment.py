@@ -206,11 +206,8 @@ def parse_args(main_args=None):
         torch.set_num_threads(num_workers)
         logger_msg += "\n\tConfirmed Number of CPU threads: {}".format(torch.get_num_threads())
 
-    #args.num_data_workers = min(4, os.cpu_count() - 1)
-    #logger_msg += f"\n\tUsing {args.num_data_workers} cores for loading and preprocessing data"
-    #kwargs = {'num_workers': args.num_data_workers, 'pin_memory': True} if args.cuda else {'num_workers': args.num_data_workers}
-    kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
 
+    kwargs = {'num_workers': 0, 'pin_memory': True} if args.cuda else {}
     logger.info(logger_msg + "\n")
     return args, kwargs
 
@@ -287,7 +284,7 @@ def init_optimizer(model, args):
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                            factor=0.5,
-                                                           patience=500,
+                                                           patience=5000,
                                                            min_lr=1e-4,
                                                            verbose=True,
                                                            threshold_mode='abs')
@@ -296,7 +293,6 @@ def init_optimizer(model, args):
 
 
 def init_log(args):
-    #log_format = '%(asctime)s %(name)-12s %(levelname)s : %(message)s'
     log_format = '%(asctime)s : %(message)s'
     if args.save_log:
         filename = os.path.join(args.snap_dir, "log.txt")

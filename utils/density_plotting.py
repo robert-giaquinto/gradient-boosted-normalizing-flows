@@ -144,7 +144,6 @@ def plot_flow_samples(model, ax, n_pts, batch_size, args):
     zk = zk.cpu().numpy()
     
     # plot
-    #ax.hist2d(zk[:,0], zk[:,1], bins=n_pts, cmap=plt.cm.viridis, norm=matplotlib.colors.LogNorm())
     ax.hist2d(zk[:,0], zk[:,1], bins=n_pts, cmap=plt.cm.viridis)
     ax.set_facecolor(plt.cm.viridis(0.))
     ax.set_title('Flow Samples' + caption, fontdict={'fontsize': 20})

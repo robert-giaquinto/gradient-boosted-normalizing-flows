@@ -130,10 +130,6 @@ class OrthogonalSylvesterVAE(VAE):
         diag1 = self.amor_diag1(h).view(batch_size, self.num_ortho_vecs, self.num_flows)
         diag2 = self.amor_diag2(h).view(batch_size, self.num_ortho_vecs, self.num_flows)
 
-        #full_d = full_d.resize(batch_size, self.num_ortho_vecs, self.num_ortho_vecs, self.num_flows)
-        #diag1 = diag1.resize(batch_size, self.num_ortho_vecs, self.num_flows)
-        #diag2 = diag2.resize(batch_size, self.num_ortho_vecs, self.num_flows)
-
         r1 = full_d * self.triu_mask
         r2 = full_d.transpose(2, 1) * self.triu_mask
 
@@ -142,9 +138,6 @@ class OrthogonalSylvesterVAE(VAE):
 
         q = self.amor_q(h)
         b = self.amor_b(h).view(batch_size, 1, self.num_ortho_vecs, self.num_flows)
-
-        # Resize flow parameters to divide over K flows
-        #b = b.resize(batch_size, 1, self.num_ortho_vecs, self.num_flows)
 
         return mean_z, var_z, r1, r2, q, b
 
@@ -283,10 +276,6 @@ class HouseholderSylvesterVAE(VAE):
         diag1 = self.amor_diag1(h).view(batch_size, self.z_size, self.num_flows)
         diag2 = self.amor_diag2(h).view(batch_size, self.z_size, self.num_flows)
 
-        #full_d = full_d.resize(batch_size, self.z_size, self.z_size, self.num_flows)
-        #diag1 = diag1.resize(batch_size, self.z_size, self.num_flows)
-        #diag2 = diag2.resize(batch_size, self.z_size, self.num_flows)
-
         r1 = full_d * self.triu_mask
         r2 = full_d.transpose(2, 1) * self.triu_mask
 
@@ -295,9 +284,6 @@ class HouseholderSylvesterVAE(VAE):
 
         q = self.amor_q(h)
         b = self.amor_b(h).view(batch_size, 1, self.z_size, self.num_flows)
-
-        # Resize flow parameters to divide over K flows
-        #b = b.resize(batch_size, 1, self.z_size, self.num_flows)
 
         return mean_z, var_z, r1, r2, q, b
 
@@ -403,10 +389,6 @@ class TriangularSylvesterVAE(VAE):
         diag1 = self.amor_diag1(h).view(batch_size, self.z_size, self.num_flows)
         diag2 = self.amor_diag2(h).view(batch_size, self.z_size, self.num_flows)
 
-        #full_d = full_d.resize(batch_size, self.z_size, self.z_size, self.num_flows)
-        #diag1 = diag1.resize(batch_size, self.z_size, self.num_flows)
-        #diag2 = diag2.resize(batch_size, self.z_size, self.num_flows)
-
         r1 = full_d * self.triu_mask
         r2 = full_d.transpose(2, 1) * self.triu_mask
 
@@ -414,9 +396,6 @@ class TriangularSylvesterVAE(VAE):
         r2[:, self.diag_idx, self.diag_idx, :] = diag2
 
         b = self.amor_b(h).view(batch_size, 1, self.z_size, self.num_flows)
-
-        # Resize flow parameters to divide over K flows
-        #b = b.resize(batch_size, 1, self.z_size, self.num_flows)
 
         return mean_z, var_z, r1, r2, b
 

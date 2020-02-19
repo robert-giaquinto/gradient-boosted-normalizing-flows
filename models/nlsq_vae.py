@@ -24,7 +24,7 @@ class NLSqVAE(VAE):
             self.flow_coef = nn.Parameter(torch.randn(self.num_flows, self.z_size, self.num_coefs).normal_(0, 0.01))
 
         else:
-            # learned from encoder neural network
+            # parameters learned from encoder neural network
             self.amor_flow_coef = nn.Linear(self.q_z_nn_output_dim, self.num_flows * self.z_size * self.num_coefs)
             self.flow_coef = None
 
