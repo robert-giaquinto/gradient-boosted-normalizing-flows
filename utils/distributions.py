@@ -6,11 +6,6 @@ import math
 MIN_EPSILON = 1e-5
 MAX_EPSILON = 1.-1e-5
 
-PI = torch.FloatTensor([math.pi])
-PI.requires_grad = False
-if torch.cuda.is_available():
-    PI = PI.cuda()
-
 # N(x | mu, var) = 1/sqrt{2pi var} exp[-1/(2 var) (x-mean)(x-mean)]
 # log N(x| mu, var) = -log sqrt(2pi) -0.5 log var - 0.5 (x-mean)(x-mean)/var
 
@@ -27,6 +22,11 @@ def log_normal_diag(x, mean, log_var, average=False, reduce=True, dim=None):
 
 
 def log_normal_normalized(x, mean, log_var, average=False, reduce=True, dim=None):
+    PI = torch.FloatTensor([math.pi])
+    PI.requires_grad = False
+    if torch.cuda.is_available():
+        PI = PI.cuda()
+
     log_norm = -(x - mean) * (x - mean)
     log_norm *= torch.reciprocal(2.*log_var.exp())
     log_norm += -0.5 * log_var
