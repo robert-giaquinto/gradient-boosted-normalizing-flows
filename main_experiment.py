@@ -23,7 +23,8 @@ from models.nlsq_vae import NLSqVAE
 from optimization.training import train
 from optimization.evaluation import evaluate, evaluate_likelihood
 from utils.load_data import load_dataset
-from utils.utilities import load, save, MyDataParallel
+from utils.utilities import load, save
+from utils.warmup_scheduler import GradualWarmupScheduler
 
 
 logger = logging.getLogger(__name__)
@@ -87,8 +88,12 @@ parser.add_argument('--annealing_schedule', type=int, default=100, help='Number 
 parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
 parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
 parser.add_argument('--no_annealing', action='store_true', default=False, help='disables annealing while training')
+parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay parameter in Adamax')
+parser.add_argument("--warmup_epochs", type=int, default=5, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
+parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', None])
 parser.add_argument('--patience', type=int, default=5000, help='If using LR schedule, number of steps before reducing LR.')
+
 
 # model parameters
 parser.add_argument('--vae_layers', type=str, default='linear', choices=['linear', 'convolutional', 'simple'],
@@ -178,9 +183,13 @@ def parse_args(main_args=None):
     else:
         args.min_beta = 1.0
 
-    lr_schedule = ""
-    if not args.no_lr_schedule:
-        lr_schedule += "_lr_scheduling"
+    if args.lr_schedule is None or args.no_lr_schedule:
+        args.no_lr_schedule = True
+        args.lr_schedule = None
+        lr_schedule = ''
+    else:
+        args.no_lr_schedule = False
+        lr_schedule = f'LR{args.lr_schedule}'
 
     args.snap_dir += lr_schedule + is_annealed + '_on_' + args.dataset + "_" + args.model_signature + '/'
     if not os.path.exists(args.snap_dir):
@@ -250,9 +259,12 @@ def init_optimizer(model, args):
     group model parameters to more easily modify learning rates of components (flow parameters)
     """
     logger.info('OPTIMIZER:')
+    warmup_mult = 1000.0
+    base_lr = (args.learning_rate / warmup_mult) if args.warmup_epochs > 0 else args.learning_rate
+    logger.info(f"Initializing Adamax optimizer with base learning rate={args.learning_rate}, weight decay={args.weight_decay}.")
+    
     if args.flow == 'boosted':
-        logger.info("Initializing optimizer for ensemble model, grouping parameters according to VAE and Component Id:")
-
+        logger.info("For boosted model, grouping parameters according to Component Id:")
         flow_params = {f"{c}": torch.nn.ParameterList() for c in range(args.num_components)}
         flow_labels = {f"{c}": [] for c in range(args.num_components)}
         vae_params = torch.nn.ParameterList()
@@ -279,19 +291,32 @@ def init_optimizer(model, args):
             all_params.append(vae_params)
             logger.info(f"Grouping [{', '.join(vae_labels)}] as the VAE parameters.\n")
             
-        optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=args.learning_rate, eps=1.e-7)
+        optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=base_lr, weight_decay=args.weight_decay)
     else:
         logger.info(f"Initializing optimizer for standard models with learning rate={args.learning_rate}.\n")
-        optimizer = optim.Adamax(model.parameters(), lr=args.learning_rate, eps=1.e-7)
+        optimizer = optim.Adamax(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
 
-    scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                           factor=0.5,
-                                                           patience=args.patience,
-                                                           min_lr=1e-4,
-                                                           verbose=True,
-                                                           threshold_mode='abs')
+    if args.no_lr_schedule:
+        scheduler = None
+    else:
+        if args.lr_schedule == "plateau":
+            logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience} steps until it reaches 1e-5.")
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                                   factor=0.5,
+                                                                   patience=args.patience,
+                                                                   min_lr=1e-5,
+                                                                   verbose=True,
+                                                                   threshold_mode='abs')
+        elif args.lr_schedule == "cosine":
+            logger.info(f"Using CosineAnnealingLR as a learning-rate schedule, annealed over {args.epochs * args.train_size} training steps.")
+            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs * args.train_size)
 
-    return optimizer, scheduler
+    if args.warmup_epochs > 0:
+        logger.info(f"Gradually warming up learning rate from {base_lr} to {args.learning_rate} over the first {args.warmup_epochs * args.train_size} steps.\n")
+        warmup_scheduler = GradualWarmupScheduler(optimizer, multiplier=warmup_mult, total_epoch=args.warmup_epochs * args.train_size, after_scheduler=scheduler)
+        return optimizer, warmup_scheduler
+    else:
+        return optimizer, scheduler
 
 
 def init_log(args):

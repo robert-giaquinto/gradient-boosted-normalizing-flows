@@ -16,34 +16,6 @@ import sklearn.datasets
 
 logger = logging.getLogger(__name__)
 
-N_BITS = 8
-
-def preprocess(x):
-    """
-    Follows:
-    https://github.com/openai/glow/blob/master/model.py
-    """
-
-    x = x * 255  # undo ToTensor scaling to [0,1]
-
-    n_bins = 2**N_BITS
-    if N_BITS < 8:
-      x = torch.floor(x / 2 ** (8 - N_BITS))
-    x = x / n_bins - 0.5
-
-    return x
-
-
-def postprocess(x):
-    """
-    Follows:
-    https://github.com/openai/glow/blob/master/model.py
-    """    
-    x = torch.clamp(x, -0.5, 0.5)
-    x += 0.5
-    x = x * 2**N_BITS
-    return torch.clamp(x, 0, 255).byte()
-
 
 def load_celeba(args, **kwargs):
     """
@@ -81,7 +53,6 @@ def load_celeba(args, **kwargs):
     val_loader = data_utils.DataLoader(val_data, batch_size=args.batch_size, shuffle=False, **kwargs)
     test_loader = data_utils.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, **kwargs)
 
-    args.train_size = len(train_loader)
     return train_loader, val_loader, test_loader, args
 
 
@@ -125,7 +96,6 @@ def load_cifar10(args, **kwargs):
     val_loader = data_utils.DataLoader(val_data, batch_size=args.batch_size, sampler=valid_sampler, **kwargs)
     test_loader = data_utils.DataLoader(test_data, batch_size=args.batch_size, **kwargs)
 
-    args.train_size = len(train_loader)
     return train_loader, val_loader, test_loader, args
 
 
@@ -326,6 +296,7 @@ def load_dataset(args, **kwargs):
     else:
         raise Exception('Wrong name of the dataset!')
 
+    args.train_size = len(train_loader)
     logger.info(f"Dataset: {args.dataset} has {len(train_loader)}, {len(val_loader)}, and {len(test_loader)} minibatches of size {args.batch_size} in train, validation, and test sets.")
     logger.info(f"Total samples: {len(train_loader.sampler)}, {len(val_loader.sampler)}, and {len(test_loader.sampler)} in train, validation, and test sets.\n")
     return train_loader, val_loader, test_loader, args

@@ -147,7 +147,10 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
         #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
         if not args.no_lr_schedule:
-            scheduler.step(loss)
+            if args.lr_schedule == "plateau":
+                scheduler.step(metrics=loss)
+            else:
+                scheduler.step()
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
@@ -307,7 +310,10 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
         #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
         optimizer.step()
         if not args.no_lr_schedule:
-            scheduler.step(loss)
+            if args.lr_schedule == "plateau":
+                scheduler.step(metrics=loss)
+            else:
+                scheduler.step()
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
