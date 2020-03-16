@@ -39,8 +39,10 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
             
     else:
         if args.flow == "boosted":
-            plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + 2))))
-            plt_width = max(1, int(np.ceil((args.num_components + 2) / plt_height)))
+            plt_width =  max(2, int(np.ceil(np.sqrt(args.num_components))))
+            plt_height = max(2, int(np.ceil(np.sqrt(args.num_components))) + 1)
+            #plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + 2))))
+            #plt_width = max(1, int(np.ceil((args.num_components + 2) / plt_height)))
             fig, axs = plt.subplots(plt_height, plt_width, figsize=(12,12), subplot_kw={'aspect': 'equal'}, squeeze=False)
             plot_samples(potential_or_sampling_fn, axs[0,0], range_lim, n_pts)
             total_prob = plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, args.batch_size, args)
@@ -54,8 +56,10 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     plt.tight_layout(rect=[0, 0, 1.0, 0.95])
 
     title = f'{args.dataset.title()}: {args.flow.title()} Flow, K={args.num_flows}'
-    title += f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
-    title += f', C={args.num_components}, Reg={args.regularization_rate:.2f}' if args.flow == "boosted" else ''
+    title += f', C={args.num_components}' if args.flow == "boosted" else ''
+    title += f', Reg={args.regularization_rate:.2f}' if args.flow == "boosted" and args.density_matching else ''
+    annealing_type = f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
+    title += annealing_type if args.density_matching else ''  # annealing isn't done for density sampling
     fig.suptitle(title, y=0.98, fontsize=20)
 
     # save
@@ -179,17 +183,22 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
     """
     xx, yy, zz = test_grid
     num_fixed_plots = 2  # every image will show the true samples and the density for the full model
-    plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + num_fixed_plots))))
-    plt_width = max(1, int(np.ceil((args.num_components + num_fixed_plots) / plt_height)))
+    #plt_height = max(1, int(np.ceil(np.sqrt(args.num_components + num_fixed_plots))))
+    #plt_width = max(1, int(np.ceil((args.num_components + num_fixed_plots) / plt_height)))
 
+    plt_width =  max(2, int(np.ceil(np.sqrt(args.num_components))))
+    plt_height = max(2, int(np.ceil(np.sqrt(args.num_components))) + 1)
+            
     total_prob = torch.zeros(n_pts, n_pts)
     num_components_to_plot = args.num_components if model.all_trained else model.component + 1
     for c in range(num_components_to_plot):
         if model.rho[c] == 0.0:
             continue
         
-        row = int(np.floor((c + num_fixed_plots) / plt_width))
-        col = int((c + num_fixed_plots) % plt_width)
+        #row = int(np.floor((c + num_fixed_plots) / plt_width))
+        #col = int((c + num_fixed_plots) % plt_width)
+        row = int(1 + np.floor(c / plt_width))
+        col = int(c % plt_width)
 
         zzk, logdet = [], []
         for zz_i in zz.split(batch_size, dim=0):
@@ -214,7 +223,7 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
     total_prob = total_prob.exp()
     axs[0,1].pcolormesh(xx, yy, total_prob, cmap=plt.cm.viridis)
     axs[0,1].set_facecolor(plt.cm.viridis(0.))
-    axs[0,1].set_title('Boosted Density - All Components', fontdict={'fontsize': 20})
+    axs[0,1].set_title('GBF - All Components', fontdict={'fontsize': 20})
     return total_prob
 
     

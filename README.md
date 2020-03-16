@@ -17,9 +17,7 @@ be incorporated to improve the results of many existing NFs.
 
 Link to paper:
 
-[Gradient Boosted Flows](https://arxiv.org/abs/2002.11896) (under review)
-
-Robert Giaquinto and Arindam Banerje
+[Gradient Boosted Flows](https://arxiv.org/abs/2002.11896) (under review) by Robert Giaquinto and Arindam Banerjee
 
 
 
