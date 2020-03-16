@@ -18,23 +18,22 @@ class VAE(nn.Module):
         self.z_size = args.z_size
         self.input_type = args.input_type
 
-        if args.input_size == [1, 28, 20]:
-            self.last_kernel_size = (7, 5)
-            self.last_pad = 2
-        elif args.input_size == [3, 32, 32]:
-            self.last_kernel_size = 7
-            self.last_pad = 1
-        else:
-            self.last_kernel_size = 7
-            self.last_pad = 2
-            
-        self.q_z_nn_output_dim = 256
-        self.q_z_nn_hidden_dim = 256
-
         if not args.density_evaluation:
+            if args.input_size == [1, 28, 20]:
+                self.last_kernel_size = (7, 5)
+                self.last_pad = 2
+            elif args.input_size == [3, 32, 32]:
+                self.last_kernel_size = 7
+                self.last_pad = 1
+            else:
+                self.last_kernel_size = 7
+                self.last_pad = 2
+                
+            self.q_z_nn_output_dim = 256
+            self.q_z_nn_hidden_dim = 256
+
             self.vae_layers = args.vae_layers
-            self.use_linear_layers = args.vae_layers == "linear"
-            if self.use_linear_layers:
+            if args.vae_layers == "linear":
                 self.input_size = np.prod(args.input_size)
             else:
                 self.input_size = args.input_size[0]
@@ -69,7 +68,7 @@ class VAE(nn.Module):
         q_z_mean = nn.Linear(self.q_z_nn_output_dim, self.z_size)
         q_z_var = [nn.Linear(self.q_z_nn_output_dim, self.z_size), nn.Softplus()]
                     
-        if self.use_linear_layers:
+        if self.vae_layers == "linear":
             q_z_nn = nn.Sequential(
                 nn.Linear(self.input_size, self.q_z_nn_hidden_dim),
                 nn.ReLU(),
@@ -110,7 +109,7 @@ class VAE(nn.Module):
         """
         output_shape = 256 * self.input_size if self.input_type == 'multinomial' else self.input_size
         
-        if self.use_linear_layers:
+        if self.vae_layers == "linear":
             p_x_nn = nn.Sequential(
                 nn.Linear(self.z_size, self.q_z_nn_hidden_dim),
                 nn.ReLU(),
@@ -170,7 +169,7 @@ class VAE(nn.Module):
         Encoder expects following data shapes as input: shape = (batch_size, num_channels, width, height)
         """
         h = self.q_z_nn(x)
-        if not self.use_linear_layers:
+        if self.vae_layers != "linear":
             h = h.view(h.size(0), -1)
         mean = self.q_z_mean(h)
         var = self.q_z_var(h)
@@ -181,7 +180,7 @@ class VAE(nn.Module):
         Decoder outputs reconstructed image in the following shapes:
         x_mean.shape = (batch_size, num_channels, width, height)
         """
-        if not self.use_linear_layers:
+        if self.vae_layers != "linear":
             z = z.view(z.size(0), self.z_size, 1, 1)
 
         h = self.p_x_nn(z)

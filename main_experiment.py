@@ -88,6 +88,7 @@ parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for wa
 parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
 parser.add_argument('--no_annealing', action='store_true', default=False, help='disables annealing while training')
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
+parser.add_argument('--patience', type=int, default=5000, help='If using LR schedule, number of steps before reducing LR.')
 
 # model parameters
 parser.add_argument('--vae_layers', type=str, default='linear', choices=['linear', 'convolutional', 'simple'],
@@ -190,6 +191,7 @@ def parse_args(main_args=None):
 
     # Initalize computation settings
     # Set up multiple CPU/GPUs
+
     logger.info("COMPUTATION SETTINGS:")
     logger.info(f"Random Seed: {args.manual_seed}")
     if args.cuda:
@@ -284,7 +286,7 @@ def init_optimizer(model, args):
 
     scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                            factor=0.5,
-                                                           patience=5000,
+                                                           patience=args.patience,
                                                            min_lr=1e-4,
                                                            verbose=True,
                                                            threshold_mode='abs')

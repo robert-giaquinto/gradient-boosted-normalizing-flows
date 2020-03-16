@@ -74,3 +74,63 @@ class MyDataParallel(torch.nn.DataParallel):
             return super().__getattr__(name)
         except AttributeError:
             return getattr(self.module, name)
+
+
+def squeeze2d(input, factor):
+    if factor == 1:
+        return input
+
+    B, C, H, W = input.size()
+
+    assert H % factor == 0 and W % factor == 0, "H or W modulo factor is not 0"
+
+    x = input.view(B, C, H // factor, factor, W // factor, factor)
+    x = x.permute(0, 1, 3, 5, 2, 4).contiguous()
+    x = x.view(B, C * factor * factor, H // factor, W // factor)
+
+    return x
+
+
+def unsqueeze2d(input, factor):
+    if factor == 1:
+        return input
+
+    factor2 = factor ** 2
+
+    B, C, H, W = input.size()
+
+    assert C % (factor2) == 0, "C module factor squared is not 0"
+
+    x = input.view(B, C // factor2, factor, factor, H, W)
+    x = x.permute(0, 1, 4, 2, 5, 3).contiguous()
+    x = x.view(B, C // (factor2), H * factor, W * factor)
+
+    return x
+
+
+def split_feature(tensor, type="split"):
+    """
+    type = ["split", "cross"]
+    """
+    C = tensor.size(1)
+    if type == "split":
+        return tensor[:, :C // 2, ...], tensor[:, C // 2:, ...]
+    elif type == "cross":
+        return tensor[:, 0::2, ...], tensor[:, 1::2, ...]
+
+def compute_same_pad(kernel_size, stride):
+    if isinstance(kernel_size, int):
+        kernel_size = [kernel_size]
+
+    if isinstance(stride, int):
+        stride = [stride]
+
+    assert len(stride) == len(kernel_size),\
+        "Pass kernel size and stride both as int, or both as equal length iterable"
+
+    return [((k - 1) * s + 1) // 2 for k, s in zip(kernel_size, stride)]
+
+
+def pixels(tensor):
+    return int(tensor.size(2) * tensor.size(3))
+

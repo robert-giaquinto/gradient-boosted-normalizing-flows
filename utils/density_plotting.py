@@ -53,7 +53,7 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     for ax in plt.gcf().axes: format_ax(ax, range_lim)
     plt.tight_layout(rect=[0, 0, 1.0, 0.95])
 
-    title = f'{args.flow.title()} Flow, K={args.num_flows}'
+    title = f'{args.dataset.title()}: {args.flow.title()} Flow, K={args.num_flows}'
     title += f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
     title += f', C={args.num_components}, Reg={args.regularization_rate:.2f}' if args.flow == "boosted" else ''
     fig.suptitle(title, y=0.98, fontsize=20)
@@ -65,7 +65,7 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     fname += f'_hidden{args.num_base_layers}_hsize{args.h_size}' if args.flow == 'iaf' else ''
     fname += '_annealed' if args.min_beta < 1.0 else ''
     fname += '_lr_scheduling' if not args.no_lr_schedule else ''
-    plt.savefig(os.path.join(args.snap_dir, fname + f'_step{batch_id}.png'))
+    plt.savefig(os.path.join(args.snap_dir, fname + f'_step{batch_id:07d}.png'))
     plt.close()
 
 
@@ -89,13 +89,13 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
                 xx, yy, zz = test_grid
                 axs[1].pcolormesh(xx, yy, total_prob, cmap=plt.cm.viridis)
                 axs[1].set_facecolor(plt.cm.viridis(0.))
-                axs[1].set_title('Boosted Flow Density for All Components', fontdict={'fontsize': 20})
+                axs[1].set_title('Boosted Density - All Components', fontdict={'fontsize': 20})
             else:
                 plot_fwd_flow_density(model, axs[1], test_grid, n_pts, args.batch_size, args)
                 
         for ax in plt.gcf().axes: format_ax(ax, range_lim)
         plt.tight_layout(rect=[0, 0, 1.0, 0.95])
-        title = f'{args.flow.title()} Flow, K={args.num_flows}'
+        title = f'{args.dataset.title()}: {args.flow.title()} Flow, K={args.num_flows}'
         title += f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
         title += f', C={args.num_components}, Reg={args.regularization_rate:.2f}' if args.flow == "boosted" else ''
         fig.suptitle(title, y=0.98, fontsize=20)
@@ -134,7 +134,7 @@ def plot_samples(samples_fn, ax, range_lim, n_pts):
 def plot_flow_samples(model, ax, n_pts, batch_size, args):
     z = model.base_dist.sample((n_pts**2,))
     if args.flow == "boosted":
-        caption = f" From All Components"
+        caption = f" - All Components"
         zk = torch.cat([model.flow(z_, sample_from="1:c")[0][-1] for z_ in z.split(batch_size, dim=0)], 0)
     else:
         caption = f""
@@ -205,7 +205,7 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
         # plot component c
         axs[row,col].pcolormesh(xx, yy, prob.view(n_pts,n_pts).data, cmap=plt.cm.viridis)
         axs[row,col].set_facecolor(plt.cm.viridis(0.))
-        axs[row,col].set_title(f'Boosted Flow Density for c={c}', fontdict={'fontsize': 20})
+        axs[row,col].set_title(f'c={c}', fontdict={'fontsize': 20})
 
         # save total model probs
         total_prob += log_prob.cpu().view(n_pts, n_pts).data * model.rho[c]
@@ -214,7 +214,7 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
     total_prob = total_prob.exp()
     axs[0,1].pcolormesh(xx, yy, total_prob, cmap=plt.cm.viridis)
     axs[0,1].set_facecolor(plt.cm.viridis(0.))
-    axs[0,1].set_title('Boosted Flow Density for All Components', fontdict={'fontsize': 20})
+    axs[0,1].set_title('Boosted Density - All Components', fontdict={'fontsize': 20})
     return total_prob
 
     
@@ -257,7 +257,7 @@ def plot_inv_flow(model, batch_id, n_pts, batch_size, args):
     plt.imshow(H.T, interpolation='gaussian')
     plt.axis('off')
     plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
-    plt.savefig(os.path.join(args.snap_dir, f'final_{fname}_step{batch_id}.png'))
+    plt.savefig(os.path.join(args.snap_dir, f'final_{fname}_step{batch_id:07d}.png'))
 
 
 def plot_boosted_inv_flow_density(model, axs, test_grid, n_pts, batch_size, args, plt_height, plt_width):
@@ -319,7 +319,7 @@ def plot_boosted_inv_flow(model, batch_id, n_pts, batch_size, args):
         plt.imshow(Hc.T, interpolation='gaussian')
         plt.axis('off')
         plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
-        plt.savefig(os.path.join(args.snap_dir, f'{c}_{fname}_step{batch_id}.png'))
+        plt.savefig(os.path.join(args.snap_dir, f'{c}_{fname}_step{batch_id:07d}.png'))
 
         if model.component == 0 and not model.all_trained:
             # don't bother plotting components that haven't been trained at all
@@ -333,7 +333,7 @@ def plot_boosted_inv_flow(model, batch_id, n_pts, batch_size, args):
     plt.imshow(H.T, interpolation='gaussian')
     plt.axis('off')
     plt.subplots_adjust(left=0, right=1, bottom=0, top=1)
-    plt.savefig(os.path.join(args.snap_dir, f'final_{fname}_step{batch_id}.png'))
+    plt.savefig(os.path.join(args.snap_dir, f'final_{fname}_step{batch_id:07d}.png'))
 
 
 def plot_q0_density(model, ax, test_grid, n_pts, batch_size, args):

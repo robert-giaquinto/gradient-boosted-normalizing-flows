@@ -27,8 +27,8 @@ class RealNVPVAE(VAE):
             base_network = TanhNet
 
         in_dim = self.z_size // 2
-        out_dim = self.z_size // 2
-        #out_dim = self.z_size - (self.z_size // 2)
+        #out_dim = self.z_size // 2
+        out_dim = self.z_size - (self.z_size // 2)
         self.flow_param = nn.ModuleList()
         for k in range(self.num_flows):
             flow_k = [base_network(in_dim, out_dim, args.h_size, args.num_base_layers) for _ in range(4)]

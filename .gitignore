@@ -9,6 +9,12 @@ data/Freyfaces/
 data/MNIST_static/
 data/Caltech101Silhouettes/
 data/OMNIGLOT/
+data/BSDS300/
+data/gas/
+data/hepmass/
+data/miniboone/
+data/power/
+data/celeba/
 results/snapshots/
 results/orinjade
 results/codefix

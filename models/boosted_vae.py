@@ -122,19 +122,30 @@ class BoostedVAE(VAE):
         computing their densities under the full model G^c
         """
         x = x.detach().to(self.args.device)
-        h, z_mu, z_var = self.encode(x)
-        z0 = self.reparameterize(z_mu, z_var)
 
-        # E_g^(c) [ gamma ] sample
-        g_zk, _, _, g_ldj = self.flow(z0, sample_from="c", density_from="1:c", h=h)
-        g_x = self.decode(g_zk[-1])
-        g_loss, _, _ = calculate_loss(g_x, x, z_mu, z_var, z0, g_zk[-1], g_ldj, self.args, beta=1.0)
+        if self.density_evaluation:
+            # No encoding or decoding necessary
+            g_zk, _, _, g_ldj = self.flow(x, sample_from="c", density_from="1:c")
+            G_zk, _, _, G_ldj = self.flow(x, sample_from="1:c-1", density_from="1:c")
 
-        # E_G^(c-1) [ gamma ]
-        fixed_components = "-c" if self.all_trained else "1:c-1"
-        G_zk, _, _, G_ldj = self.flow(z0, sample_from=fixed_components, density_from="1:c", h=h)
-        G_x = self.decode(G_zk[-1])
-        G_loss, _, _ = calculate_loss(G_x, x, z_mu, z_var, z0, G_zk[-1], G_ldj, self.args, beta=1.0)
+            g_loss = -1.0 * (self.base_dist.log_prob(g_zk[-1]).sum(1) + g_ldj)
+            G_loss = -1.0 * (self.base_dist.log_prob(G_zk[-1]).sum(1) + G_ldj)
+
+        else:
+            # Must encode and decode the sample
+            h, z_mu, z_var = self.encode(x)
+            z0 = self.reparameterize(z_mu, z_var)
+
+            # E_g^(c) [ gamma ] sample
+            g_zk, _, _, g_ldj = self.flow(z0, sample_from="c", density_from="1:c", h=h)
+            g_x = self.decode(g_zk[-1])
+            g_loss, _, _ = calculate_loss(g_x, x, z_mu, z_var, z0, g_zk[-1], g_ldj, self.args, beta=1.0)
+
+            # E_G^(c-1) [ gamma ]
+            fixed_components = "-c" if self.all_trained else "1:c-1"
+            G_zk, _, _, G_ldj = self.flow(z0, sample_from=fixed_components, density_from="1:c", h=h)
+            G_x = self.decode(G_zk[-1])
+            G_loss, _, _ = calculate_loss(G_x, x, z_mu, z_var, z0, G_zk[-1], G_ldj, self.args, beta=1.0)
 
         return g_loss.mean(0).detach().item(), G_loss.mean(0).detach().item()
         
@@ -153,10 +164,11 @@ class BoostedVAE(VAE):
             print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=rho_log)
 
             tolerance = 0.001
-            init_step_size = 0.0001
+            #init_step_size = 0.0001
+            init_step_size = 0.005
             min_iters = 10
             max_iters = 100
-            num_repeats = self.num_components * 3
+            num_repeats = 1 if self.density_evaluation else self.num_components * 3
             prev_rho = self.rho[self.component].item()
 
             # create dataloader-iterator
@@ -173,14 +185,16 @@ class BoostedVAE(VAE):
 
                 x = x.detach().to(self.args.device)
 
-                if self.args.dynamic_binarization:
-                    x = torch.bernoulli(x)
+                if not self.density_evaluation:
+                    # reshape data for encoder and decoder
+                    if self.args.dynamic_binarization:
+                        x = torch.bernoulli(x)
+                    elif self.args.vae_layers == 'linear':
+                        x = x.view(-1, np.prod(self.args.input_size))
+                    else:
+                        x = x.view(-1, *self.args.input_size)
 
-                if self.args.vae_layers == 'linear':
-                    x = x.view(-1, np.prod(self.args.input_size))
-                else:
-                    x = x.view(-1, *self.args.input_size)
-
+                # repeat multiple samples due to randomness with reparameterization
                 g_loss, G_loss = [], []
                 for r in range(num_repeats):
                     g, G = self._rho_gradient(x)
@@ -189,7 +203,7 @@ class BoostedVAE(VAE):
 
                 g_loss = np.array(g_loss)
                 G_loss = np.array(G_loss)
-                gradient = g_loss.mean() - G_loss.mean()
+                gradient = np.mean(g_loss - G_loss)    
                 step_size = init_step_size / (0.1 * batch_id + 1)
                 rho = min(max(prev_rho - step_size * gradient, 0.0005), 0.999)
 

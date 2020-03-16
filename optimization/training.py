@@ -9,7 +9,6 @@ from shutil import copyfile
 
 from optimization.loss import calculate_loss, calculate_loss_array, calculate_boosted_loss
 from utils.plotting import plot_training_curve
-from scipy.special import logsumexp
 from optimization.evaluation import evaluate
 from utils.utilities import save, load
 

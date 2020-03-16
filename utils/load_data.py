@@ -2,6 +2,8 @@ import torch
 import torch.utils.data as data_utils
 import torchvision
 import torchvision.transforms as transforms
+import torchvision.datasets as datasets
+import torch.nn.functional as F
 
 import pickle
 from scipy.io import loadmat
@@ -14,25 +16,103 @@ import sklearn.datasets
 
 logger = logging.getLogger(__name__)
 
+N_BITS = 8
+
+def preprocess(x):
+    """
+    Follows:
+    https://github.com/openai/glow/blob/master/model.py
+    """
+
+    x = x * 255  # undo ToTensor scaling to [0,1]
+
+    n_bins = 2**N_BITS
+    if N_BITS < 8:
+      x = torch.floor(x / 2 ** (8 - N_BITS))
+    x = x / n_bins - 0.5
+
+    return x
+
+
+def postprocess(x):
+    """
+    Follows:
+    https://github.com/openai/glow/blob/master/model.py
+    """    
+    x = torch.clamp(x, -0.5, 0.5)
+    x += 0.5
+    x = x * 2**N_BITS
+    return torch.clamp(x, 0, 255).byte()
+
+
+def load_celeba(args, **kwargs):
+    """
+    data_train = np.load('../celeba_full_64x64_3bit.npy')
+    data_train = np.load('../celeba_full_64x64_5bit.npy')
+    """
+    args.dynamic_binarization = False
+    args.input_type = 'multinomial'
+    #args.input_size = [3, 64, 64]
+    args.input_size = [3, 32, 32]
+    args.y_classes = 40
+
+    if args.augment_images:
+        transformations = [transforms.RandomAffine(0, translate=(0.1, 0.1)),
+                           transforms.RandomHorizontalFlip()]
+    else:
+        transformations = []
+
+    transformations.extend([transforms.Resize(args.input_size[1:]), transforms.ToTensor()])
+    train_transform = transforms.Compose(transformations)
+    test_transform = transforms.Compose([transforms.Resize(args.input_size[1:]), transforms.ToTensor()])
+
+    # Create the datasets
+    data_dir = './data/'
+    train_data = torchvision.datasets.CelebA(root=data_dir, split='train', target_type='attr', download=True,
+                                             transform=train_transform)
+    val_data = torchvision.datasets.CelebA(root=data_dir, split='valid', target_type='attr',
+                                           transform=test_transform)
+    test_data = torchvision.datasets.CelebA(root=data_dir, split='test', target_type='attr',
+                                            transform=test_transform)
+
+    
+    # Create the dataloaders
+    train_loader = data_utils.DataLoader(train_data, batch_size=args.batch_size, shuffle=args.shuffle, **kwargs)
+    val_loader = data_utils.DataLoader(val_data, batch_size=args.batch_size, shuffle=False, **kwargs)
+    test_loader = data_utils.DataLoader(test_data, batch_size=args.batch_size, shuffle=False, **kwargs)
+
+    args.train_size = len(train_loader)
+    return train_loader, val_loader, test_loader, args
+
 
 def load_cifar10(args, **kwargs):
     args.dynamic_binarization = False
     args.input_type = 'multinomial'
+    args.y_classes = 10
     args.input_size = [3, 32, 32]
+    valid_size = 0.1
 
-    data_dir = './data/CIFAR10/'
+    if args.augment_images:
+        transformations = [transforms.RandomAffine(0, translate=(0.1, 0.1)),
+                           transforms.RandomHorizontalFlip()]
+    else:
+        transformations = []
 
-    transform = transforms.Compose([transforms.ToTensor()])
+    transformations.extend([transforms.ToTensor()])
+    train_transform = transforms.Compose(transformations)
+    test_transform = transforms.Compose([transforms.ToTensor()])
+
+    one_hot_encode = lambda target: F.one_hot(torch.tensor(target), args.y_classes)
 
     # load / download the data
-    train_data = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=True, transform=transform)
-    val_data = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=True, transform=transform)
-    test_data = torchvision.datasets.CIFAR10(root=data_dir, train=False, download=True, transform=transform)
+    data_dir = './data/CIFAR10/'
+    train_data = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=True, transform=train_transform, target_transform=one_hot_encode)
+    val_data = torchvision.datasets.CIFAR10(root=data_dir, train=True, download=True, transform=test_transform, target_transform=one_hot_encode)
+    test_data = torchvision.datasets.CIFAR10(root=data_dir, train=False, download=True, transform=test_transform, target_transform=one_hot_encode)
 
     # split training and validation sets
     num_train = len(train_data)
     indices = list(range(num_train))
-    valid_size = 0.1
     num_val = int(np.floor(valid_size * num_train))
     if args.shuffle:
         np.random.shuffle(indices)
@@ -44,6 +124,8 @@ def load_cifar10(args, **kwargs):
     train_loader = data_utils.DataLoader(train_data, batch_size=args.batch_size, sampler=train_sampler, **kwargs)
     val_loader = data_utils.DataLoader(val_data, batch_size=args.batch_size, sampler=valid_sampler, **kwargs)
     test_loader = data_utils.DataLoader(test_data, batch_size=args.batch_size, **kwargs)
+
+    args.train_size = len(train_loader)
     return train_loader, val_loader, test_loader, args
 
 
@@ -239,6 +321,8 @@ def load_dataset(args, **kwargs):
         train_loader, val_loader, test_loader, args = load_omniglot(args, **kwargs)
     elif args.dataset == 'cifar10':
         train_loader, val_loader, test_loader, args = load_cifar10(args, **kwargs)
+    elif args.dataset == 'celeba':
+        train_loader, val_loader, test_loader, args = load_celeba(args, **kwargs)
     else:
         raise Exception('Wrong name of the dataset!')
 
