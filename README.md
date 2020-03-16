@@ -99,7 +99,7 @@ Caltech 101 Silhouettes dataset and a density estimation experiment.
 ./scripts/getting_started_density_estimation_gbf.sh &
 ```
 
-<img src="../master/docs/images/8gaussians_boosted_K1_bs64_C8_reg80_realnvp_tanh1_hsize256.gif" width="800" height="800" />
+<img src="../master/docs/images/8gaussians_boosted_K1_bs64_C8_reg80_realnvp_tanh1_hsize256.gif" width="400" height="400" />
 
 <br/>
 More information about additional argument options can be found by running ```python main_experiment.py -h```
