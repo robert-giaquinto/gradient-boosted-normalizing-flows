@@ -53,7 +53,8 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
 
     # format
     for ax in plt.gcf().axes: format_ax(ax, range_lim)
-    plt.tight_layout(rect=[0, 0, 1.0, 0.95])
+    #plt.tight_layout(rect=[0, 0, 1.0, 0.95])
+    plt.tight_layout()
 
     title = f'{args.dataset.title()}: {args.flow.title()} Flow, K={args.num_flows}'
     title += f', C={args.num_components}' if args.flow == "boosted" else ''
@@ -61,6 +62,7 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     annealing_type = f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
     title += annealing_type if args.density_matching else ''  # annealing isn't done for density sampling
     fig.suptitle(title, y=0.98, fontsize=20)
+    fig.subplots_adjust(top=0.85)
 
     # save
     fname = f'{args.dataset}_{args.flow}_K{args.num_flows}_bs{args.batch_size}'
@@ -98,11 +100,13 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
                 plot_fwd_flow_density(model, axs[1], test_grid, n_pts, args.batch_size, args)
                 
         for ax in plt.gcf().axes: format_ax(ax, range_lim)
-        plt.tight_layout(rect=[0, 0, 1.0, 0.95])
+        #plt.tight_layout(rect=[0, 0, 1.0, 0.95])
+        plt.tight_layout()
         title = f'{args.dataset.title()}: {args.flow.title()} Flow, K={args.num_flows}'
         title += f', Annealed' if args.min_beta < 1.0 else ', No Annealing'
         title += f', C={args.num_components}, Reg={args.regularization_rate:.2f}' if args.flow == "boosted" else ''
         fig.suptitle(title, y=0.98, fontsize=20)
+        fig.subplots_adjust(top=0.85)   # too much?
 
         plt.savefig(os.path.join(args.snap_dir, fname + '.png'))
         plt.close()

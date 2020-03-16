@@ -79,7 +79,10 @@ parser.add_argument('--iters_per_component', type=int, default=10000, help='how 
 parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
 parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
 parser.add_argument('--no_annealing', action='store_true', default=False, help='disables annealing while training')
+parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay parameter in Adamax')
+parser.add_argument("--warmup_epochs", type=int, default=5, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
+parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', None])
 parser.add_argument('--patience', type=int, default=5000, help='If using LR schedule, number of steps before reducing LR.')
 
 # flow parameters
@@ -119,6 +122,7 @@ def parse_args(main_args=None):
     args.input_size = [2]
     args.density_evaluation = True
     args.shuffle = True
+    args.train_size = args.iters_per_component
 
     # Set a random seed if not given one
     if args.manual_seed is None:
