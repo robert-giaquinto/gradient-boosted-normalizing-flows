@@ -233,7 +233,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
             model.update_rho(train_loader)
             logger.info('Rho Updated: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]))
 
-            train_components_once = args.epochs <= (args.epochs_per_component * args.num_components)
+            train_components_once = args.epochs <= (args.epochs_per_component * args.num_components) and not args.loaded_all_trained
             if model.component == (args.num_components - 1) and (model.all_trained or train_components_once):
                 # stop the full model after all components have been trained
                 logger.info(f"Model converged, stopping training and saving final model to: {args.snap_dir + 'model.pt'}")

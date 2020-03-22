@@ -189,7 +189,7 @@ def parse_args(main_args=None):
         lr_schedule = ''
     else:
         args.no_lr_schedule = False
-        lr_schedule = f'LR{args.lr_schedule}'
+        lr_schedule = f'_LR{args.lr_schedule}'
 
     args.snap_dir += lr_schedule + is_annealed + '_on_' + args.dataset + "_" + args.model_signature + '/'
     if not os.path.exists(args.snap_dir):
