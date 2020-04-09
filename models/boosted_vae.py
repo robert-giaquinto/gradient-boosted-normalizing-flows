@@ -156,6 +156,9 @@ class BoostedVAE(VAE):
         if self.component == 0 and self.all_trained == False:
             return
 
+        if self.args.rho_iters == 0:
+            return
+
         self.eval()
         with torch.no_grad():
 
@@ -164,10 +167,9 @@ class BoostedVAE(VAE):
             print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in self.rho.data]), file=rho_log)
 
             tolerance = 0.001
-            #init_step_size = 0.0001
-            init_step_size = 0.005
+            init_step_size = self.args.rho_lr
             min_iters = 10
-            max_iters = 100
+            max_iters = self.args.rho_iters
             num_repeats = 1 if self.density_evaluation else self.num_components * 3
             prev_rho = self.rho[self.component].item()
 

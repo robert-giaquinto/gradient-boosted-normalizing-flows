@@ -118,7 +118,9 @@ parser.set_defaults(batch_norm=True)
 parser.add_argument('--regularization_rate', type=float, default=1.0, help='Regularization penalty for boosting.')
 parser.add_argument('--epochs_per_component', type=int, default=100, help='Number of epochs to train each component of a boosted model. Defaults to max(annealing_schedule, epochs_per_component). Ignored for non-boosted models.')
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
-                    help='Initialization scheme for boosted parameter rho') 
+                    help='Initialization scheme for boosted parameter rho')
+parser.add_argument('--rho_iters', type=int, default=100, help='Maximum number of SGD iterations for training boosting weights')
+parser.add_argument('--rho_lr', type=float, default=0.005, help='Initial learning rate used for training boosting weights')
 parser.add_argument('--num_components', type=int, default=2, help='How many components are combined to form the flow')
 parser.add_argument('--component_type', type=str, default='affine',
                     choices=['realnvp', 'realnvp2', 'liniaf', 'affine', 'nlsq', 'random'],

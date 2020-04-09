@@ -221,7 +221,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
             epoch_msg += f' Improved'
             save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', scheduler)
 
-        #epoch_msg += ' | Flow LRs: ' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.5f}" for c in range(model.num_components)]) + f", VAE LRs: {optimizer.param_groups[args.num_components]['lr']:6.5f}"
+        epoch_msg += ' | Flow LRs: ' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.5f}" for c in range(model.num_components)]) + f", VAE LRs: {optimizer.param_groups[args.num_components]['lr']:6.5f}"
         if component_converged:
             logger.info(epoch_msg + f'{"| ": >4}')
             
@@ -234,7 +234,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
             logger.info('Rho Updated: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]))
 
             train_components_once = args.epochs <= (args.epochs_per_component * args.num_components) and not args.loaded_all_trained
-            if model.component == (args.num_components - 1) and (model.all_trained or train_components_once):
+            if model.component == (args.num_components - 1) and train_components_once:
                 # stop the full model after all components have been trained
                 logger.info(f"Model converged, stopping training and saving final model to: {args.snap_dir + 'model.pt'}")
                 model.all_trained = True
@@ -251,7 +251,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
             for c in range(args.num_components):
                 optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
             # reset VAE's learning rate too since it may have been reduced
-            optimizer.param_groups[args.num_components]['lr'] = max(optimizer.param_groups[args.num_components]['lr'], args.learning_rate / 2.0)
+            optimizer.param_groups[args.num_components]['lr'] = max(optimizer.param_groups[args.num_components]['lr'], args.learning_rate)
             for n, param in model.named_parameters():
                 param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
             logger.info('New Learning Rates. Flows: ' + ' '.join([f"{optimizer.param_groups[c]['lr']:8.6f}" for c in range(model.num_components)]) + f", VAE: {optimizer.param_groups[args.num_components]['lr']:8.6f}")
@@ -291,6 +291,7 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
     train_ratio = []
 
     for batch_id, (x, _) in enumerate(train_loader):
+
         x = x.to(args.device)
 
         if args.dynamic_binarization:
