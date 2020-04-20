@@ -33,13 +33,13 @@ def load(model, optimizer, path, args, init_with_args=False):
         model.all_trained = args.loaded_all_trained
         if args.loaded_num_components is not None:
             model.num_components = args.loaded_num_components
-        msg += f"  and initialized with passed argument component={model.component} (of {model.num_components}) and all_trained={str(model.all_trained)}"
+        msg += f"  and initialized with passed argument component={model.component} (of {range(model.num_components)}) and all_trained={str(model.all_trained)}"
 
     else:
         msg = f"Restoring {os.path.split(path)[-1]}"
         if 'component' in checkpoint:
             model.component = checkpoint['component']
-            msg += f", and initialized with pre-saved component={model.component}  (of {model.num_components})"
+            msg += f", and initialized with pre-saved component={model.component}  (of {range(model.num_components)})"
         if 'all_trained' in checkpoint:
             model.all_trained = checkpoint['all_trained']
             msg += f" and all_trained={str(model.all_trained)}"

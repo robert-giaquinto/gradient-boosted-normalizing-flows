@@ -17,9 +17,9 @@ class Glow(nn.Module):
         self.sample_size = args.sample_size
         
         self.flow = FlowNet(image_shape=args.input_size,
-                            hidden_dim=args.hidden_dim,
-                            K=args.K,
-                            L=args.L,
+                            hidden_dim=args.h_size,
+                            K=args.num_flows,
+                            L=args.num_blocks,
                             actnorm_scale=args.actnorm_scale,
                             flow_permutation=args.flow_permutation,
                             flow_coupling=args.flow_coupling,
@@ -239,6 +239,7 @@ class FlowStep(nn.Module):
         super().__init__()
         self.flow_coupling = flow_coupling
 
+        # 1. actnorm
         self.actnorm = ActNorm2d(in_dim, actnorm_scale)
 
         # 2. permute

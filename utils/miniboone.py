@@ -26,7 +26,7 @@ def load_data(root_path):
     # NOTE: To remember how the pre-processing was done.
     # data = pd.read_csv(root_path, names=[str(x) for x in range(50)], delim_whitespace=True)
     # print data.head()
-    # data = data.as_matrix()
+    # data = data.values
     # # Remove some random outliers
     # indices = (data[:, 0] < -100)
     # data = data[~indices]

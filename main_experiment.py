@@ -1,3 +1,4 @@
+
 import argparse
 import datetime
 import torch
@@ -9,20 +10,24 @@ import math
 import random
 import os
 import logging
+import torch.backends.cudnn as cudnn
+from tensorboardX import SummaryWriter
 
 from models.vae import VAE
-from models.sylvester_vae import OrthogonalSylvesterVAE, HouseholderSylvesterVAE, TriangularSylvesterVAE
-from models.iaf_vae import IAFVAE
-from models.realnvp_vae import RealNVPVAE
+from models.sylvester import OrthogonalSylvesterVAE, HouseholderSylvesterVAE, TriangularSylvesterVAE
+from models.iaf import IAFVAE
+from models.realnvp import RealNVPVAE
 from models.boosted_vae import BoostedVAE
-from models.planar_vae import PlanarVAE
-from models.radial_vae import RadialVAE
-from models.liniaf_vae import LinIAFVAE
-from models.affine_vae import AffineVAE
-from models.nlsq_vae import NLSqVAE
+from models.planar import PlanarVAE
+from models.radial import RadialVAE
+from models.liniaf import LinIAFVAE
+from models.affine import AffineVAE
+from models.nlsq import NLSqVAE
+
 from optimization.training import train
 from optimization.evaluation import evaluate, evaluate_likelihood
-from utils.load_data import load_dataset
+
+from utils.load_data import load_image_dataset
 from utils.utilities import load, save
 from utils.warmup_scheduler import GradualWarmupScheduler
 
@@ -43,8 +48,9 @@ parser.add_argument('--freyseed', type=int, default=123, help="Seed for shufflin
 parser.add_argument('--gpu_id', type=int, default=0, help='choose GPU to run on.')
 parser.add_argument('--num_workers', type=int, default=1,
                     help='How many CPU cores to run on. Setting to 0 uses os.cpu_count() - 1.')
-parser.add_argument('-nc', '--no_cuda', action='store_true', default=False,
-                    help='disables CUDA training')
+parser.add_argument('--no_cuda', action='store_true', default=False, help='disables CUDA training')
+parser.add_argument('--no_benchmark', dest='benchmark', action='store_false', help='Turn off CUDNN benchmarking')
+parser.set_defaults(benchmark=True)
 
 # Reporting
 parser.add_argument('--plot_interval', type=int, default=10, help='Number of epochs between reconstructions plots.')
@@ -52,7 +58,9 @@ parser.add_argument('--out_dir', type=str, default='./results/snapshots', help='
 parser.add_argument('--data_dir', type=str, default='./data/raw/', help="Where raw data is saved.")
 parser.add_argument('--exp_log', type=str, default='./results/experiment_log.txt', help='File to save high-level results from each run of an experiment.')
 parser.add_argument('--print_log', dest="save_log", action="store_false", help='Add this flag to have progress printed to log (rather than saved to a file).')
+parser.add_argument('--no_tensorboard', dest="tensorboard", action="store_false", help='Turns off saving results to tensorboard.')
 parser.set_defaults(save_log=True)
+parser.set_defaults(tensorboard=True)
 
 parser.add_argument('--load', type=str, default=None, help='Path to load the model from')
 at = parser.add_mutually_exclusive_group(required=False)
@@ -93,7 +101,8 @@ parser.add_argument("--warmup_epochs", type=int, default=5, help="Use this numbe
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
 parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', None])
 parser.add_argument('--patience', type=int, default=5000, help='If using LR schedule, number of steps before reducing LR.')
-
+parser.add_argument("--max_grad_clip", type=float, default=0, help="Max gradient value (clip above max_grad_clip, 0 for off)")
+parser.add_argument("--max_grad_norm", type=float, default=100.0, help="Max norm of gradient (clip above max_grad_norm, 0 for off)")
 
 # model parameters
 parser.add_argument('--vae_layers', type=str, default='linear', choices=['linear', 'convolutional', 'simple'],
@@ -111,7 +120,7 @@ parser.add_argument('--num_householder', type=int, default=8, help="For Househol
 parser.add_argument('--h_size', type=int, default=256, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--num_base_layers', type=int, default=1, help='Number of extra hidden layers in the base network of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--base_network', type=str, default='tanh', help='Base network for RealNVP coupling layers', choices=['relu', 'residual', 'tanh', 'random'])
-parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers')
+parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers, not recommended')
 parser.set_defaults(batch_norm=True)
 
 # Boosting parameters and optimization settings
@@ -134,6 +143,9 @@ def parse_args(main_args=None):
     args = parser.parse_args(main_args)
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     args.device = torch.device("cuda" if args.cuda else "cpu")
+    if args.device == "cuda":
+        cudnn.benchmark = args.benchmark    
+    
     args.density_evaluation = False
     args.shuffle = True
     args.annealing_schedule = max(args.annealing_schedule, 1)
@@ -146,6 +158,7 @@ def parse_args(main_args=None):
 
     random.seed(args.manual_seed)
     torch.manual_seed(args.manual_seed)
+    torch.cuda.manual_seed_all(args.manual_seed)
     np.random.seed(args.manual_seed)
 
     # intialize snapshots directory for saving models and results
@@ -162,6 +175,7 @@ def parse_args(main_args=None):
     
     args.snap_dir = os.path.join(args.out_dir, args.experiment_name + vae_type + args.flow + '_')
 
+    args.boosted = args.flow == "boosted"
     if args.flow != 'no_flow':
         args.snap_dir += 'K' + str(args.num_flows)
         
@@ -202,7 +216,6 @@ def parse_args(main_args=None):
 
     # Initalize computation settings
     # Set up multiple CPU/GPUs
-
     logger.info("COMPUTATION SETTINGS:")
     logger.info(f"Random Seed: {args.manual_seed}")
     if args.cuda:
@@ -310,8 +323,12 @@ def init_optimizer(model, args):
                                                                    verbose=True,
                                                                    threshold_mode='abs')
         elif args.lr_schedule == "cosine":
-            logger.info(f"Using CosineAnnealingLR as a learning-rate schedule, annealed over {args.epochs * args.train_size} training steps.")
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs * args.train_size)
+            if args.boosted:
+                logger.info(f"Using a Cyclic Cosine Annealing LR as a learning-rate schedule, annealed over {args.epochs_per_component * args.train_size} training steps, restarting with each new component.")
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=args.epochs_per_component * args.train_size)
+            else:
+                logger.info(f"Using CosineAnnealingLR as a learning-rate schedule, annealed over {args.epochs * args.train_size} training steps.")
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * args.train_size)
 
     if args.warmup_epochs > 0:
         logger.info(f"Gradually warming up learning rate from {base_lr} to {args.learning_rate} over the first {args.warmup_epochs * args.train_size} steps.\n")
@@ -345,7 +362,7 @@ def main(main_args=None):
     # LOAD DATA
     # =========================================================================
     logger.info('LOADING DATA:')
-    train_loader, val_loader, test_loader, args = load_dataset(args, **kwargs)
+    train_loader, val_loader, test_loader, args = load_image_dataset(args, **kwargs)
 
     # =========================================================================
     # SAVE EXPERIMENT SETTINGS

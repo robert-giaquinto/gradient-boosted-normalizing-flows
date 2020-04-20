@@ -2,9 +2,43 @@ import numpy as np
 import torch
 import torch.nn as nn
 import random
+import torch.distributions as D
 
 from models.vae import VAE
-import models.flows as flows
+from models.generative_flow import GenerativeFlow
+import models.transformations as flows
+
+
+class PlanarFlow(GenerativeFlow):
+    """
+    Generative flow using planar transformations
+    """
+
+    def __init__(self, args):
+        super(PlanarFlow, self).__init__()
+
+        self.u = nn.Parameter(torch.randn(self.num_flows, self.z_size, 1).normal_(0, 0.01))
+        self.w = nn.Parameter(torch.randn(self.num_flows, 1, self.z_size).normal_(0, 0.01))
+        self.b = nn.Parameter(torch.randn(self.num_flows, 1, 1).fill_(0))
+        self.flow_transformation = flows.Planar()
+
+    def flow(self, z_0):
+        return self.forward(z_0)
+
+    def forward(self, z_0):
+        log_det_jacobian = 0.0
+        z = [z_0]
+        for k in range(self.num_flows):
+            bs = z_0.size(0)
+            u, w, b = self.u[k,...].expand(bs, self.z_size, 1), self.w[k,...].expand(bs, 1, self.z_size), self.b[k,...].expand(bs, 1, 1)
+            z_k, ldj = self.flow_transformation(z[k], u, w, b)                
+            z.append(z_k)
+            log_det_jacobian += ldj
+        
+        return z[-1], log_det_jacobian
+
+    def reverse(self, x):
+        raise NotImplementedError("Planar flows cannot be inverted analytically")
 
 
 class PlanarVAE(VAE):

@@ -243,7 +243,6 @@ class TanhNet(nn.Module):
         return self.network(x)
 
 
-
 class ResidualBlock(nn.Module):
     """
     A general-purpose residual block. Works only with 1-dim inputs.
@@ -302,6 +301,22 @@ class ResidualNet(nn.Module):
         return outputs
 
 
+class ConvNet(nn.Module):
+    def __init__(self, in_dim, out_dim, hidden_dim, num_layers=1):
+        super().__init__()
+
+        layers = []
+        layers += [Conv2d(in_dim, hidden_dim)]
+        for i in range(num_layers):
+            layers += [nn.ReLU(), Conv2d(hidden_dim, hidden_dim, kernel_size=(1, 1))]
+
+        layers += [nn.ReLU(), Conv2dZeros(hidden_dim, out_dim)]
+        self.network = nn.Sequential(*layers)
+        
+    def forward(self, x):
+        return self.network(x)
+
+
 class BatchNorm(nn.Module):
     """
     RealNVP BatchNorm layer
@@ -355,6 +370,68 @@ class BatchNorm(nn.Module):
 
         log_abs_det_jacobian = 0.5 * torch.log(var + self.eps) - self.log_gamma
         return x, torch.sum(log_abs_det_jacobian.expand_as(x), dim=1)
+
+
+class CouplingLayer(nn.Module):
+    """
+    Modified RealNVP Coupling Layers per the MAF paper
+
+    Performs a single block (flow step) of RealNVP
+    """
+    def __init__(self, in_dim, out_dim, hidden_dim, mask, num_layers=1, network="tanh", use_batch_norm=True):
+        super().__init__()
+
+        if network == "relu":
+            base_network = ReLUNet
+        elif network == "residual":
+            base_network = ResidualNet
+        elif network == "random":
+            base_network = [TanhNet, ReLUNet][np.random.randint(2)]
+        elif network == "tanh":
+            base_network = TanhNet
+
+        self.register_buffer('mask', mask)
+        self.s_net = base_network(in_dim, out_dim, hidden_dim, num_layers)
+        self.t_net = base_network(in_dim, out_dim, hidden_dim, num_layers)
+
+        self.use_batch_norm = use_batch_norm
+        if use_batch_norm:
+            self.batch_norm = BatchNorm(in_dim)
+
+    def forward(self, x):
+        # apply mask
+        mx = x * self.mask
+
+        # run through model
+        s = self.s_net(mx)
+        t = self.t_net(mx)
+        y = mx + (1 - self.mask) * (x - t) * torch.exp(-s)  # cf RealNVP eq 8 where y corresponds to x (here we're modeling y)
+
+        log_abs_det_jacobian = torch.sum(-(1 - self.mask) * s, dim=1)  # log det du/dx; cf RealNVP 8 and 6
+
+        if self.use_batch_norm:
+            y, ldj = self.batch_norm(y)
+            log_abs_det_jacobian = log_abs_det_jacobian + ldj
+
+        return y, log_abs_det_jacobian
+
+    def inverse(self, z):
+        # apply mask
+        mz = z * self.mask
+
+        # run through model
+        s = self.s_net(mz)
+        t = self.t_net(mz)
+        x = mz + (1 - self.mask) * (z * s.exp() + t)  # cf RealNVP eq 7
+
+        log_abs_det_jacobian = torch.sum((1 - self.mask) * s, dim=1)  # log det dx/du
+
+        if self.use_batch_norm:
+            x, ldj = self.batch_norm.inverse(x)
+            log_abs_det_jacobian = log_abs_det_jacobian + ldj
+
+        return x, log_abs_det_jacobian
+
 
 
 #

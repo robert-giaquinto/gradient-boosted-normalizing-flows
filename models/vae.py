@@ -3,7 +3,6 @@ import torch
 import torch.nn as nn
 import torch.distributions as D
 
-import models.flows as flows
 from models.layers import GatedConv2d, GatedConvTranspose2d
 
 

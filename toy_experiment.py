@@ -6,21 +6,22 @@ import math
 import random
 import os
 import logging
+import torch.optim as optim
+from tensorboardX import SummaryWriter
 
-from models.vae import VAE
-from models.sylvester_vae import OrthogonalSylvesterVAE, HouseholderSylvesterVAE, TriangularSylvesterVAE
-from models.iaf_vae import IAFVAE
-from models.realnvp_vae import RealNVPVAE
 from models.boosted_vae import BoostedVAE
-from models.planar_vae import PlanarVAE
-from models.radial_vae import RadialVAE
-from models.liniaf_vae import LinIAFVAE
-from models.affine_vae import AffineVAE
-from models.nlsq_vae import NLSqVAE
-from utils.load_data import load_dataset
+from models.realnvp import RealNVPFlow
+from models.iaf import IAFFlow
+from models.planar import PlanarFlow
+from models.radial import RadialFlow
+from models.liniaf import LinIAFFlow
+from models.affine import AffineFlow
+from models.nlsq import NLSqFlow
+
 from utils.density_plotting import plot
-from utils.density_data import make_toy_density, make_toy_sampler
-from main_experiment import init_model, init_optimizer, init_log
+from utils.load_data import make_toy_density, make_toy_sampler
+from main_experiment import init_log
+from utils.warmup_scheduler import GradualWarmupScheduler
 
 
 logger = logging.getLogger(__name__)
@@ -31,7 +32,8 @@ ENERGY_FUNS = ['u0', 'u1', 'u2', 'u3', 'u4', 'u5', 'u6']
 G_MAX_LOSS = -10.0
 
 parser = argparse.ArgumentParser(description='PyTorch Ensemble Normalizing flows')
-
+parser.add_argument('--experiment_name', type=str, default="toy",
+                    help="A name to help identify the experiment being run when training this model.")
 parser.add_argument('--dataset', type=str, default='mnist', help='Dataset choice.', choices=TOY_DATASETS + ENERGY_FUNS)
 parser.add_argument('--mog_sigma', type=float, default=1.5, help='Variance in location of mixture of gaussian data.',
                     choices=[i / 100.0 for i in range(50, 250)])
@@ -53,9 +55,8 @@ parser.add_argument('--log_interval', type=int, default=1000,
                     help='how many batches to wait before logging training status. Set to <0 to turn off.')
 parser.add_argument('--plot_interval', type=int, default=1000,
                     help='how many batches to wait before creating reconstruction plots. Set to <0 to turn off.')
-
-parser.add_argument('--experiment_name', type=str, default="toy",
-                    help="A name to help identify the experiment being run when training this model.")
+parser.add_argument('--no_tensorboard', dest="tensorboard", action="store_false", help='Turns off saving results to tensorboard.')
+parser.set_defaults(tensorboard=True)
 
 parser.add_argument('--out_dir', type=str, default='./results/snapshots', help='Output directory for model snapshots etc.')
 parser.add_argument('--data_dir', type=str, default='./data/raw/', help="Where raw data is saved.")
@@ -73,17 +74,18 @@ parser.add_argument('--plot_resolution', type=int, default=250, help='how many p
 parser.add_argument('--num_steps', type=int, default=100000, help='number of training steps to take (default: 100000)')
 parser.add_argument('--batch_size', type=int, default=256, help='input batch size for training (default: 64)')
 parser.add_argument('--learning_rate', type=float, default=0.005, help='learning rate')
-parser.add_argument('--regularization_rate', type=float, default=0.5, help='Regularization penalty for boosting.')
-
+parser.add_argument('--regularization_rate', type=float, default=0.8, help='Regularization penalty for boosting.')
 parser.add_argument('--iters_per_component', type=int, default=10000, help='how often to train each boosted component before changing')
 parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
 parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
 parser.add_argument('--no_annealing', action='store_true', default=False, help='disables annealing while training')
 parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay parameter in Adamax')
-parser.add_argument("--warmup_epochs", type=int, default=5, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
 parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', None])
 parser.add_argument('--patience', type=int, default=5000, help='If using LR schedule, number of steps before reducing LR.')
+parser.add_argument("--max_grad_clip", type=float, default=0, help="Max gradient value (clip above max_grad_clip, 0 for off)")
+parser.add_argument("--max_grad_norm", type=float, default=100.0, help="Max norm of gradient (clip above max_grad_norm, 0 for off)")
+parser.add_argument("--warmup_iters", type=int, default=0, help="Use this number of iterations to warmup learning rate linearly from zero to learning rate")
 
 # flow parameters
 parser.add_argument('--flow', type=str, default='planar',
@@ -99,9 +101,10 @@ parser.set_defaults(batch_norm=True)
 parser.add_argument('--z_size', type=int, default=2, help='how many stochastic hidden units')
 
 # Boosting parameters
-parser.add_argument('--no_rho_update', action='store_true', default=False, help='Disable boosted rho update')
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
-                    help='Initialization scheme for boosted parameter rho') 
+                    help='Initialization scheme for boosted parameter rho')
+parser.add_argument('--rho_iters', type=int, default=100, help='Maximum number of SGD iterations for training boosting weights')
+parser.add_argument('--rho_lr', type=float, default=0.005, help='Initial learning rate used for training boosting weights')
 parser.add_argument('--num_components', type=int, default=4,
                     help='How many components are combined to form the flow')
 parser.add_argument('--component_type', type=str, default='affine', choices=['liniaf', 'affine', 'nlsq', 'realnvp', 'realnvp2'],
@@ -117,6 +120,7 @@ def parse_args(main_args=None):
     args.cuda = not args.no_cuda and torch.cuda.is_available()
     args.device = torch.device("cuda" if args.cuda else "cpu")
 
+    args.density_matching = args.dataset.startswith('u')
     args.dynamic_binarization = False
     args.input_type = 'binary'
     args.input_size = [2]
@@ -130,6 +134,7 @@ def parse_args(main_args=None):
 
     random.seed(args.manual_seed)
     torch.manual_seed(args.manual_seed)
+    torch.cuda.manual_seed_all(args.manual_seed)
     np.random.seed(args.manual_seed)
 
     # intialize snapshots directory for saving models and results
@@ -138,13 +143,15 @@ def parse_args(main_args=None):
     args.snap_dir = os.path.join(args.out_dir, args.experiment_name + args.flow + '_')
     args.snap_dir += f"bs{args.batch_size}_"
 
+    args.boosted = args.flow == "boosted"
     if args.flow != 'no_flow':
         args.snap_dir += 'K' + str(args.num_flows)
 
     if args.flow in ['boosted', 'bagged']:
         if args.regularization_rate < 0.0:
             raise ValueError("For boosting the regularization rate should be greater than or equal to zero.")
-        args.snap_dir += '_' + args.component_type + '_C' + str(args.num_components) + '_reg' + f'{int(100*args.regularization_rate):d}'
+        args.snap_dir += '_' + args.component_type + '_C' + str(args.num_components)
+        args.snap_dir += '_reg' + f'{int(100*args.regularization_rate):d}' if args.density_matching else ''
 
     if args.flow == 'iaf':
         args.snap_dir += '_hidden' + str(args.num_base_layers) + '_hsize' + str(args.h_size)
@@ -158,9 +165,14 @@ def parse_args(main_args=None):
     else:
         args.min_beta = 1.0
 
-    lr_schedule = ""
-    if not args.no_lr_schedule:
-        lr_schedule += "_lr_scheduling"
+    if args.lr_schedule is None or args.no_lr_schedule:
+        args.no_lr_schedule = True
+        args.lr_schedule = None
+        lr_schedule = ''
+    else:
+        args.no_lr_schedule = False
+        lr_schedule = f'_LR{args.lr_schedule}'
+
 
     if args.dataset in ['u5', 'mog']:
         dataset = f"{args.dataset}_s{int(100 * args.mog_sigma)}_c{args.mog_clusters}"
@@ -194,6 +206,99 @@ def parse_args(main_args=None):
     return args, kwargs
 
 
+def init_model(args):
+    if args.flow == 'boosted':
+        model = BoostedVAE(args).to(args.device)
+    elif args.flow == 'planar':
+        model = PlanarFlow(args).to(args.device)
+    elif args.flow == 'radial':
+        model = RadialFlow(args).to(args.device)
+    elif args.flow == 'liniaf':
+        model = LinIAFFlow(args).to(args.device)
+    elif args.flow == 'affine':
+        model = AffineFlow(args).to(args.device)
+    elif args.flow == 'nlsq':
+        model = NLSqFlow(args).to(args.device)
+    elif args.flow == 'iaf':
+        model = IAFFlow(args).to(args.device)
+    elif args.flow == "realnvp":
+        model = RealNVPFlow(args).to(args.device)
+    else:
+        raise ValueError('Invalid flow choice')
+
+    return model
+
+
+def init_optimizer(model, args):
+    """
+    group model parameters to more easily modify learning rates of components (flow parameters)
+    """
+    logger.info('OPTIMIZER:')
+    warmup_mult = 1000.0
+    base_lr = (args.learning_rate / warmup_mult) if args.warmup_iters > 0 else args.learning_rate
+    logger.info(f"Initializing Adamax optimizer with base learning rate={args.learning_rate}, weight decay={args.weight_decay}.")
+    
+    if args.flow == 'boosted':
+        logger.info("For boosted model, grouping parameters according to Component Id:")
+        flow_params = {f"{c}": torch.nn.ParameterList() for c in range(args.num_components)}
+        flow_labels = {f"{c}": [] for c in range(args.num_components)}
+        vae_params = torch.nn.ParameterList()
+        vae_labels = []
+        for name, param in model.named_parameters():
+            if name.startswith("flow"):
+                pos = name.find(".")
+                component_id = name[(pos + 1):(pos + 2)]
+                flow_params[component_id].append(param)
+                flow_labels[component_id].append(name)
+            else:
+                vae_labels.append(name)
+                vae_params.append(param)
+
+        # collect all parameters into a single list
+        # the first args.num_components elements in the parameters list correspond boosting parameters
+        all_params = []
+        for c in range(args.num_components):
+            all_params.append(flow_params[f"{c}"])
+            logger.info(f"Grouping [{', '.join(flow_labels[str(c)])}] as Component {c}'s parameters.")
+
+        # vae parameters are at the end of the list (may not exist if doing density estimation)
+        if len(vae_params) > 0:
+            all_params.append(vae_params)
+            logger.info(f"Grouping [{', '.join(vae_labels)}] as the VAE parameters.\n")
+            
+        optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=base_lr, weight_decay=args.weight_decay)
+    else:
+        logger.info(f"Initializing optimizer for standard models with learning rate={args.learning_rate}.\n")
+        optimizer = optim.Adamax(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
+
+    if args.no_lr_schedule:
+        scheduler = None
+    else:
+        if args.lr_schedule == "plateau":
+            logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience} steps until it reaches 1e-5.")
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                                   factor=0.5,
+                                                                   patience=args.patience,
+                                                                   min_lr=1e-5,
+                                                                   verbose=True,
+                                                                   threshold_mode='abs')
+        elif args.lr_schedule == "cosine":
+            if args.boosted:
+                logger.info(f"Using a Cyclic Cosine Annealing LR as a learning-rate schedule, annealed over {args.iters_per_component} training steps, restarting with each new component.")
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=args.iters_per_component)
+            else:
+                logger.info(f"Using CosineAnnealingLR as a learning-rate schedule, annealed over {args.num_steps} training steps.")
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.num_steps)
+
+    if args.warmup_iters > 0:
+        logger.info(f"Gradually warming up learning rate from {base_lr} to {args.learning_rate} over the first {args.warmup_iters} steps.\n")
+        warmup_scheduler = GradualWarmupScheduler(optimizer, multiplier=warmup_mult, total_epoch=args.warmup_iters, after_scheduler=scheduler)
+        return optimizer, warmup_scheduler
+    else:
+        return optimizer, scheduler
+
+
+
 def compute_kl_qp_loss(model, target_fn, beta, args):
     """
     Compute KL(q_inv || p) where q_inv is the inverse flow transform:
@@ -209,7 +314,7 @@ def compute_kl_qp_loss(model, target_fn, beta, args):
     z0 = model.base_dist.sample((args.batch_size,))
     q_log_prob = model.base_dist.log_prob(z0).sum(1)
     
-    if args.flow == "boosted":
+    if args.boosted:
         if model.component < model.num_components:
             density_from = '-c' if model.all_trained else '1:c-1'
             sample_from = 'c'
@@ -232,7 +337,7 @@ def compute_kl_qp_loss(model, target_fn, beta, args):
         return loss.mean(0), (g_lhood.mean().item(), G_lhood.mean().item(), p_log_prob.mean().item())
 
     else:
-        zk, logdet = model.flow(z0)
+        zk, logdet = model(z0)
         p_log_prob = -1.0 * target_fn(zk) * beta  # p = exp(-potential) => log_p = - potential
         loss = q_log_prob - logdet - p_log_prob
         return loss.mean(0), (q_log_prob.mean().item(), logdet.mean().item(), p_log_prob.mean().item())
@@ -253,7 +358,7 @@ def compute_kl_pq_loss(model, data_or_sampler, beta, args):
     else:
         sample = data_or_sampler
     
-    if args.flow == "boosted":
+    if args.boosted:
         Z_g, g_ldj = model.component_forward_flow(sample, component=model.component)
         g_lhood = model.base_dist.log_prob(Z_g[-1]).sum(1) + g_ldj
 
@@ -261,9 +366,8 @@ def compute_kl_pq_loss(model, data_or_sampler, beta, args):
             G_component = '-c' if model.all_trained else '1:c-1'
             component = model._sample_component(sampling_components=G_component)
             Z_G, G_ldj = model.component_forward_flow(sample, component=component)
-            G_lhood = torch.max(model.base_dist.log_prob(Z_G[-1]).sum(1) + G_ldj, torch.ones_like(G_ldj * G_MAX_LOSS))
-            #loss = -1.0 * torch.mul(g_lhood, torch.exp(G_lhood))
-            loss =  -1.0 * g_lhood + G_lhood #* args.regularization_rate
+            G_lhood = torch.max(model.base_dist.log_prob(Z_G[-1]).sum(1) + G_ldj, torch.ones_like(G_ldj) * G_MAX_LOSS)
+            loss =  beta * -1.0 * g_lhood + (1 - beta) * G_lhood
         else:
             G_lhood = torch.zeros_like(g_lhood)
             loss = -1.0 * g_lhood
@@ -271,7 +375,7 @@ def compute_kl_pq_loss(model, data_or_sampler, beta, args):
         return loss.mean(0), (g_lhood.mean().item(), G_lhood.mean().item())
         
     else:
-        z, logdet = model.flow(sample)
+        z, logdet = model(sample)
         q_log_prob = model.base_dist.log_prob(z).sum(1)
         loss = -1.0 * (q_log_prob + logdet)
         return loss.mean(0), (q_log_prob.mean().item(), logdet.mean().detach().item())
@@ -324,10 +428,13 @@ def rho_gradient(model, target_or_sample_fn, args):
     return loss_wrt_g.mean(0).detach().item(), loss_wrt_G.mean(0).detach().item()
 
 
-def update_rho(model, target_or_sample_fn, args):
+def update_rho(model, target_or_sample_fn, writer, args):
     if model.component == 0 and model.all_trained == False:
         return
-    
+
+    if args.rho_iters == 0:
+        return
+
     model.eval()
     with torch.no_grad():
 
@@ -335,31 +442,29 @@ def update_rho(model, target_or_sample_fn, args):
         print(f"\n\nUpdating weight for component {model.component} (all_trained={str(model.all_trained)})", file=rho_log)
         print('Initial Rho: ' + ' '.join([f'{val:1.2f}' for val in model.rho.data]), file=rho_log)
             
-        step_size = 0.005
-        tolerance = 0.00001
-        min_iters = 25
-        max_iters = 200 if model.all_trained else 100
+        tolerance = 0.001
+        init_step_size = args.rho_lr
+        min_iters = 10
+        max_iters = args.rho_iters
         prev_rho = model.rho.data[model.component].item()
+        
         for batch_id in range(max_iters):
 
-            loss_wrt_g, loss_wrt_G = rho_gradient(model, target_or_sample_fn, args)
-            if math.isnan(loss_wrt_g) or math.isnan(loss_wrt_G):
-                print("NaN encountered, breaking", file=rho_log)
-                model.rho[model.component] = 0.0
-                break
-            
-            gradient = loss_wrt_g - loss_wrt_G                
-            ss = step_size / (0.025 * batch_id + 1)
-            clipped_gradient = max(min(ss * gradient, 0.01), -0.01)
-            rho = min(max(prev_rho - clipped_gradient, 0.01), 1.0) # projected SGD with gradient clipping
+            loss_wrt_g, loss_wrt_G = rho_gradient(model, target_or_sample_fn, args)            
+            gradient = loss_wrt_g - loss_wrt_G
 
-            grad_msg = f'{batch_id: >3}. rho = {prev_rho:5.3f} -  {gradient:4.2f} * {ss:5.3f} = {rho:5.3f}'
+            step_size = init_step_size / (0.05 * batch_id + 1)
+            rho = min(max(prev_rho - step_size * gradient, 0.0005), 0.999)
+
+            grad_msg = f'{batch_id: >3}. rho = {prev_rho:5.3f} -  {gradient:4.2f} * {step_size:5.3f} = {rho:5.3f}'
             loss_msg = f"\tg vs G. Loss: ({loss_wrt_g:5.1f}, {loss_wrt_G:5.1f})."
             print(grad_msg + loss_msg, file=rho_log)
                     
             model.rho[model.component] = rho
             dif = abs(prev_rho - rho)
             prev_rho = rho
+
+            writer.add_scalar(f"rho/rho_{model.component}", rho, batch_id)
 
             if batch_id > min_iters and (batch_id > max_iters or dif < tolerance):
                 break
@@ -369,82 +474,105 @@ def update_rho(model, target_or_sample_fn, args):
 
 
 def annealing_schedule(i, args):
-    if args.min_beta == 1.0:
-        return 1.0
-    
-    if args.flow == "boosted":
-        if i >= args.iters_per_component * args.num_components or i == args.iters_per_component:
-            rval = 1.0
-        else:
-            rval = 0.01 + ((i % args.iters_per_component) / args.iters_per_component)
-    else:
-        rval = 0.01 + i/10000.0
+    if args.density_matching:
+        if args.min_beta == 1.0:
+            return 1.0
 
-    rval = max(args.min_beta, min(args.max_beta, rval))
+        if args.boosted:
+            if i >= args.iters_per_component * args.num_components or i == args.iters_per_component:
+                rval = 1.0
+            else:
+                rval = 0.01 + ((i % args.iters_per_component) / args.iters_per_component)
+        else:
+            rval = 0.01 + i/10000.0
+
+        rval = max(args.min_beta, min(args.max_beta, rval))
+    else:
+        # anneal the push away from G by slowing dropping the weight of g
+        # WHAT HAPPENS if we do the reverse of this schedule?
+        if args.boosted:
+            # starting with a high G weight initially
+            rval = 0.25 + 0.5 * ((i % args.iters_per_component) / args.iters_per_component)
+        else:
+            rval = 1.0
     return rval
 
 
 def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
+    if args.tensorboard:
+        writer = SummaryWriter(args.snap_dir)
+
     model.train()
 
-    if args.flow == "boosted":
+    if args.boosted:
         model.component = 0
         prev_lr = []
         for c in range(args.num_components):
-            optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
-            prev_lr.append(args.learning_rate)
-        for n, param in model.named_parameters():
-            param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
-
+            if c != model.component:
+                optimizer.param_groups[c]['lr'] = 0.0
+            
+            prev_lr.append(optimizer.param_groups[c]['lr'])
+    
     for batch_id in range(args.num_steps+1):
         model.train()
         optimizer.zero_grad()
         beta = annealing_schedule(batch_id, args)
 
-        # for "training-wheels" expriments: change the data distribution after a few iterations
-        if args.dataset == "1gaussian" and batch_id == args.iters_per_component + 1:
-            args.dataset = "2gaussians"
-            target_or_sample_fn = make_toy_sampler(args)
-        elif args.dataset == "u0" and batch_id == args.iters_per_component + 1:
-            args.dataset = "u1"
-            target_or_sample_fn = make_toy_density(args)
-
         loss, loss_terms = loss_fn(model, target_or_sample_fn, beta, args)
-        loss.backward(retain_graph=True)
-        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+        loss.backward()
+
+        if args.max_grad_clip > 0:
+            torch.nn.utils.clip_grad_value_(model.parameters(), args.max_grad_clip)
+        if args.max_grad_norm > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            if args.tensorboard:
+                writer.add_scalar("grad_norm/grad_norm", grad_norm, batch_id)
+
+        if args.boosted:  # freeze all but the new component being trained
+            if batch_id > 0:
+                for c in range(args.num_components):
+                    optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
+        if args.tensorboard:
+            for i in range(len(optimizer.param_groups)):
+                writer.add_scalar(f'lr/lr_{i}', optimizer.param_groups[i]['lr'], batch_id)
+
         optimizer.step()
         if not args.no_lr_schedule:
-            scheduler.step(loss)
-            if args.flow == "boosted":
+            if args.lr_schedule == "plateau":
+                scheduler.step(metrics=loss)
+            else:
+                scheduler.step(epoch=batch_id)
+
+            if args.boosted:
                 prev_lr[model.component] = optimizer.param_groups[model.component]['lr']
 
-        boosted_component_converged = args.flow == "boosted" and batch_id % args.iters_per_component == 0 and batch_id > 0
-        new_boosted_component = args.flow == "boosted" and batch_id % args.iters_per_component == 1
+        boosted_component_converged = args.boosted and batch_id % args.iters_per_component == 0 and batch_id > 0
+        new_boosted_component = args.boosted and batch_id % args.iters_per_component == 1
         if boosted_component_converged or new_boosted_component or batch_id % args.log_interval == 0:
             msg = f'{args.dataset}: step {batch_id:5d} / {args.num_steps}; loss {loss.item():8.3f} (beta={beta:5.4f})'
-            if args.flow == "boosted":
+            if args.boosted:
                 msg += f' | g vs G ({loss_terms[0]:8.3f}, {loss_terms[1]:8.3f})'
                 msg += f' | p_log_prob {loss_terms[2]:8.3f}' if args.density_matching else ''
                 msg += f' | c={model.component} (all={str(model.all_trained)[0]})'
                 msg += f' | Rho=[' + ', '.join([f"{val:4.2f}" for val in model.rho.data]) + "]"
-                msg += f' | ' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.4f}" for c in range(model.num_components)])
             else:
                 msg += f' | q_log_prob {loss_terms[0]:8.3f}'
                 msg += f' | ldj {loss_terms[1]:8.3f}'
                 msg += f' | p_log_prob {loss_terms[2]:7.3f}' if args.density_matching else ''
             logger.info(msg)
 
-        if boosted_component_converged:
-            if not args.no_rho_update:
-                update_rho(model, target_or_sample_fn, args)
-                
-            model.increment_component()
+        if args.tensorboard:
+            writer.add_scalar('batch/train_loss', loss.item(), batch_id)
+            if args.boosted:
+                writer.add_scalar('batch/train_g', loss_terms[0], batch_id)
+                writer.add_scalar('batch/train_G', loss_terms[1], batch_id)
+            else:
+                writer.add_scalar('batch/q_log_prob', loss_terms[0], batch_id)
+                writer.add_scalar('batch/log_det_jacobian', loss_terms[1], batch_id)
 
-            # update learning rates
-            for c in range(model.num_components):
-                optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
-            for n, param in model.named_parameters():
-                param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
+        if boosted_component_converged:
+            update_rho(model, target_or_sample_fn, writer, args)
+            model.increment_component()
 
         if (batch_id > 0 and batch_id % args.plot_interval == 0) or boosted_component_converged:
             with torch.no_grad():
@@ -481,7 +609,6 @@ def main(main_args=None):
     # TRAINING
     # =========================================================================
     logger.info('TRAINING:')
-    args.density_matching = args.dataset.startswith('u')
     if args.density_matching:
         # target is energy potential to match
         target_or_sample_fn = make_toy_density(args)

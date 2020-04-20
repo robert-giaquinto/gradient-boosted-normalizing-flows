@@ -3,8 +3,7 @@ import torch
 import torch.nn as nn
 
 from models.vae import VAE
-import models.flows as flows
-
+import models.transformations as flows
 
 
 class OrthogonalSylvesterVAE(VAE):

@@ -6,6 +6,7 @@ import datetime
 import time
 import logging
 from shutil import copyfile
+from tensorboardX import SummaryWriter
 
 from optimization.loss import calculate_loss, calculate_loss_array, calculate_boosted_loss
 from utils.plotting import plot_training_curve
@@ -16,6 +17,9 @@ logger = logging.getLogger(__name__)
 
 
 def train(train_loader, val_loader, model, optimizer, scheduler, args):
+    if args.tensorboard:
+        args.writer = SummaryWriter(args.snap_dir)
+
     header_msg = f'| Epoch |  TRAIN{"Loss": >12}{"Reconstruction": >18}'
     header_msg += f'{"Log G": >12}{"Prior": >12}{"Entropy": >12}{"Log Ratio": >12}{"| ": >4}' if args.flow == "boosted" else f'{"KL": >12}{"| ": >4}'
     header_msg += f'{"VALIDATION": >11}{"Loss": >12}{"Reconstruction": >18}{"KL": >12}{"| ": >4}{"Annealing": >12}'
@@ -95,6 +99,14 @@ def train_vae(train_loader, val_loader, model, optimizer, scheduler, args):
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_kl.mean():12.3f}'
         epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{"| ": >4}'
         logger.info(epoch_msg)
+        if args.tensorboard:
+            args.writer.add_scalar('epoch/train_loss', tr_loss.mean(), epoch)
+            args.writer.add_scalar('epoch/train_rec', tr_rec.mean(), epoch)
+            args.writer.add_scalar('epoch/train_kl', tr_kl.mean(), epoch)
+            args.writer.add_scalar('epoch/valid_loss', v_loss, epoch)
+            args.writer.add_scalar('epoch/valid_rec', v_rec, epoch)
+            args.writer.add_scalar('epoch/valid_kl', v_kl, epoch)
+            args.writer.add_scalar('epoch/beta', beta, epoch)
 
         # early-stopping: does adding a new component help?
         if v_loss < best_loss:
@@ -128,7 +140,7 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
 
     # set beta annealing coefficient
     beta = max(min([(epoch * 1.) / max([args.annealing_schedule, 1.]), args.max_beta]), args.min_beta) if args.load is not None else 1.0
-
+    step = (epoch - 1) * total_batches
     for batch_id, (x, _) in enumerate(train_loader):
         x = x.to(args.device)
 
@@ -144,22 +156,36 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
         x_mean, z_mu, z_var, ldj, z0, zk = model(x)
         loss, rec, kl = calculate_loss(x_mean, x, z_mu, z_var, z0, zk, ldj, args, beta=beta)
         loss.backward()
-        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+
+        if args.max_grad_clip > 0:
+            torch.nn.utils.clip_grad_value_(model.parameters(), args.max_grad_clip)
+        if args.max_grad_norm > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            args.writer.add_scalar("grad_norm/grad_norm", grad_norm, step)
+
+        if args.tensorboard:
+            for i in range(len(optimizer.param_groups)):
+                args.writer.add_scalar(f'lr/lr_{i}', optimizer.param_groups[i]['lr'], step)
         optimizer.step()
         if not args.no_lr_schedule:
             if args.lr_schedule == "plateau":
                 scheduler.step(metrics=loss)
             else:
-                scheduler.step()
+                scheduler.step(epoch=step)
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
         train_kl[batch_id] = kl.item()
+        step += 1
+        if args.tensorboard:
+            args.writer.add_scalar('step_loss/train_loss', loss.item(), step)
+            args.writer.add_scalar('step_loss/train_rec', rec.item(), step)
+            args.writer.add_scalar('step_loss/train_kl', kl.item(), step)
 
     return train_loss, train_rec, train_kl
 
 
-def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
+def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):    
     train_times = []
     train_loss = []
     train_rec = []
@@ -180,8 +206,9 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
     # initialize learning rates for boosted components
     prev_lr = []
     for c in range(args.num_components):
-        prev_lr.append(args.learning_rate)
-        optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
+        prev_lr.append(optimizer.param_groups[c]['lr'])
+        if c != model.component:
+            optimizer.param_groups[c]['lr'] = 0.0
     for n, param in model.named_parameters():
         param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
 
@@ -195,8 +222,8 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
 
         # Train model
         t_start = time.time()
-        tr_loss, tr_rec, tr_G, tr_p, tr_entropy, tr_ratio = train_epoch_boosted(
-            epoch, train_loader, model, optimizer, scheduler, beta, prob_all, args)
+        tr_loss, tr_rec, tr_G, tr_p, tr_entropy, tr_ratio, prev_lr = train_epoch_boosted(
+            epoch, train_loader, model, optimizer, scheduler, beta, prob_all, prev_lr, args)
         train_times.append(time.time() - t_start)
         train_loss.append(tr_loss)
         train_rec.append(tr_rec)
@@ -212,6 +239,19 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
 
         epoch_msg = f'| {epoch: <6}|{tr_loss.mean():19.3f}{tr_rec.mean():18.3f}{tr_G.mean():12.3f}{tr_p.mean():12.3f}{tr_entropy.mean():12.3f}{tr_ratio:12.3f}'
         epoch_msg += f'{"| ": >4}{v_loss:23.3f}{v_rec:18.3f}{v_kl:12.3f}{"| ": >4}{beta:12.3f}{prob_all:16.2f}  |  c={model.component} | AT={str(model.all_trained)}'
+        if args.tensorboard:
+            args.writer.add_scalar('epoch/train_loss', tr_loss.mean(), epoch)
+            args.writer.add_scalar('epoch/train_rec', tr_rec.mean(), epoch)
+            args.writer.add_scalar('epoch/train_G', tr_G.mean(), epoch)
+            args.writer.add_scalar('epoch/train_p', tr_p.mean(), epoch)
+            args.writer.add_scalar('epoch/train_entropy', tr_entropy.mean(), epoch)
+            args.writer.add_scalar('epoch/train_G_vs_g_ratio', tr_ratio, epoch)
+            args.writer.add_scalar('epoch/valid_loss', v_loss, epoch)
+            args.writer.add_scalar('epoch/valid_rec', v_rec, epoch)
+            args.writer.add_scalar('epoch/valid_kl', v_kl, epoch)
+            args.writer.add_scalar('epoch/beta', beta, epoch)
+            args.writer.add_scalar('epoch/prob_all', prob_all, epoch)
+            args.writer.add_scalar('epoch/train_times', train_times[-1], epoch)
 
         # Assess convergence
         component_converged, model_improved, early_stop_count, best_loss, best_tr_ratio = check_convergence(
@@ -221,20 +261,19 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
             epoch_msg += f' Improved'
             save(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', scheduler)
 
-        epoch_msg += ' | Flow LRs: ' + ' '.join([f"{optimizer.param_groups[c]['lr']:6.5f}" for c in range(model.num_components)]) + f", VAE LRs: {optimizer.param_groups[args.num_components]['lr']:6.5f}"
         if component_converged:
             logger.info(epoch_msg + f'{"| ": >4}')
-            
             converged_epoch = epoch
-            prev_lr[model.component] = optimizer.param_groups[model.component]['lr']  # save LR for LR scheduler in case we train this component again
 
             # revert back to the last best version of the model and update rho
             load(model, optimizer, args.snap_dir + f'model_c{model.component}.pt', args)
             model.update_rho(train_loader)
             logger.info('Rho Updated: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]))
 
-            train_components_once = args.epochs <= (args.epochs_per_component * args.num_components) and not args.loaded_all_trained
-            if model.component == (args.num_components - 1) and train_components_once:
+            last_component = model.component == (args.num_components - 1)
+            no_fine_tuning = args.epochs <= args.epochs_per_component * args.num_components
+            fine_tuning_done = model.all_trained and last_component
+            if (fine_tuning_done or no_fine_tuning) and last_component:
                 # stop the full model after all components have been trained
                 logger.info(f"Model converged, stopping training and saving final model to: {args.snap_dir + 'model.pt'}")
                 model.all_trained = True
@@ -247,14 +286,9 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
             # reset early_stop_count and train the next component
             model.increment_component()
             early_stop_count = 0
-            # freeze all but the new component being trained
-            for c in range(args.num_components):
-                optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
-            # reset VAE's learning rate too since it may have been reduced
-            optimizer.param_groups[args.num_components]['lr'] = max(optimizer.param_groups[args.num_components]['lr'], args.learning_rate)
             for n, param in model.named_parameters():
                 param.requires_grad = True if n.startswith(f"flow_param.{model.component}") or not n.startswith("flow_param") else False
-            logger.info('New Learning Rates. Flows: ' + ' '.join([f"{optimizer.param_groups[c]['lr']:8.6f}" for c in range(model.num_components)]) + f", VAE: {optimizer.param_groups[args.num_components]['lr']:8.6f}")
+
         else:
             logger.info(epoch_msg + f'{"| ": >4}')
             if epoch == args.epochs:
@@ -277,7 +311,7 @@ def train_boosted(train_loader, val_loader, model, optimizer, scheduler, args):
     return train_loss, train_rec, train_G, train_p, train_entropy, val_loss, val_rec, val_kl, train_times
 
 
-def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, prob_all, args):
+def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, prob_all, prev_lr, args):
     model.train()
     is_first_component = model.component == 0 and not model.all_trained
     
@@ -291,7 +325,7 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
     train_ratio = []
 
     for batch_id, (x, _) in enumerate(train_loader):
-
+        step = (epoch - 1) * total_batches + batch_id
         x = x.to(args.device)
 
         if args.dynamic_binarization:
@@ -308,18 +342,39 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
         loss, rec, log_G, log_p, entropy, log_ratio = calculate_boosted_loss(
             x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, args, is_first_component, beta)
         loss.backward()
-        #torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=0.1)
+
+        if args.max_grad_clip > 0:
+            torch.nn.utils.clip_grad_value_(model.parameters(), args.max_grad_clip)
+        if args.max_grad_norm > 0:
+            grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
+            args.writer.add_scalar("grad_norm/grad_norm", grad_norm, step)
+
+        # freeze all but the new component being trained
+        if step > 0:
+            for c in range(args.num_components):
+                optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
+        if args.tensorboard:
+            for i in range(len(optimizer.param_groups)):
+                args.writer.add_scalar(f'lr/lr_{i}', optimizer.param_groups[i]['lr'], step)
+
         optimizer.step()
         if not args.no_lr_schedule:
             if args.lr_schedule == "plateau":
                 scheduler.step(metrics=loss)
             else:
-                scheduler.step()
+                scheduler.step(epoch=step)
+
+            prev_lr[model.component] = optimizer.param_groups[model.component]['lr']
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
         train_p[batch_id] = log_p.item()
         train_entropy[batch_id] = entropy.item()
+        if args.tensorboard:
+            args.writer.add_scalar('step_loss/train_loss', loss.item(), step)
+            args.writer.add_scalar('step_loss/train_rec', rec.item(), step)
+            args.writer.add_scalar('step_loss/train_logp', log_p.item(), step)
+            args.writer.add_scalar('step_loss/train_entropy', entropy.item(), step)
 
         # ignore the boosting terms if we sampled from all (to alleviate decoder shock)
         if z_G is not None and G_ldj is not None:
@@ -328,7 +383,7 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
 
     train_G = np.array(train_G) if len(train_G) > 0 else np.zeros(1)
     train_ratio = np.array(train_ratio) if len(train_ratio) > 0 else np.zeros(1)
-    return train_loss, train_rec, train_G, train_p, train_entropy, (train_ratio.sum() / total_samples)
+    return train_loss, train_rec, train_G, train_p, train_entropy, (train_ratio.sum() / total_samples), prev_lr
 
 
 def kl_annealing_rate(epochs_since_prev_convergence, component, all_trained, args):
@@ -354,6 +409,7 @@ def sample_from_all_prob(epochs_since_prev_convergence, current_component, all_t
     Want to occasionally sample from all components so decoder doesn't solely focus on new component
     """
     max_prob_all = min(0.5, 1.0 - (1.0 / (args.num_components)))
+    min_prob_all = 0.1
     if all_trained:
         # all components trained and rho updated for all components, make sure annealing rate doesn't continue to cycle
         return max_prob_all
@@ -364,7 +420,7 @@ def sample_from_all_prob(epochs_since_prev_convergence, current_component, all_t
         else:
             pct_trained = ((epochs_since_prev_convergence - 1) % args.epochs_per_component) / args.epochs_per_component
             pct_trained += (1.0 / args.epochs_per_component)  # non-zero offset (don't start at zero)
-            prob_all = min(pct_trained, 1.0) * max_prob_all
+            prob_all = max(min_prob_all, min(pct_trained, 1.0) * max_prob_all)
             
         return prob_all
 

@@ -4,7 +4,42 @@ import torch.nn as nn
 import random
 
 from models.vae import VAE
-import models.flows as flows
+from models.generative_flow import GenerativeFlow
+import models.transformations as flows
+
+
+class LinIAFFlow(GenerativeFlow):
+    """
+    Variational auto-encoder with linear inverse autoregressive flows in the encoder.
+    """
+
+    def __init__(self, args):
+        super(LinIAFFlow, self).__init__(args)
+
+        L = np.repeat(np.eye(self.z_size)[None], self.num_flows, axis=0).astype("float32")
+        L[:, 1, 0] = np.random.uniform(low=0.25, high=0.25, size=[self.num_flows]).astype("float32") *\
+            np.random.choice([1, -1], size=[self.num_flows])
+        self.L = nn.Parameter(torch.from_numpy(L))
+
+        # Normalizing flow layers
+        self.flow_transformation = flows.LinIAF(self.z_size)
+
+    def flow(self, z_0):
+        return self.forward(z_0)
+
+    def reverse(self, z_0):
+        raise NotImplementedError("Inverse flow not available analytically")        
+
+    def forward(self, z_0):
+        z = [z_0]
+        log_det_jacobian = torch.zeros(z_0.size(0))
+        for k in range(self.num_flows):
+            bs = z_0.size(0)
+            L = self.L[k,...].expand(bs, self.z_size, self.z_size)
+            z_k = self.flow_transformation(z[k], L)
+            z.append(z_k)
+        
+        return z[-1], log_det_jacobian
 
 
 class LinIAFVAE(VAE):

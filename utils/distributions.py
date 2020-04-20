@@ -42,7 +42,14 @@ def log_normal_normalized(x, mean, log_var, average=False, reduce=True, dim=None
 
 
 def log_normal_standard(x, average=False, reduce=True, dim=None):
-    log_norm = -0.5 * x * x
+    #log_norm = -0.5 * x * x
+
+    PI = torch.FloatTensor([math.pi])
+    PI.requires_grad = False
+    if torch.cuda.is_available():
+        PI = PI.cuda()
+
+    log_norm = (-0.5 * torch.log(2 * PI)) - (0.5 * x.pow(2))
 
     if reduce:
         if average:

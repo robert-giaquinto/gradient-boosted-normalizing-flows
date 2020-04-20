@@ -4,7 +4,39 @@ import torch.nn as nn
 import random
 
 from models.vae import VAE
-import models.flows as flows
+from models.generative_flow import GenerativeFlow
+import models.transformations as flows
+
+
+class IAFFlow(GenerativeFlow):
+    """
+    Variational auto-encoder with inverse autoregressive flows in the encoder.
+    """
+
+    def __init__(self, args):
+        super(IAFFlow, self).__init__(args)
+        
+        self.h_size = args.h_size
+        self.num_hidden = args.num_base_layers
+        
+        self.h_context = nn.Parameter(torch.randn(self.h_size).normal_(0, 0.01))
+        self.num_flows = args.num_flows
+        self.flow_transformation = flows.IAF(z_size=self.z_size, num_flows=self.num_flows,
+                              num_hidden=self.num_hidden, h_size=self.h_size, conv2d=False)
+
+    def flow(self, z_0):
+        return self.forward(z_0)
+
+    def reverse(self, z_0):
+        raise NotImplementedError("Inverse flow not available yet")        
+
+    def forward(self, z_0):
+        batch_size = z_0.size(0)
+        h_context = self.h_context.expand(batch_size, self.h_size)
+            
+        z_k, log_det_j = self.flow_transformation(z_0, h_context)
+
+        return z_k, log_det_j
 
 
 class IAFVAE(VAE):
