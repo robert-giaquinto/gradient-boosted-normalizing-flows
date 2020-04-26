@@ -13,18 +13,18 @@ def safe_log(z):
 	return torch.log(z + 1e-7)
 
 
-def load(model, optimizer, path, args, init_with_args=False):
+def load(model, optimizer, path, args, init_with_args=False, scheduler=None):
     checkpoint = torch.load(path, map_location=args.device)
     model.load_state_dict(checkpoint['model'])
     optimizer.load_state_dict(checkpoint['optimizer'])
 
-    # if scheduler is not None:
-    #     if 'scheduler' in checkpoint and checkpoint['scheduler'] is not None:
-    #         scheduler.load_state_dict(checkpoint['scheduler'])
+    if scheduler is not None:
+        if 'scheduler' in checkpoint and checkpoint['scheduler'] is not None:
+            scheduler.load_state_dict(checkpoint['scheduler'])
         
     msg = f"Loaded pre-trained {os.path.split(path)[-1]}"
 
-    if init_with_args and args.flow == "boosted":
+    if init_with_args and args.boosted:
 
         if args.loaded_init_component is None or args.loaded_all_trained is None:
             raise ValueError("Cannot initialize a boosted model loaded from file, intialization parameters needed.")
@@ -33,13 +33,13 @@ def load(model, optimizer, path, args, init_with_args=False):
         model.all_trained = args.loaded_all_trained
         if args.loaded_num_components is not None:
             model.num_components = args.loaded_num_components
-        msg += f"  and initialized with passed argument component={model.component} (of {range(model.num_components)}) and all_trained={str(model.all_trained)}"
+        msg += f"  and initialized with passed argument component={model.component} (of {list(range(model.num_components))}) and all_trained={str(model.all_trained)}"
 
     else:
         msg = f"Restoring {os.path.split(path)[-1]}"
         if 'component' in checkpoint:
             model.component = checkpoint['component']
-            msg += f", and initialized with pre-saved component={model.component}  (of {range(model.num_components)})"
+            msg += f", and initialized with pre-saved component={model.component}  (of {list(range(model.num_components))})"
         if 'all_trained' in checkpoint:
             model.all_trained = checkpoint['all_trained']
             msg += f" and all_trained={str(model.all_trained)}"
@@ -112,11 +112,21 @@ def split_feature(tensor, type="split"):
     """
     type = ["split", "cross"]
     """
+    image_input = len(tensor.size()) > 2
+
     C = tensor.size(1)
-    if type == "split":
-        return tensor[:, :C // 2, ...], tensor[:, C // 2:, ...]
-    elif type == "cross":
-        return tensor[:, 0::2, ...], tensor[:, 1::2, ...]
+    if image_input:
+        if type == "split":
+            return tensor[:, :C // 2, ...], tensor[:, C // 2:, ...]
+        elif type == "cross":
+            return tensor[:, 0::2, ...], tensor[:, 1::2, ...]
+
+    else:
+        if type == "split":
+            return tensor[:, :C // 2], tensor[:, C // 2:]
+        elif type == "cross":
+            return tensor[:, 0::2], tensor[:, 1::2]
+
 
 def compute_same_pad(kernel_size, stride):
     if isinstance(kernel_size, int):

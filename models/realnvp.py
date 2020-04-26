@@ -16,26 +16,24 @@ class RealNVPFlow(GenerativeFlow):
     RealNVP generative flow model for density estimation
     """
     def __init__(self, args, flip_init=0):
+        """
+        flip_init: offsets the mask (useful if there are multiple blocks or boosted realnvp components)
+                   Can be any positive integer
+        """
         super(RealNVPFlow, self).__init__(args)
 
         self.learn_top = args.learn_top
         self.y_classes = args.y_classes
         self.y_condition = args.y_condition
         self.sample_size = args.sample_size
+        self.flip_init = flip_init
         
         self.flow_step = flows.RealNVP(dim=self.z_size, use_batch_norm=args.batch_norm)
         
         self.flow_param = nn.ModuleList()
         for k in range(self.num_flows):
-            if args.base_network == "relu":
-                base_network = ReLUNet
-            elif args.base_network == "residual":
-                base_network = ResidualNet
-            elif args.base_network == "random":
-                base_network = [TanhNet, ReLUNet][np.random.randint(2)]
-            else:
-                base_network = TanhNet
-
+            flow_k = []
+            
             flipped = ((k + flip_init) % 2) > 0
             if flipped:
                 out_dim = self.z_size // 2
@@ -43,9 +41,31 @@ class RealNVPFlow(GenerativeFlow):
             else:
                 in_dim = self.z_size // 2
                 out_dim = self.z_size - (self.z_size // 2)
-            
-            flow_k = [base_network(in_dim, out_dim, args.h_size, args.num_base_layers) for _ in range(2)] + \
-                [base_network(out_dim, in_dim, args.h_size, args.num_base_layers) for _ in range(2)]
+
+            # each realnvp flow step must initialize the 4 coupling networks
+            if args.coupling_network == "mixed":
+                # scale network s uses TanH, shift network t uses relu
+                # this setup is mention in original paper and MAF or MADE paper
+                flow_k += [ReLUNet(in_dim, out_dim, args.h_size, args.coupling_network_depth),
+                           TanhNet(in_dim, out_dim, args.h_size, args.coupling_network_depth),
+                           ReLUNet(out_dim, in_dim, args.h_size, args.coupling_network_depth),
+                           TanhNet(out_dim, in_dim, args.h_size, args.coupling_network_depth)]
+            else:
+                for n in range(4): 
+                    if args.coupling_network == "tanh":
+                        coupling_network = TanhNet
+                    elif args.coupling_network == "residual":
+                        coupling_network = ResidualNet
+                    elif args.coupling_network == "random":
+                        coupling_network = [TanhNet, ReLUNet][np.random.randint(2)]
+                    else:
+                        coupling_network = ReLUNet
+
+                    if n < 2:
+                        flow_k += [coupling_network(in_dim, out_dim, args.h_size, args.coupling_network_depth)]
+                    else:
+                        flow_k += [coupling_network(out_dim, in_dim, args.h_size, args.coupling_network_depth)]
+
             if args.batch_norm:
                 flow_k += [BatchNorm(self.z_size)]
 
@@ -84,7 +104,7 @@ class RealNVPFlow(GenerativeFlow):
             Z[-1] = z
 
             for k in range(self.num_flows, 0, -1):
-                flow_k_networks = [self.flow_param[k-1], k % 2]
+                flow_k_networks = [self.flow_param[k-1], (k + self.flip_init) % 2]
                 z_k, ldj = self.flow_step.inverse(Z[k], flow_k_networks)                
                 Z[k-1] = z_k
                 log_det_j = log_det_j + ldj
@@ -97,7 +117,7 @@ class RealNVPFlow(GenerativeFlow):
         log_det_j = 0.0
         Z = [x]
         for k in range(self.num_flows):
-            flow_k_networks = [self.flow_param[k], k % 2]
+            flow_k_networks = [self.flow_param[k], (k + self.flip_init) % 2]
             z_k, ldj = self.flow_step(Z[k], flow_k_networks)
             Z.append(z_k)
             log_det_j += ldj
@@ -125,19 +145,19 @@ class RealNVPVAE(VAE):
         self.flow_step = flows.RealNVP(dim=self.z_size, use_batch_norm=args.batch_norm)
         
         # Normalizing flow layers
-        if args.base_network == "relu":
-            base_network = ReLUNet
-        elif args.base_network == "residual":
-            base_network = ResidualNet
+        if args.coupling_network == "relu":
+            coupling_network = ReLUNet
+        elif args.coupling_network == "residual":
+            coupling_network = ResidualNet
         else:
-            base_network = TanhNet
+            coupling_network = TanhNet
 
         in_dim = self.z_size // 2
         #out_dim = self.z_size // 2
         out_dim = self.z_size - (self.z_size // 2)
         self.flow_param = nn.ModuleList()
         for k in range(self.num_flows):
-            flow_k = [base_network(in_dim, out_dim, args.h_size, args.num_base_layers) for _ in range(4)]
+            flow_k = [coupling_network(in_dim, out_dim, args.h_size, args.coupling_network_depth) for _ in range(4)]
             if args.batch_norm:
                 flow_k += [BatchNorm(self.z_size)]
 

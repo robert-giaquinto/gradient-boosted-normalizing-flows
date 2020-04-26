@@ -94,8 +94,9 @@ parser.add_argument('--flow', type=str, default='planar',
 parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
 
 parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
-parser.add_argument('--num_base_layers', type=int, default=1, help='Number of layers in the base network of iaf and realnvp. Ignored for all other flows.')
-parser.add_argument('--base_network', type=str, default='relu', help='Base network for RealNVP coupling layers', choices=['relu', 'residual', 'tanh', 'random'])
+parser.add_argument('--coupling_network_depth', type=int, default=1, help='Number of extra hidden layers in the base network of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--coupling_network', type=str, default='tanh', choices=['relu', 'residual', 'tanh', 'random', 'mixed'],
+                    help='Base network for RealNVP coupling layers. Random chooses between either Tanh or ReLU for every network, whereas mixed uses ReLU for the T network and TanH for the S network.')
 parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers')
 parser.set_defaults(batch_norm=True)
 parser.add_argument('--z_size', type=int, default=2, help='how many stochastic hidden units')
@@ -107,7 +108,7 @@ parser.add_argument('--rho_iters', type=int, default=100, help='Maximum number o
 parser.add_argument('--rho_lr', type=float, default=0.005, help='Initial learning rate used for training boosting weights')
 parser.add_argument('--num_components', type=int, default=4,
                     help='How many components are combined to form the flow')
-parser.add_argument('--component_type', type=str, default='affine', choices=['liniaf', 'affine', 'nlsq', 'realnvp', 'realnvp2'],
+parser.add_argument('--component_type', type=str, default='affine', choices=['liniaf', 'affine', 'nlsq', 'realnvp'],
                     help='When flow is boosted -- what type of flow should each component implement.')
 
 
@@ -140,8 +141,22 @@ def parse_args(main_args=None):
     # intialize snapshots directory for saving models and results
     args.model_signature = str(datetime.datetime.now())[0:19].replace(' ', '_').replace(':', '_').replace('-', '_')
     args.experiment_name = args.experiment_name + "_" if args.experiment_name is not None else ""
-    args.snap_dir = os.path.join(args.out_dir, args.experiment_name + args.flow + '_')
-    args.snap_dir += f"bs{args.batch_size}_"
+    args.snap_dir = os.path.join(args.out_dir, args.experiment_name + args.flow)
+
+    lr_schedule = f'_lr{str(args.learning_rate)[2:]}'
+    if args.lr_schedule is None or args.no_lr_schedule:
+        args.no_lr_schedule = True
+        args.lr_schedule = None
+    else:
+        args.no_lr_schedule = False
+        lr_schedule += f'{args.lr_schedule}'
+
+    if args.dataset in ['u5', 'mog']:
+        dataset = f"{args.dataset}_s{int(100 * args.mog_sigma)}_c{args.mog_clusters}"
+    else:
+        dataset = args.dataset
+
+    args.snap_dir += f'_seed{args.manual_seed}' + lr_schedule + '_' + dataset + f"_bs{args.batch_size}"
 
     args.boosted = args.flow == "boosted"
     if args.flow != 'no_flow':
@@ -154,32 +169,18 @@ def parse_args(main_args=None):
         args.snap_dir += '_reg' + f'{int(100*args.regularization_rate):d}' if args.density_matching else ''
 
     if args.flow == 'iaf':
-        args.snap_dir += '_hidden' + str(args.num_base_layers) + '_hsize' + str(args.h_size)
+        args.snap_dir += '_hidden' + str(args.coupling_network_depth) + '_hsize' + str(args.h_size)
 
     if args.flow == "realnvp" or args.component_type == "realnvp":
-        args.snap_dir += '_' + args.base_network + str(args.num_base_layers) + '_hsize' + str(args.h_size)
+        args.snap_dir += '_' + args.coupling_network + str(args.coupling_network_depth) + '_hsize' + str(args.h_size)
         
     is_annealed = ""
     if not args.no_annealing and args.min_beta < 1.0:
         is_annealed += "_annealed"
     else:
         args.min_beta = 1.0
-
-    if args.lr_schedule is None or args.no_lr_schedule:
-        args.no_lr_schedule = True
-        args.lr_schedule = None
-        lr_schedule = ''
-    else:
-        args.no_lr_schedule = False
-        lr_schedule = f'_LR{args.lr_schedule}'
-
-
-    if args.dataset in ['u5', 'mog']:
-        dataset = f"{args.dataset}_s{int(100 * args.mog_sigma)}_c{args.mog_clusters}"
-    else:
-        dataset = args.dataset
         
-    args.snap_dir += lr_schedule + is_annealed + '_on_' + dataset + "_" + args.model_signature + '/'
+    args.snap_dir += is_annealed + f'_{args.model_signature}/'
     if not os.path.exists(args.snap_dir):
         os.makedirs(args.snap_dir)
 
@@ -492,7 +493,7 @@ def annealing_schedule(i, args):
         # WHAT HAPPENS if we do the reverse of this schedule?
         if args.boosted:
             # starting with a high G weight initially
-            rval = 0.25 + 0.5 * ((i % args.iters_per_component) / args.iters_per_component)
+            rval = 0.01 + 0.98 * (( max(i-1,0) % args.iters_per_component) / args.iters_per_component)
         else:
             rval = 1.0
     return rval

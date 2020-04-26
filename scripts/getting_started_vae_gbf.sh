@@ -14,8 +14,8 @@ vae_layers=linear
 # define boosting components:
 component_type=realnvp
 h_size=64
-base_network=tanh  # use a TanH network for REALNVP
-layers=1  # number of layers in the TanH networks used by REALNVP
+coupling_network=tanh  # use a TanH network for REALNVP
+coupling_layers=1  # number of layers in the TanH networks used by REALNVP
 
 regularization_rate=1.0
 annealing_schedule=50     # override default for this small example
@@ -39,8 +39,8 @@ python main_experiment.py --dataset ${dataset} \
        --vae_layers ${vae_layers} \
        --flow boosted \
        --component_type ${component_type} \
-       --num_base_layers ${layers} \
-       --base_network ${base_network} \
+       --coupling_network_depth ${coupling_layers} \
+       --coupling_network ${coupling_network} \
        --h_size ${h_size} \
        --num_components ${num_components} \
        --regularization_rate ${regularization_rate} \

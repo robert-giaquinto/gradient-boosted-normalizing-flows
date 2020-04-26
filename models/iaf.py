@@ -17,7 +17,7 @@ class IAFFlow(GenerativeFlow):
         super(IAFFlow, self).__init__(args)
         
         self.h_size = args.h_size
-        self.num_hidden = args.num_base_layers
+        self.num_hidden = args.coupling_network_depth
         
         self.h_context = nn.Parameter(torch.randn(self.h_size).normal_(0, 0.01))
         self.num_flows = args.num_flows
@@ -48,7 +48,7 @@ class IAFVAE(VAE):
         super(IAFVAE, self).__init__(args)
         
         self.h_size = args.h_size
-        self.num_hidden = args.num_base_layers
+        self.num_hidden = args.coupling_network_depth
         self.density_evaluation = args.density_evaluation
         
         # flow parameters

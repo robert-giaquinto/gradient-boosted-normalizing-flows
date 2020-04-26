@@ -382,17 +382,17 @@ class CouplingLayer(nn.Module):
         super().__init__()
 
         if network == "relu":
-            base_network = ReLUNet
+            coupling_network = ReLUNet
         elif network == "residual":
-            base_network = ResidualNet
+            coupling_network = ResidualNet
         elif network == "random":
-            base_network = [TanhNet, ReLUNet][np.random.randint(2)]
+            coupling_network = [TanhNet, ReLUNet][np.random.randint(2)]
         elif network == "tanh":
-            base_network = TanhNet
+            coupling_network = TanhNet
 
         self.register_buffer('mask', mask)
-        self.s_net = base_network(in_dim, out_dim, hidden_dim, num_layers)
-        self.t_net = base_network(in_dim, out_dim, hidden_dim, num_layers)
+        self.s_net = coupling_network(in_dim, out_dim, hidden_dim, num_layers)
+        self.t_net = coupling_network(in_dim, out_dim, hidden_dim, num_layers)
 
         self.use_batch_norm = use_batch_norm
         if use_batch_norm:
@@ -446,86 +446,103 @@ class _ActNorm(nn.Module):
     After initialization, `bias` and `logs` will be trained as parameters.
     """
 
-    def __init__(self, num_features, scale=1.):
+    def __init__(self, num_features, image_input, scale=1.0):
         super().__init__()
+        
         # register mean and scale
-        size = [1, num_features, 1, 1]
-        self.bias = nn.Parameter(torch.zeros(*size))
-        self.logs = nn.Parameter(torch.zeros(*size))
+        param_size = [1, num_features, 1, 1] if image_input else [1, num_features]
+        self.bias = nn.Parameter(torch.zeros(*param_size))
+        self.logs = nn.Parameter(torch.zeros(*param_size))
         self.num_features = num_features
         self.scale = scale
         self.inited = False
+        self.image_input = image_input
 
-    def initialize_parameters(self, input):
+    def initialize_parameters(self, sample):
         if not self.training:
-            raise ValueError("In Eval mode, but ActNorm not inited")
+            raise ValueError("In Eval mode, but ActNorm not initiated")
 
         with torch.no_grad():
-            bias = - torch.mean(input.clone(), dim=[0, 2, 3], keepdim=True)
-            vars = torch.mean((input.clone() + bias) ** 2, dim=[0, 2, 3],
-                              keepdim=True)
-            logs = torch.log(self.scale / (torch.sqrt(vars) + 1e-6))
+            reduce_dim = [0, 2, 3] if self.image_input else 0
+            bias = - torch.mean(sample.clone(), dim=reduce_dim, keepdim=True)
+            var = torch.mean((sample.clone() + bias) ** 2, dim=reduce_dim, keepdim=True)
+            logs = torch.log(self.scale / (torch.sqrt(var) + 1e-6))
 
             self.bias.data.copy_(bias.data)
             self.logs.data.copy_(logs.data)
 
             self.inited = True
 
-    def _center(self, input, reverse=False):
+    def _center(self, sample, reverse=False):
         if reverse:
-            return input - self.bias
+            return sample - self.bias
         else:
-            return input + self.bias
+            return sample + self.bias
 
-    def _scale(self, input, logdet=None, reverse=False):
+    def _scale(self, sample, logdet=None, reverse=False):
 
         if reverse:
-            input = input * torch.exp(-self.logs)
+            sample = sample * torch.exp(-self.logs)
         else:
-            input = input * torch.exp(self.logs)
+            sample = sample * torch.exp(self.logs)
 
         if logdet is not None:
             """
             logs is log_std of `mean of channels`
             so we need to multiply by number of pixels
             """
-            b, c, h, w = input.shape
-
-            dlogdet = torch.sum(self.logs) * h * w
+            if self.image_input:
+                b, c, h, w = sample.shape
+                dlogdet = torch.sum(self.logs) * h * w
+            else:
+                b, c = sample.shape
+                dlogdet = torch.sum(self.logs)
 
             if reverse:
                 dlogdet *= -1
 
             logdet = logdet + dlogdet
 
-        return input, logdet
+        return sample, logdet
 
-    def forward(self, input, logdet=None, reverse=False):
-        self._check_input_dim(input)
+    def forward(self, sample, logdet=None, reverse=False):
+        self._check_input_dim(sample)
 
         if not self.inited:
-            self.initialize_parameters(input)
+            self.initialize_parameters(sample)
 
         if reverse:
-            input, logdet = self._scale(input, logdet, reverse)
-            input = self._center(input, reverse)
+            sample, logdet = self._scale(sample, logdet, reverse)
+            sample = self._center(sample, reverse)
         else:
-            input = self._center(input, reverse)
-            input, logdet = self._scale(input, logdet, reverse)
+            sample = self._center(sample, reverse)
+            sample, logdet = self._scale(sample, logdet, reverse)
 
-        return input, logdet
+        return sample, logdet
 
 
+class ActNorm1d(_ActNorm):
+    def __init__(self, num_features, scale=1.0):
+        super().__init__(num_features, False, scale)
+
+    def _check_input_dim(self, sample):
+        assert len(sample.size()) == 2
+        assert sample.size(1) == self.num_features, (
+            "[ActNorm]: input should be in shape as `BF`,"
+            " feature size should be {} rather than {}".format(
+                self.num_features, sample.size()))
+
+    
 class ActNorm2d(_ActNorm):
-    def __init__(self, num_features, scale=1.):
-        super().__init__(num_features, scale)
+    def __init__(self, num_features, scale=1.0):
+        super().__init__(num_features, True, scale)
 
-    def _check_input_dim(self, input):
-        assert len(input.size()) == 4
-        assert input.size(1) == self.num_features, (
+    def _check_input_dim(self, sample):
+        assert len(sample.size()) == 4
+        assert sample.size(1) == self.num_features, (
             "[ActNorm]: input should be in shape as `BCHW`,"
             " channels should be {} rather than {}".format(
-                self.num_features, input.size()))
+                self.num_features, sample.size()))
 
 
 class LinearZeros(nn.Module):
@@ -540,8 +557,8 @@ class LinearZeros(nn.Module):
 
         self.logs = nn.Parameter(torch.zeros(out_dim))
 
-    def forward(self, input):
-        output = self.linear(input)
+    def forward(self, sample):
+        output = self.linear(sample)
         return output * torch.exp(self.logs * self.logscale_factor)
 
 
@@ -569,8 +586,8 @@ class Conv2d(nn.Module):
 
         self.do_actnorm = do_actnorm
 
-    def forward(self, input):
-        x = self.conv(input)
+    def forward(self, sample):
+        x = self.conv(sample)
         if self.do_actnorm:
             x, _ = self.actnorm(x)
         return x
@@ -596,19 +613,17 @@ class Conv2dZeros(nn.Module):
         self.logscale_factor = logscale_factor
         self.logs = nn.Parameter(torch.zeros(out_dim, 1, 1))
 
-    def forward(self, input):
-        output = self.conv(input)
+    def forward(self, sample):
+        output = self.conv(sample)
         return output * torch.exp(self.logs * self.logscale_factor)
 
 
-class Permute2d(nn.Module):
+class PermuteNd(nn.Module):
     def __init__(self, num_dim, shuffle):
         super().__init__()
         self.num_dim = num_dim
-        self.indices = torch.arange(self.num_dim - 1, -1, -1,
-                                    dtype=torch.long)
-        self.indices_inverse = torch.zeros((self.num_dim),
-                                           dtype=torch.long)
+        self.indices = torch.arange(self.num_dim - 1, -1, -1, dtype=torch.long)
+        self.indices_inverse = torch.zeros((self.num_dim), dtype=torch.long)
 
         for i in range(self.num_dim):
             self.indices_inverse[self.indices[i]] = i
@@ -623,14 +638,36 @@ class Permute2d(nn.Module):
         for i in range(self.num_dim):
             self.indices_inverse[self.indices[i]] = i
 
-    def forward(self, input, reverse=False):
-        assert len(input.size()) == 4
+    def forward(self, forward, reverse=False):
+        pass
+
+
+class Permute1d(PermuteNd):
+    def __init__(self, num_dim, shuffle):
+        super().__init__(num_dim, shuffle)
+        
+    def forward(self, sample, reverse=False):
+        assert len(sample.size()) == 2
 
         if not reverse:
-            input = input[:, self.indices, :, :]
-            return input
+            sample = sample[:, self.indices]
+            return sample
         else:
-            return input[:, self.indices_inverse, :, :]
+            return sample[:, self.indices_inverse]
+
+
+class Permute2d(PermuteNd):
+    def __init__(self, num_dim, shuffle):
+        super().__init__(num_dim, shuffle)
+
+    def forward(self, sample, reverse=False):
+        assert len(sample.size()) == 4
+
+        if not reverse:
+            sample = sample[:, self.indices, :, :]
+            return sample
+        else:
+            return sample[:, self.indices_inverse, :, :]
 
 
 class Split2d(nn.Module):
@@ -642,15 +679,15 @@ class Split2d(nn.Module):
         h = self.conv(z)
         return split_feature(h, "cross")
 
-    def forward(self, input, logdet=0.0, reverse=False, temperature=None):
+    def forward(self, sample, logdet=0.0, reverse=False, temperature=None):
         if reverse:
-            z1 = input
+            z1 = sample
             z_mu, z_var = self.split2d_prior(z1)
             z2 = torch.normal(z_mu, torch.exp(z_var) * temperature)
             z = torch.cat((z1, z2), dim=1)
             return z, logdet
         else:
-            z1, z2 = split_feature(input, "split")
+            z1, z2 = split_feature(sample, "split")
             z_mu, z_var = self.split2d_prior(z1)
             logdet = log_normal_diag(z2, z_mu, z_var, dim=[1,2,3]) + logdet
             return z1, logdet
@@ -661,11 +698,11 @@ class SqueezeLayer(nn.Module):
         super().__init__()
         self.factor = factor
 
-    def forward(self, input, logdet=None, reverse=False):
+    def forward(self, sample, logdet=None, reverse=False):
         if reverse:
-            output = unsqueeze2d(input, self.factor)
+            output = unsqueeze2d(sample, self.factor)
         else:
-            output = squeeze2d(input, self.factor)
+            output = squeeze2d(sample, self.factor)
 
         return output, logdet
 
@@ -698,8 +735,8 @@ class InvertibleConv1x1(nn.Module):
         self.w_shape = w_shape
         self.LU_decomposed = LU_decomposed
 
-    def get_weight(self, input, reverse):
-        b, c, h, w = input.shape
+    def get_weight(self, sample, reverse):
+        b, c, h, w = sample.shape
 
         if not self.LU_decomposed:
             dlogdet = torch.slogdet(self.weight)[1] * h * w
@@ -708,8 +745,8 @@ class InvertibleConv1x1(nn.Module):
             else:
                 weight = self.weight
         else:
-            self.l_mask = self.l_mask.to(input.device)
-            self.eye = self.eye.to(input.device)
+            self.l_mask = self.l_mask.to(sample.device)
+            self.eye = self.eye.to(sample.device)
 
             lower = self.lower * self.l_mask + self.eye
 
@@ -729,19 +766,19 @@ class InvertibleConv1x1(nn.Module):
 
         return weight.view(self.w_shape[0], self.w_shape[1], 1, 1), dlogdet
 
-    def forward(self, input, logdet=None, reverse=False):
+    def forward(self, sample, logdet=None, reverse=False):
         """
         log-det = log|abs(|W|)| * pixels
         """
-        weight, dlogdet = self.get_weight(input, reverse)
+        weight, dlogdet = self.get_weight(sample, reverse)
 
         if not reverse:
-            z = F.conv2d(input, weight)
+            z = F.conv2d(sample, weight)
             if logdet is not None:
                 logdet = logdet + dlogdet
             return z, logdet
         else:
-            z = F.conv2d(input, weight)
+            z = F.conv2d(sample, weight)
             if logdet is not None:
                 logdet = logdet - dlogdet
             return z, logdet

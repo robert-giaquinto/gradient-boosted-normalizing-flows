@@ -499,7 +499,7 @@ class RealNVP(nn.Module):
     Non-volume preserving flow.
     [Dinh et. al. 2017]
 
-    Contains a single coupling layer, representating one RealNVP flow step
+    Contains coupling layers, representating one RealNVP flow step
     """
     def __init__(self, dim, use_batch_norm=False):
         super().__init__()        

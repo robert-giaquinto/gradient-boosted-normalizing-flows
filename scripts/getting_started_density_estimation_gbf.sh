@@ -28,8 +28,8 @@ python -m toy_experiment --dataset ${dataset} \
        --num_components ${num_components} \
        --num_flows ${num_flows} \
        --component_type realnvp \
-       --num_base_layers 1 \
-       --base_network tanh \
+       --coupling_network_depth 1 \
+       --coupling_network tanh \
        --h_size 256 \
        --regularization_rate ${regularization_rate} \
        --batch_size 64 \

@@ -18,6 +18,9 @@ from utils.utilities import save, load
 from utils.load_data import load_image_dataset
 from utils.distributions import log_normal_diag
 from utils.warmup_scheduler import GradualWarmupScheduler
+
+from models.boosted_flow import BoostedFlow
+from models.realnvp import RealNVPFlow
 from models.glow import Glow
 
 
@@ -73,7 +76,8 @@ parser.add_argument("--max_grad_norm", type=float, default=50.0, help="Max norm 
 parser.add_argument('--flow', type=str, default='glow', help="Type of flow to use", choices=['realnvp', 'glow', 'boosted'])
 parser.add_argument("--num_flows", type=int, default=8, help="Number of flow layers per block")
 parser.add_argument("--num_blocks", type=int, default=2, help="Number of blocks. Ignored for non glow models")
-parser.add_argument('--h_size', type=int, default=256, help='Width of layers in base networks of realnvp and glow.')
+parser.add_argument('--h_size', type=int, help='Width of layers in the coupling networks of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--h_size_factor', type=int, help='Sets width of hidden layers as h_size_factor * dimension of data.')
 parser.add_argument("--actnorm_scale", type=float, default=1.0, help="Act norm scale")
 parser.add_argument("--flow_permutation", type=str, default="invconv", choices=["invconv", "shuffle", "reverse"], help="Type of flow permutation")
 parser.add_argument("--flow_coupling", type=str, default="affine", choices=["additive", "affine"], help="Type of flow coupling")
@@ -94,14 +98,24 @@ parser.add_argument("--temperature", type=float, default=1.0, help="Temperature 
 parser.add_argument('--num_dequant_blocks', default=0, type=int, help='Number of blocks in dequantization')
 parser.add_argument('--dequant_dim', default=96, type=int, help='Number of channels in Flow++ dequantizer')
 parser.add_argument('--drop_prob', type=float, default=0.2, help='Dropout probability in Flow++ dequantizer')
-parser.add_argument('--use_attention', type=str2bool, default=True, help='Use attention in the coupling layers')
+parser.add_argument('--use_attention', dest='use_attn', action='store_true', help='Use attention in the coupling layers')
+parser.set_defaults(use_attn=False)
 
-# Boosting parameters and optimization settings
-parser.add_argument('--num_components', type=int, default=2, help='How many components are combined to form the GBF model')
-parser.add_argument('--regularization_rate', type=float, default=1.0, help='Regularization penalty for boosting.')
-parser.add_argument('--epochs_per_component', type=int, default=100, help='Number of epochs to train each component of a boosted model. Defaults to max(annealing_schedule, epochs_per_component). Ignored for non-boosted models.')
-parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'], help='Initialization scheme for boosted parameter rho') 
-parser.add_argument('--component_type', type=str, default='glow', choices=['realnvp', 'glow'], help='Flow to boost.')
+parser.add_argument('--coupling_network_depth', type=int, default=1, help='Number of layers in the coupling network of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--coupling_network', type=str, default='tanh', choices=['relu', 'residual', 'tanh', 'random', 'mixed'],
+                    help='Base network for RealNVP coupling layers. Random chooses between either Tanh or ReLU for every network, whereas mixed uses ReLU for the T network and TanH for the S network.')
+
+# Boosting parameters
+parser.add_argument('--epochs_per_component', type=int, default=1000,
+                    help='Number of epochs to train each component of a boosted model. Defaults to max(annealing_schedule, epochs_per_component). Ignored for non-boosted models.')
+parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
+                    help='Initialization scheme for boosted parameter rho')
+parser.add_argument('--rho_iters', type=int, default=100, help='Maximum number of SGD iterations for training boosting weights')
+parser.add_argument('--rho_lr', type=float, default=0.005, help='Initial learning rate used for training boosting weights')
+parser.add_argument('--num_components', type=int, default=2, help='How many components are combined to form the flow')
+parser.add_argument('--component_type', type=str, default='affine', choices=['realnvp', 'glow'],
+                    help='When flow is boosted -- what type of flow should each component implement.')
+
 
 
 
@@ -117,6 +131,7 @@ def parse_args():
         
     args.shuffle = True
     args.batch_size *= max(1, len(args.gpu_ids))
+    args.density_evaluation = True
 
     # Set a random seed if not given one
     if args.manual_seed is None:
@@ -131,31 +146,33 @@ def parse_args():
     args.model_signature = str(datetime.datetime.now())[0:19].replace(' ', '_').replace(':', '_').replace('-', '_')
     args.experiment_name = args.experiment_name + "_" if args.experiment_name is not None else ""
     args.snap_dir = os.path.join(args.out_dir, args.experiment_name + args.flow)
-    args.snap_dir += f'_seed{args.manual_seed}_bs{args.batch_size}_K{str(args.num_flows)}_L{str(args.num_blocks)}_hdim{str(args.h_size)}'
 
-    args.boosted = args.flow == "boosted"
-    if args.boosted:
-        if args.regularization_rate < 0.0:
-            raise ValueError("For boosting the regularization rate should be greater than or equal to zero.")
-        args.snap_dir += f'_{args.component_type}_C{str(args.num_components)}_reg{int(100*args.regularization_rate):d}'
-    else:
-        args.num_components = 1
-
-    if args.flow == "realnvp" or args.component_type == "realnvp":
-        args.snap_dir += f'_args.base_network_{str(args.num_base_layers)}'
-
-    if args.flow == "glow" or args.component_type == "glow":
-        args.snap_dir += f'_{args.flow_permutation}_{args.flow_coupling}'
-
+    lr_schedule = f'_lr{str(args.learning_rate)[2:]}'
     if args.lr_schedule is None or args.no_lr_schedule:
         args.no_lr_schedule = True
         args.lr_schedule = None
-        lr_schedule = ''
     else:
         args.no_lr_schedule = False
-        lr_schedule = f'LR{args.lr_schedule}'
+        lr_schedule += f'{args.lr_schedule}'
 
-    args.snap_dir += lr_schedule + '_on_' + args.dataset + "_" + args.model_signature + '/'
+    args.snap_dir += f'_seed{args.manual_seed}' + lr_schedule + '_' + args.dataset + f"_bs{args.batch_size}"
+
+    args.boosted = args.flow == "boosted"
+    if args.flow == 'boosted':
+        args.snap_dir += f'_{args.component_type}_C{args.num_components}'
+    else:
+        args.num_components = 1
+
+    args.snap_dir += f'_K{args.num_flows}'
+
+    if args.flow == "realnvp" or args.component_type == "realnvp":
+        args.snap_dir += f'_{args.coupling_network}{args.coupling_network_depth}'
+
+    if args.flow == "glow" or args.component_type == "glow":
+        args.snap_dir += f'_L{str(args.num_blocks)}_{args.flow_permutation}_{args.flow_coupling}'
+
+    args.snap_dir += f'_hsize{str(args.h_size)}'
+    args.snap_dir += f'_{args.model_signature}/'
     if not os.path.exists(args.snap_dir):
         os.makedirs(args.snap_dir)
 
@@ -186,10 +203,10 @@ def parse_args():
 def init_model(args):
     if args.flow == 'glow':
         model = Glow(args).to(args.device)
-    # elif args.flow == 'boosted':
-    #     model = GBF(args).to(args.device)
-    # elif args.flow == 'realnvp':
-    #     model = RealNVP(args).to(args.device)
+    elif args.flow == 'boosted':
+         model = BoostedFlow(args).to(args.device)
+    elif args.flow == 'realnvp':
+         model = RealNVPFlow(args).to(args.device)
     else:
         raise ValueError('Invalid flow choice')
 
@@ -281,17 +298,19 @@ def compute_loss(z, z_mu, z_var, logdet, y, y_logits, dim_prod, args):
     return losses
 
 
-def compute_boosted_loss(z_mu, z_var, zg, g_ldj, zG, G_ldj, y, y_logits, dim_prod, args):
+def compute_boosted_loss(mu_g, var_g, z_g, ldj_g, mu_G, var_G, z_G, ldj_G, y, y_logits, dim_prod, args):
     reduction='mean'
     
     # Full objective - converted to bits per dimension
-    g_lhood = log_normal_diag(zg, z_mu, z_var, dim=[1,2,3]) + g_ldj
-    G_lhood = torch.max(log_normal_diag(zG, z_mu, z_var, dim=[1,2,3]) + G_ldj, torch.ones_like(G_ldj * G_MAX_LOSS))
-    nll = -1.0 * g_lhood + G_lhood
+    g_nll = -1.0 * (log_normal_diag(z_g, mu_g, var_g, dim=[1,2,3]) + ldj_g)
+    unconstrained_G_lhood = log_normal_diag(z_G, mu_G, var_G, dim=[1,2,3]) + ldj_G
+    G_nll = -1.0 * torch.max(unconstrained_G_lhood,
+                        torch.ones_like(ldj_G) * G_MAX_LOSS)
+    
+    nll = g_nll - G_nll
     bpd = nll / (math.log(2.) * dim_prod)
-
-    losses = {"g_nll": torch.mean(-1.0 * g_lhood)}
-    losses = {"G_nll": torch.mean(-1.0 * G_lhood)}
+    losses = {"g_nll": torch.mean(g_nll)}
+    losses = {"G_nll": torch.mean(G_nll)}
     losses = {"nll": torch.mean(nll)}
     losses = {"bpd": torch.mean(bpd)}
 
@@ -330,6 +349,7 @@ def sample(model, args, step=None):
 
 def evaluate(model, data_loader, args):
     model.eval()
+    num_repeats = args.num_components * 3  # for boosted model
 
     loss = 0.0
     with torch.no_grad():
@@ -340,7 +360,30 @@ def evaluate(model, data_loader, args):
             else:
                 y = None
 
-            z, z_mu, z_var, logdet, y_logits = model(x, y)
+            if args.boosted:
+                # take multiple samples from the mixture model
+                z, z_mu, z_var, logdet, y_logits = [], [], [], [], []
+                for i in range(num_repeats):
+                    z_i, mu_i, var_i, ldj_i, y_logits_i = model(x=x, y_onehot=y, components="1:c")                    
+                    z += [z_i]
+                    logdet += [ldj_i]
+                    z_mu += [mu_i]
+                    z_var += [var_i]
+                    if y_logits_i is not None:
+                        y_logits += [y_logits_i]
+                    
+                x = torch.cat(num_repeats * [x])
+                z = torch.cat(z, 0)
+                logdet = torch.cat(logdet, 0)
+                z_mu = torch.cat(z_mu, 0)
+                z_var = torch.cat(z_var, 0)
+                if y is not None:
+                    y = torch.cat(num_repeats * [y])
+                    y_logits = torch.cat(y_logits, 0)
+                    
+            else:
+                z, z_mu, z_var, logdet, y_logits = model(x=x, y_onehot=y)
+                
             losses = compute_loss(z, z_mu, z_var, logdet, y, y_logits, np.prod(x.shape[1:]), args)
             loss += losses['total_loss'].item()
 
@@ -373,8 +416,6 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
         for c in range(args.num_components):
             optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.0
             prev_lr.append(args.learning_rate)
-        for n, param in model.named_parameters():
-            param.requires_grad = True if n.startswith(f"flow_param.{model.component}") else False
 
     for epoch in range(1, args.epochs + 1):
 
@@ -383,6 +424,9 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
         train_times = []
         
         for batch_id, (x, y) in enumerate(train_loader):
+
+            if batch_id > 100:
+                break
 
             t_start = time.time()
             optimizer.zero_grad()
@@ -396,13 +440,20 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
             # initialize ActNorm on first step
             if step < args.num_init_batches:
                 with torch.no_grad():
-                    model(x, y)
+                    if args.boosted:
+                        for c in range(args.num_components):
+                            model(x=x, y_onehot=y, components=c)
+                    else:
+                        model(x=x, y_onehot=y)
+                        
                     step += 1
                     continue
 
             if args.boosted:
-                z_mu, z_var, zg, g_ldj, zG, G_ldj, y_logits = model(x, y)
-                losses = compute_boosted_loss(z_mu, z_var, zg, g_ldj, zG, G_ldj, y, y_logits, np.prod(x.shape[1:]), args)
+                z_g, mu_g, var_g, ldj_g, y_logits = model(x=x, y_onehot=y, components="c")
+                fixed = '-c' if model.all_trained else '1:c-1'
+                z_G, mu_G, var_G, ldj_G, _ = model(x=x, y_onehot=y, components=fixed)
+                losses = compute_boosted_loss(mu_g, var_g, z_g, ldj_g, mu_G, var_G, z_G, ldj_G, y, y_logits, dim_prod=np.prod(x.shape[1:]), args=args)
             else:
                 z, z_mu, z_var, logdet, y_logits = model(x, y)
                 losses = compute_loss(z, z_mu, z_var, logdet, y, y_logits, np.prod(x.shape[1:]), args)
@@ -553,6 +604,7 @@ def main():
     # =========================================================================
     logger.info('LOADING DATA:')
     train_loader, val_loader, test_loader, args = load_image_dataset(args, **kwargs)
+    args.z_size = args.input_size
 
     # =========================================================================
     # SAVE EXPERIMENT SETTINGS
@@ -585,6 +637,7 @@ def main():
     # =========================================================================
     if args.testing:
         logger.info("TESTING:")
+        val_loss = evaluate(model, test_loader, args)
 
 
 

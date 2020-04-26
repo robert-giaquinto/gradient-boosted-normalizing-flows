@@ -13,13 +13,13 @@ dataset=u6
 batch_size=16
 
 num_flows=1
-regularization_rate=0.6
+regularization_rate=0.8
 
 iters_per_component=50000
 num_components=2
 num_steps=$((iters_per_component * num_components * 2))  # can make 2 passes training each component
 
-python -m density_experiment --dataset ${dataset} \
+python -m toy_experiment --dataset ${dataset} \
        --experiment_name ${exp_name} \
        --no_cuda \
        --num_workers 1 \

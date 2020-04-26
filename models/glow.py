@@ -4,7 +4,8 @@ import torch.nn.functional as F
 import math
 
 from utils.utilities import safe_log, split_feature
-from models.layers import Conv2d, Conv2dZeros, ActNorm2d, InvertibleConv1x1, Permute2d, LinearZeros, SqueezeLayer, Split2d
+from models.layers import Conv2d, Conv2dZeros, ActNorm1d, ActNorm2d, InvertibleConv1x1, Permute1d, Permute2d, LinearZeros, SqueezeLayer, Split2d
+from models.layers import ConvNet, ReLUNet
 
 
 class Glow(nn.Module):
@@ -15,15 +16,17 @@ class Glow(nn.Module):
         self.y_classes = args.y_classes
         self.y_condition = args.y_condition
         self.sample_size = args.sample_size
+        self.image_input = len(args.input_size) > 1
         
-        self.flow = FlowNet(image_shape=args.input_size,
+        self.flow = FlowNet(input_size=args.input_size,
                             hidden_dim=args.h_size,
                             K=args.num_flows,
                             L=args.num_blocks,
                             actnorm_scale=args.actnorm_scale,
                             flow_permutation=args.flow_permutation,
                             flow_coupling=args.flow_coupling,
-                            LU_decomposed=args.LU_decomposed)
+                            LU_decomposed=args.LU_decomposed,
+                            args=args)
         # learned prior
         if self.learn_top:
             C = self.flow.output_shapes[-1][1]
@@ -34,12 +37,15 @@ class Glow(nn.Module):
             self.project_ycond = LinearZeros(self.y_classes, 2 * C)
             self.project_class = LinearZeros(C, self.y_classes)
 
-        self.register_buffer("prior_h",
-                             torch.zeros([1,
-                                          self.flow.output_shapes[-1][1] * 2,
-                                          self.flow.output_shapes[-1][2],
-                                          self.flow.output_shapes[-1][3]]))
-
+        if self.image_input:
+            self.register_buffer("prior_h",
+                                 torch.zeros([1,
+                                              self.flow.output_shapes[-1][1] * 2,
+                                              self.flow.output_shapes[-1][2],
+                                              self.flow.output_shapes[-1][3]]))
+        else:
+            self.register_buffer("prior_h", torch.zeros([1, args.z_size * 2]))            
+            
         # Register bounds to pre-process images, not learnable
         self.register_buffer('bounds', torch.tensor([0.9], dtype=torch.float32))
         
@@ -58,10 +64,11 @@ class Glow(nn.Module):
         ??? Should there be a prior at the start of each block like in macow?
 
         """
-        if data is not None:
-            h = self.prior_h.repeat(data.shape[0], 1, 1, 1)
+        data_size = self.sample_size if data is None else data.shape[0]
+        if self.image_input:
+            h = self.prior_h.repeat(data_size, 1, 1, 1)
         else:
-            h = self.prior_h.repeat(self.sample_size, 1, 1, 1)
+            h = self.prior_h.repeat(data_size, 1)
 
         dim = h.size(1)
 
@@ -82,12 +89,13 @@ class Glow(nn.Module):
             return self.encode(x, y_onehot)
 
     def encode(self, x, y_onehot):
-        # Dequant
         logdet = torch.zeros(x.size(0), device=x.device)
-        x, logdet = self.dequantize(x, logdet)
+        if self.image_input:
+            # Dequant
+            x, logdet = self.dequantize(x, logdet)
         
-        # convert to logits
-        x, logdet = self.to_logits(x, logdet)
+            # convert to logits
+            x, logdet = self.to_logits(x, logdet)
 
         # apply flow
         z, logdet = self.flow(x, logdet=logdet, reverse=False)
@@ -107,7 +115,10 @@ class Glow(nn.Module):
                 z = torch.normal(z_mu, torch.exp(z_var) * temperature)
                 
             x = self.flow(z, temperature=temperature, reverse=True)
-            x, _ = self.to_logits(x, 0.0, reverse=True)
+
+            if self.image_input:
+                x, _ = self.to_logits(x, 0.0, reverse=True)
+                
         return x
 
     def dequantize(self, x, accum_logdet):
@@ -176,41 +187,57 @@ class Glow(nn.Module):
 
 
 class FlowNet(nn.Module):
-    def __init__(self, image_shape, hidden_dim, K, L,
-                 actnorm_scale, flow_permutation, flow_coupling,
-                 LU_decomposed):
+    def __init__(self, input_size, hidden_dim, K, L, actnorm_scale, flow_permutation, flow_coupling, LU_decomposed, args):
+        
         super().__init__()
 
+        self.image_input = len(input_size) > 1
         self.layers = nn.ModuleList()
         self.output_shapes = []
 
         self.K = K
         self.L = L
 
-        C, H, W = image_shape
+        if self.image_input:
+            C, H, W = input_size
 
-        for i in range(L):
-            # 1. Squeeze
-            C, H, W = C * 4, H // 2, W // 2
-            self.layers.append(SqueezeLayer(factor=2))
-            self.output_shapes.append([-1, C, H, W])
+            for i in range(L):
+                # 1. Squeeze
+                C, H, W = C * 4, H // 2, W // 2
+                self.layers.append(SqueezeLayer(factor=2))
+                self.output_shapes.append([-1, C, H, W])
 
-            # 2. K FlowStep
+                # 2. K FlowStep
+                for _ in range(K):
+                    self.layers.append(
+                        FlowStep(in_dim=C,
+                                 hidden_dim=hidden_dim,
+                                 actnorm_scale=actnorm_scale,
+                                 flow_permutation=flow_permutation,
+                                 flow_coupling=flow_coupling,
+                                 LU_decomposed=LU_decomposed,
+                                 image_input=self.image_input,
+                                 args=args))
+                    
+                self.output_shapes.append([-1, C, H, W])
+
+                # 3. Split2d
+                if i < L - 1:
+                    self.layers.append(Split2d(in_dim=C))
+                    self.output_shapes.append([-1, C // 2, H, W])
+                    C = C // 2
+        else:
+            self.output_shapes.append([-1, input_size[0]])
             for _ in range(K):
                 self.layers.append(
-                    FlowStep(in_dim=C,
+                    FlowStep(in_dim=input_size[0],
                              hidden_dim=hidden_dim,
                              actnorm_scale=actnorm_scale,
                              flow_permutation=flow_permutation,
                              flow_coupling=flow_coupling,
-                             LU_decomposed=LU_decomposed))
-                self.output_shapes.append([-1, C, H, W])
-
-            # 3. Split2d
-            if i < L - 1:
-                self.layers.append(Split2d(in_dim=C))
-                self.output_shapes.append([-1, C // 2, H, W])
-                C = C // 2
+                             LU_decomposed=LU_decomposed,
+                             image_input=self.image_input,
+                             args=args))
 
     def forward(self, input, logdet=0.0, reverse=False, temperature=None):
         if reverse:
@@ -219,7 +246,7 @@ class FlowNet(nn.Module):
             return self.encode(input, logdet)
 
     def encode(self, z, logdet=0.0):
-        for layer, shape in zip(self.layers, self.output_shapes):
+        for layer in self.layers:
             z, logdet = layer(z, logdet, reverse=False)
         return z, logdet
 
@@ -234,13 +261,14 @@ class FlowNet(nn.Module):
 
 
 class FlowStep(nn.Module):
-    def __init__(self, in_dim, hidden_dim, actnorm_scale,
-                 flow_permutation, flow_coupling, LU_decomposed):
+    def __init__(self, in_dim, hidden_dim, actnorm_scale, flow_permutation, flow_coupling, LU_decomposed, image_input, args):
         super().__init__()
+        
+        self.image_input = image_input
         self.flow_coupling = flow_coupling
 
-        # 1. actnorm
-        self.actnorm = ActNorm2d(in_dim, actnorm_scale)
+        # 1. actnorm        
+        self.actnorm = ActNorm2d(in_dim, actnorm_scale) if self.image_input else ActNorm1d(in_dim, actnorm_scale)
 
         # 2. permute
         if flow_permutation == "invconv":
@@ -248,23 +276,35 @@ class FlowStep(nn.Module):
             self.flow_permutation = \
                 lambda z, logdet, rev: self.invconv(z, logdet, rev)
         elif flow_permutation == "shuffle":
-            self.shuffle = Permute2d(in_dim, shuffle=True)
+            self.shuffle = Permute2d(in_dim, shuffle=True) if self.image_input else Permute1d(in_dim, shuffle=True)
             self.flow_permutation = \
                 lambda z, logdet, rev: (self.shuffle(z, rev), logdet)
         else:
-            self.reverse = Permute2d(in_dim, shuffle=False)
+            self.reverse = Permute2d(in_dim, shuffle=False) if self.image_input else Permute1d(in_dim, shuffle=False)
             self.flow_permutation = \
                 lambda z, logdet, rev: (self.reverse(z, rev), logdet)
 
         # 3. coupling
+        if self.image_input:
+            coupling_network = ConvNet
+        elif args.coupling_network == "tanh":
+            coupling_network = TanhNet
+        elif args.coupling_network == "residual":
+            coupling_network = ResidualNet
+        elif args.coupling_network == "random":
+            coupling_network = [TanhNet, ReLUNet][np.random.randint(1)]
+        else:
+            coupling_network = ReLUNet
+
+        coupling_in_dim = in_dim // 2
+        coupling_out_dim = in_dim - coupling_in_dim
+
         if flow_coupling == "additive":
-            self.block = get_block(in_dim // 2,
-                                   in_dim // 2,
-                                   hidden_dim)
+            #self.block = get_block(in_dim // 2, in_dim // 2, hidden_dim, image_input)
+            self.block = coupling_network(coupling_in_dim, coupling_out_dim, hidden_dim)
         elif flow_coupling == "affine":
-            self.block = get_block(in_dim // 2,
-                                   in_dim,
-                                   hidden_dim)
+            #self.block = get_block(in_dim // 2, in_dim, hidden_dim, image_input)
+            self.block = coupling_network(coupling_in_dim, coupling_out_dim * 2, hidden_dim)
 
     def forward(self, input, logdet=None, reverse=False):
         if reverse:
@@ -273,11 +313,11 @@ class FlowStep(nn.Module):
             return self.encode(input, logdet)
 
 
-    def encode(self, input, logdet):
-        assert input.size(1) % 2 == 0
+    def encode(self, sample, logdet):
+        #assert sample.size(1) % 2 == 0
 
         # 1. actnorm
-        z, logdet = self.actnorm(input, logdet=logdet, reverse=False)
+        z, logdet = self.actnorm(sample, logdet=logdet, reverse=False)
 
         # 2. permute
         z, logdet = self.flow_permutation(z, logdet, False)
@@ -292,16 +332,19 @@ class FlowStep(nn.Module):
             scale = torch.sigmoid(scale + 2.)
             z2 = z2 + shift
             z2 = z2 * scale
-            logdet = torch.sum(torch.log(scale), dim=[1, 2, 3]) + logdet
+
+            sum_dim = [1, 2, 3] if self.image_input else 1
+            logdet = torch.sum(torch.log(scale), dim=sum_dim) + logdet
+            
         z = torch.cat((z1, z2), dim=1)
 
         return z, logdet
 
-    def decode(self, input, logdet):
-        assert input.size(1) % 2 == 0
+    def decode(self, sample, logdet):
+        #assert sample.size(1) % 2 == 0
 
         # 1.coupling
-        z1, z2 = split_feature(input, "split")
+        z1, z2 = split_feature(sample, "split")
         if self.flow_coupling == "additive":
             z2 = z2 - self.block(z1)
         elif self.flow_coupling == "affine":
@@ -378,13 +421,20 @@ class _Dequantization(nn.Module):
         return x, sldj
     
 
-def get_block(in_dim, out_dim, hidden_dim):
-    block = nn.Sequential(Conv2d(in_dim, hidden_dim),
-                          nn.ReLU(inplace=False),
-                          Conv2d(hidden_dim, hidden_dim,
-                                 kernel_size=(1, 1)),
-                          nn.ReLU(inplace=False),
-                          Conv2dZeros(hidden_dim, out_dim))
+def get_block(in_dim, out_dim, hidden_dim, image_input):
+    if image_input:
+        block = nn.Sequential(Conv2d(in_dim, hidden_dim),
+                              nn.ReLU(inplace=False),
+                              Conv2d(hidden_dim, hidden_dim, kernel_size=(1, 1)),
+                              nn.ReLU(inplace=False),
+                              Conv2dZeros(hidden_dim, out_dim))
+    else:
+        block = nn.Sequential(nn.Linear(in_dim, hidden_dim),
+                              nn.ReLU(),
+                              nn.Linear(hidden_dim, hidden_dim),
+                              nn.ReLU(),
+                              nn.Linear(hidden_dim, out_dim))
+        
     return block
 
 

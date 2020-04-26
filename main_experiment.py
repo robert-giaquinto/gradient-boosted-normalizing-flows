@@ -118,8 +118,9 @@ parser.add_argument('--num_householder', type=int, default=8, help="For Househol
 
 # RealNVP (and IAF) parameters
 parser.add_argument('--h_size', type=int, default=256, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
-parser.add_argument('--num_base_layers', type=int, default=1, help='Number of extra hidden layers in the base network of iaf and realnvp. Ignored for all other flows.')
-parser.add_argument('--base_network', type=str, default='tanh', help='Base network for RealNVP coupling layers', choices=['relu', 'residual', 'tanh', 'random'])
+parser.add_argument('--coupling_network_depth', type=int, default=1, help='Number of extra hidden layers in the base network of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--coupling_network', type=str, default='tanh', choices=['relu', 'residual', 'tanh', 'random', 'mixed'],
+                    help='Base network for RealNVP coupling layers. Random chooses between either Tanh or ReLU for every network, whereas mixed uses ReLU for the T network and TanH for the S network.')
 parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers, not recommended')
 parser.set_defaults(batch_norm=True)
 
@@ -132,7 +133,7 @@ parser.add_argument('--rho_iters', type=int, default=100, help='Maximum number o
 parser.add_argument('--rho_lr', type=float, default=0.005, help='Initial learning rate used for training boosting weights')
 parser.add_argument('--num_components', type=int, default=2, help='How many components are combined to form the flow')
 parser.add_argument('--component_type', type=str, default='affine',
-                    choices=['realnvp', 'realnvp2', 'liniaf', 'affine', 'nlsq', 'random'],
+                    choices=['realnvp', 'liniaf', 'affine', 'nlsq', 'random'],
                     help='When flow is boosted -- what type of flow should each component implement.')
 
 
@@ -171,27 +172,37 @@ def parse_args(main_args=None):
     elif args.vae_layers == "convolutional":
         vae_type = "cvae_"
     else:
-        raise ValueError("vae_layers argument must be ['linear', 'convolutional', 'simple']")
+        raise ValueError("vae_layers argument must be ['linear', 'convolutional', 'simple']")    
     
-    args.snap_dir = os.path.join(args.out_dir, args.experiment_name + vae_type + args.flow + '_')
+    args.snap_dir = os.path.join(args.out_dir, args.experiment_name + vae_type + args.flow)
+
+    lr_schedule = f'_lr{str(args.learning_rate)[2:]}'
+    if args.lr_schedule is None or args.no_lr_schedule:
+        args.no_lr_schedule = True
+        args.lr_schedule = None
+    else:
+        args.no_lr_schedule = False
+        lr_schedule += f'{args.lr_schedule}'
+
+    args.snap_dir += f'_seed{args.manual_seed}' + lr_schedule + '_' + args.dataset + f"_bs{args.batch_size}"
 
     args.boosted = args.flow == "boosted"
     if args.flow != 'no_flow':
-        args.snap_dir += 'K' + str(args.num_flows)
+        args.snap_dir += '_K' + str(args.num_flows)
         
     if args.flow == 'orthogonal':
         args.snap_dir += '_vectors' + str(args.num_ortho_vecs)
     if args.flow == 'householder':
         args.snap_dir += '_householder' + str(args.num_householder)
     if args.flow == 'iaf':
-        args.snap_dir += '_hidden' + str(args.num_base_layers) + '_hsize' + str(args.h_size)
+        args.snap_dir += '_hidden' + str(args.coupling_network_depth) + '_hsize' + str(args.h_size)
     if args.flow == 'boosted':
         if args.regularization_rate < 0.0:
             raise ValueError("For boosting the regularization_rate should be greater than or equal to zero.")
         args.snap_dir += '_' + args.component_type + '_C' + str(args.num_components) + '_reg' + f'{int(100*args.regularization_rate):d}'
 
-    if args.flow in ["realnvp", "realnvp2"] or args.component_type in ["realnvp", "realnvp2"]:
-        args.snap_dir += '_' + args.base_network + str(args.num_base_layers) + '_hsize' + str(args.h_size)
+    if args.flow in ["realnvp"] or args.component_type in ["realnvp"]:
+        args.snap_dir += '_' + args.coupling_network + str(args.coupling_network_depth) + '_hsize' + str(args.h_size)
 
     is_annealed = ""
     if not args.no_annealing and args.min_beta < 1.0:
@@ -199,15 +210,7 @@ def parse_args(main_args=None):
     else:
         args.min_beta = 1.0
 
-    if args.lr_schedule is None or args.no_lr_schedule:
-        args.no_lr_schedule = True
-        args.lr_schedule = None
-        lr_schedule = ''
-    else:
-        args.no_lr_schedule = False
-        lr_schedule = f'_LR{args.lr_schedule}'
-
-    args.snap_dir += lr_schedule + is_annealed + '_on_' + args.dataset + "_" + args.model_signature + '/'
+    args.snap_dir += is_annealed + f'_{args.model_signature}/'
     if not os.path.exists(args.snap_dir):
         os.makedirs(args.snap_dir)
 
@@ -325,10 +328,10 @@ def init_optimizer(model, args):
         elif args.lr_schedule == "cosine":
             if args.boosted:
                 logger.info(f"Using a Cyclic Cosine Annealing LR as a learning-rate schedule, annealed over {args.epochs_per_component * args.train_size} training steps, restarting with each new component.")
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=args.epochs_per_component * args.train_size)
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=args.epochs_per_component * args.train_size, eta_min=1e-6)
             else:
                 logger.info(f"Using CosineAnnealingLR as a learning-rate schedule, annealed over {args.epochs * args.train_size} training steps.")
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * args.train_size)
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * args.train_size, eta_min=1e-6)
 
     if args.warmup_epochs > 0:
         logger.info(f"Gradually warming up learning rate from {base_lr} to {args.learning_rate} over the first {args.warmup_epochs * args.train_size} steps.\n")

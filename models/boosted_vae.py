@@ -61,19 +61,32 @@ class BoostedVAE(VAE):
                 out_dim = self.z_size // 2
                 flow_c = nn.ModuleList()
                 for k in range(self.num_flows):
-                    if args.base_network == "tanh":
-                        base_network = TanhNet
-                    elif args.base_network == "residual":
-                        base_network = ResidualNet
-                    elif args.base_network == "random":
-                        base_network = [TanhNet, ReLUNet][np.random.randint(2)]
+                    if args.coupling_network == "mixed":
+                        flow_c_k = [ReLUNet(in_dim, out_dim, args.h_size, args.coupling_network_depth),
+                                    TanhNet(in_dim, out_dim, args.h_size, args.coupling_network_depth),
+                                    ReLUNet(in_dim, out_dim, args.h_size, args.coupling_network_depth),
+                                    TanhNet(in_dim, out_dim, args.h_size, args.coupling_network_depth)]
                     else:
-                        base_network = ReLUNet
+                        
+                        # realnvp: must initialize the 4 base networks used in each flow (and for each component)
+                        flow_c_k = []
+                        for _ in range(4):
+                            
+                            if args.coupling_network == "tanh":
+                                coupling_network = TanhNet
+                            elif args.coupling_network == "residual":
+                                coupling_network = ResidualNet
+                            elif args.coupling_network == "random":
+                                coupling_network = [TanhNet, ReLUNet][np.random.randint(2)]
+                            else:
+                                coupling_network = ReLUNet
 
-                    # realnvp: must initialize the 4 base networks used in each flow (and for each component)
-                    flow_c_k = [base_network(in_dim, out_dim, args.h_size, args.num_base_layers) for _ in range(4)]
+                            flow_c_k.append(coupling_network(in_dim, out_dim, args.h_size, args.coupling_network_depth))
+                            
+                        
                     if args.batch_norm:
                         flow_c_k.append(BatchNorm(self.z_size))
+                        
                     flow_c.append(nn.ModuleList(flow_c_k))
                     
                 self.flow_param.append(flow_c)

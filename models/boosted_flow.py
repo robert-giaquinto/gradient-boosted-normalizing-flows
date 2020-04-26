@@ -114,11 +114,6 @@ class BoostedFlow(GenerativeFlow):
         z_G, mu_G, var_G, ldj_G, _ = self.forward(x=x, components=fixed)
         G_nll = -1.0 * (log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=True) + ldj_G)
         
-        #g_zk, _, _, g_ldj = self.flow(x, sample_from="c", density_from="1:c")
-        #G_zk, _, _, G_ldj = self.flow(x, sample_from="1:c-1", density_from="1:c")
-        #g_loss = -1.0 * (self.base_dist.log_prob(g_zk[-1]).sum(1) + g_ldj)
-        #G_loss = -1.0 * (self.base_dist.log_prob(G_zk[-1]).sum(1) + G_ldj)
-
         return g_nll.mean().detach().item(), G_nll.mean().detach().item()
         
     def update_rho(self, data_loader):
@@ -167,13 +162,13 @@ class BoostedFlow(GenerativeFlow):
 
                 g_loss = np.array(g_loss)
                 G_loss = np.array(G_loss)
-                #gradient = np.mean(g_loss - G_loss)
-                gradient = np.mean(G_loss - g_loss)  
+                gradient = np.mean(g_loss - G_loss)
+                #gradient = np.mean(G_loss - g_loss)  
                 step_size = init_step_size / (0.05 * batch_id + 1)
                 rho = min(max(prev_rho - step_size * gradient, 0.0005), 0.999)
 
                 grad_msg = f'{batch_id: >3}. rho = {prev_rho:6.4f} -  {gradient:6.3f} * {step_size:7.5f} = {rho:6.4f} '
-                loss_msg = f"\tg vs G. Loss: ({g_loss.mean():6.1f} +/- {g_loss.std():3.1f}, {G_loss.mean():6.1f}  +/- {g_loss.std():3.1f})."
+                loss_msg = f"\tg vs G. Loss: ({g_loss.mean():6.1f} +/- {g_loss.std():3.1f}, {G_loss.mean():6.1f}  +/- {g_loss.std():3.1f}), log(n)={np.log(1.0 * x.size(0)):6.1}"
                 print(grad_msg + loss_msg, file=rho_log)
 
                 self.rho[self.component] = rho

@@ -52,11 +52,11 @@ def load_density_dataset(args):
 
     val_dataset = torch.utils.data.TensorDataset(
         torch.from_numpy(dataset.val.x).float().to(args.device), torch.from_numpy(y_val))
-    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.batch_size, shuffle=False)
+    val_loader = torch.utils.data.DataLoader(val_dataset, batch_size=args.eval_batch_size, shuffle=False)
 
     test_dataset = torch.utils.data.TensorDataset(
         torch.from_numpy(dataset.tst.x).float().to(args.device), torch.from_numpy(y_test))
-    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.batch_size, shuffle=False)
+    test_loader = torch.utils.data.DataLoader(test_dataset, batch_size=args.eval_batch_size, shuffle=False)
     
     args.z_size = dataset.n_dims
     args.train_size = len(train_loader)
