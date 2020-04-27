@@ -381,39 +381,51 @@ class CouplingLayer(nn.Module):
     def __init__(self, in_dim, out_dim, hidden_dim, mask, num_layers=1, network="tanh", use_batch_norm=True):
         super().__init__()
 
-        if network == "relu":
-            coupling_network = ReLUNet
-        elif network == "residual":
-            coupling_network = ResidualNet
+        if network == "mixed":
+            self.s_net = TanhNet(in_dim, out_dim, hidden_dim, num_layers)
+            self.t_net = ReLUNet(in_dim, out_dim, hidden_dim, num_layers)
+
         elif network == "random":
-            coupling_network = [TanhNet, ReLUNet][np.random.randint(2)]
-        elif network == "tanh":
-            coupling_network = TanhNet
+            coupling_network1 = [TanhNet, ReLUNet][np.random.randint(2)]
+            coupling_network2 = [TanhNet, ReLUNet][np.random.randint(2)]
+            self.s_net = coupling_network1(in_dim, out_dim, hidden_dim, num_layers)
+            self.t_net = coupling_network2(in_dim, out_dim, hidden_dim, num_layers)
+            
+        else:
+            if network == "relu":
+                coupling_network = ReLUNet
+            elif network == "residual":
+                coupling_network = ResidualNet
+            elif network == "tanh":
+                coupling_network = TanhNet
+
+            self.s_net = coupling_network(in_dim, out_dim, hidden_dim, num_layers)
+            self.t_net = coupling_network(in_dim, out_dim, hidden_dim, num_layers)
+
 
         self.register_buffer('mask', mask)
-        self.s_net = coupling_network(in_dim, out_dim, hidden_dim, num_layers)
-        self.t_net = coupling_network(in_dim, out_dim, hidden_dim, num_layers)
 
         self.use_batch_norm = use_batch_norm
         if use_batch_norm:
             self.batch_norm = BatchNorm(in_dim)
 
     def forward(self, x):
+
+        if self.use_batch_norm:
+            x, bn_ldj = self.batch_norm(x)
+
         # apply mask
         mx = x * self.mask
 
         # run through model
         s = self.s_net(mx)
         t = self.t_net(mx)
-        y = mx + (1 - self.mask) * (x - t) * torch.exp(-s)  # cf RealNVP eq 8 where y corresponds to x (here we're modeling y)
+        z = mx + (1 - self.mask) * (x - t) * torch.exp(-s)  # cf RealNVP eq 8 where z corresponds to x (here we're modeling z)
 
         log_abs_det_jacobian = torch.sum(-(1 - self.mask) * s, dim=1)  # log det du/dx; cf RealNVP 8 and 6
+        log_abs_det_jacobian = log_abs_det_jacobian + bn_ldj
 
-        if self.use_batch_norm:
-            y, ldj = self.batch_norm(y)
-            log_abs_det_jacobian = log_abs_det_jacobian + ldj
-
-        return y, log_abs_det_jacobian
+        return z, log_abs_det_jacobian
 
     def inverse(self, z):
         # apply mask

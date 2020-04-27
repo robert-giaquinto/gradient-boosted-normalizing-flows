@@ -421,20 +421,20 @@ class _Dequantization(nn.Module):
         return x, sldj
     
 
-def get_block(in_dim, out_dim, hidden_dim, image_input):
-    if image_input:
-        block = nn.Sequential(Conv2d(in_dim, hidden_dim),
-                              nn.ReLU(inplace=False),
-                              Conv2d(hidden_dim, hidden_dim, kernel_size=(1, 1)),
-                              nn.ReLU(inplace=False),
-                              Conv2dZeros(hidden_dim, out_dim))
-    else:
-        block = nn.Sequential(nn.Linear(in_dim, hidden_dim),
-                              nn.ReLU(),
-                              nn.Linear(hidden_dim, hidden_dim),
-                              nn.ReLU(),
-                              nn.Linear(hidden_dim, out_dim))
+# def get_block(in_dim, out_dim, hidden_dim, image_input):
+#     if image_input:
+#         block = nn.Sequential(Conv2d(in_dim, hidden_dim),
+#                               nn.ReLU(inplace=False),
+#                               Conv2d(hidden_dim, hidden_dim, kernel_size=(1, 1)),
+#                               nn.ReLU(inplace=False),
+#                               Conv2dZeros(hidden_dim, out_dim))
+#     else:
+#         block = nn.Sequential(nn.Linear(in_dim, hidden_dim),
+#                               nn.ReLU(),
+#                               nn.Linear(hidden_dim, hidden_dim),
+#                               nn.ReLU(),
+#                               nn.Linear(hidden_dim, out_dim))
         
-    return block
+#     return block
 
 

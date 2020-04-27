@@ -3,7 +3,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 
-from utils.utilities import safe_log
+from utils.utilities import safe_log, split_feature
 from models.layers import MaskedConv2d, MaskedLinear, TanhNet, ReLUNet, ResidualNet, BatchNorm
 
 
@@ -548,5 +548,64 @@ class RealNVP(nn.Module):
         if self.use_batch_norm:
             x, ldj = batch_norm.inverse(x)
             log_det = log_det + ldj
+
+        return x, log_det
+
+
+class RealNVP2(nn.Module):
+    """
+    Non-volume preserving flow.
+    [Dinh et. al. 2017]
+
+    Contains coupling layers, representating one RealNVP flow step
+    """
+    def __init__(self, use_batch_norm=True):
+        super().__init__()        
+        self.use_batch_norm = use_batch_norm
+
+    def forward(self, x, layers):
+        if self.use_batch_norm:
+            (t_net, s_net, batch_norm), flipped = layers
+        else:
+            (t_net, s_net), flipped = layers
+
+        if self.use_batch_norm:
+            x, bn_ldj = batch_norm(x)
+        else:
+            bn_ldj = 0.0
+
+        if flipped:
+            z2, z1 = split_feature(x, "split")
+        else:
+            z1, z2 = split_feature(x, "split")
+        
+        shift = t_net(z1)
+        scale = s_net(z1)
+        z2 = shift + z2 * torch.exp(scale)
+        z = torch.cat([z1, z2], dim=1)
+        log_det = torch.sum(scale, dim=1) + bn_ldj
+
+        return z, log_det
+
+    def inverse(self, z, layers):
+        if self.use_batch_norm:
+            (t_net, s_net, batch_norm), flipped = layers
+        else:
+            (t_net, s_net), flipped = layers
+
+        if flipped:
+            x1, x2 = split_feature(z, "split")
+        else:
+            x2, x1 = split_feature(z, "split")
+
+        shift = t_net(x2)
+        scale = s_net(x2)
+        x1 = (x1 - shift) * torch.exp(-scale)
+        x = torch.cat([x1, x2], dim=1)
+        log_det = torch.sum(-scale, dim=1)
+
+        if self.use_batch_norm:
+            x, bn_ldj = batch_norm.inverse(x)
+            log_det = log_det + bn_ldj
 
         return x, log_det
