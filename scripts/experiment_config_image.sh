@@ -8,4 +8,4 @@ batch_size=64
 epochs_per_component=500
 max_grad_norm=5.0
 weight_decay=0.0
-num_coupling_layers=1
+coupling_network_depth=1

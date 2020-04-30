@@ -31,11 +31,12 @@ class BoostedFlow(GenerativeFlow):
         if args.rho_init == "decreasing":
             # each component is given half the weight of the previous one
             self.register_buffer('rho', torch.clamp(
-                1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(1.0) + \
+                1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(0.0) + \
                                 torch.arange(self.num_components * 1.0, device=args.device)), min=0.05).to(args.device))
         else:
             # args.rho_init == "uniform"
-            self.register_buffer('rho', self.FloatTensor(self.num_components).fill_(1.0 / self.num_components))
+            #self.register_buffer('rho', self.FloatTensor(self.num_components).fill_(1.0 / self.num_components))
+            self.register_buffer('rho', self.FloatTensor(self.num_components).fill_(1.0))
 
         # initialize component flows
         self.flows = nn.ModuleList()
@@ -100,22 +101,30 @@ class BoostedFlow(GenerativeFlow):
         return j
 
     @torch.no_grad()
-    def _rho_gradient(self, x):
+    def _rho_gradient_g(self, x):
         """
         Estimate gradient with Monte Carlo by drawing sample zK ~ g^c and sample zK ~ G^(c-1), and
         computing their densities under the full model G^c
         """
-        x = x.detach().to(self.args.device)
-
+        #x = x.detach().to(self.args.device)
         z_g, mu_g, var_g, ldj_g, _ = self.forward(x=x, components="c")
-        g_nll = -1.0 * (log_normal_standard(z_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=True) + ldj_g)
+        g_nll = -1.0 * (log_normal_standard(z_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
 
+        return g_nll.data.detach()
+
+    @torch.no_grad()
+    def _rho_gradient_G(self, x):
+        """
+        Estimate gradient with Monte Carlo by drawing sample zK ~ g^c and sample zK ~ G^(c-1), and
+        computing their densities under the full model G^c
+        """
+        #x = x.detach().to(self.args.device)
         fixed = "-c" if self.all_trained else "1:c-1"
         z_G, mu_G, var_G, ldj_G, _ = self.forward(x=x, components=fixed)
-        G_nll = -1.0 * (log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=True) + ldj_G)
+        G_nll = -1.0 * (log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
         
-        return g_nll.mean().detach().item(), G_nll.mean().detach().item()
-        
+        return G_nll.data.detach()
+    
     def update_rho(self, data_loader):
         """
         Learn weights rho using algorithm and updates from Section 3.3
@@ -154,21 +163,17 @@ class BoostedFlow(GenerativeFlow):
 
                 x = x.detach().to(self.args.device)
 
-                g_loss, G_loss = [], []
-                for r in range(num_repeats):
-                    g, G = self._rho_gradient(x)
-                    g_loss.append(g)
-                    G_loss.append(G)
-
-                g_loss = np.array(g_loss)
-                G_loss = np.array(G_loss)
-                gradient = np.mean(g_loss - G_loss)
-                #gradient = np.mean(G_loss - g_loss)  
+                g_nll = torch.cat(num_repeats * [self._rho_gradient_g(x)])
+                G_nll = torch.cat([self._rho_gradient_G(x) for r in range(num_repeats)])
+                sum_ratio = torch.sum(torch.exp(g_nll - G_nll))
+                
+                gradient = torch.mean(g_nll - G_nll)
+                #gradient = torch.mean(G_nll - g_nll)  
                 step_size = init_step_size / (0.05 * batch_id + 1)
-                rho = min(max(prev_rho - step_size * gradient, 0.0005), 0.999)
+                rho = min(max(prev_rho - step_size * gradient, 0.01), 100.0)
 
                 grad_msg = f'{batch_id: >3}. rho = {prev_rho:6.4f} -  {gradient:6.3f} * {step_size:7.5f} = {rho:6.4f} '
-                loss_msg = f"\tg vs G. Loss: ({g_loss.mean():6.1f} +/- {g_loss.std():3.1f}, {G_loss.mean():6.1f}  +/- {g_loss.std():3.1f}), log(n)={np.log(1.0 * x.size(0)):6.1}"
+                loss_msg = f"\tg_nll - G_nll: ({g_nll.mean():6.1f} +/- {g_nll.std():3.1f}, {G_nll.mean():6.1f}  +/- {g_nll.std():3.1f}). Sum g/G={sum_ratio:6.1f} vs n={num_repeats * x.size(0):d}"
                 print(grad_msg + loss_msg, file=rho_log)
 
                 self.rho[self.component] = rho

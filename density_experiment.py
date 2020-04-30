@@ -21,7 +21,6 @@ from main_experiment import init_optimizer, init_log
 
 
 logger = logging.getLogger(__name__)
-G_MAX_LOSS = -10.0
 
 
 parser = argparse.ArgumentParser(description='PyTorch Gradient Boosted Normalizing flows')
@@ -127,6 +126,7 @@ parser.add_argument("--temperature", type=float, default=1.0, help="Temperature 
 # Boosting parameters
 parser.add_argument('--epochs_per_component', type=int, default=1000,
                     help='Number of epochs to train each component of a boosted model. Defaults to max(annealing_schedule, epochs_per_component). Ignored for non-boosted models.')
+parser.add_argument('--fixed_samples', type=int, default=1, help='Number of samples used to calculate likelihood under fixed components of boosted model.')
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
                     help='Initialization scheme for boosted parameter rho')
 parser.add_argument('--rho_iters', type=int, default=100, help='Maximum number of SGD iterations for training boosting weights')
@@ -190,6 +190,8 @@ def parse_args(main_args=None):
     args.boosted = args.flow == "boosted"
     if args.flow == 'boosted':
         args.snap_dir += f'_{args.component_type}_C{args.num_components}'
+        if args.fixed_samples < 1:
+            raise ValueError(f"Number of fixed_samples must be greater than 0, you gave fixed_samples={args.fixed_samples}")
     else:
         args.num_components = 1
 
@@ -267,9 +269,14 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
 
             prev_lr.append(optimizer.param_groups[c]['lr'])
 
+        for n, param in model.named_parameters():
+            param.requires_grad = True if n.startswith(f"flows.{model.component}") else False
+
+
     epoch_times = []
     epoch_train = []
     epoch_valid = []
+    step_offset = 0
     step = 0
     for epoch in range(args.init_epoch, args.epochs + 1):
 
@@ -278,6 +285,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
         t_start = time.time()
         for batch_id, (x, _) in enumerate(train_loader):
 
+            # initialize data and optimizer
             x = x.to(args.device)
             optimizer.zero_grad()
 
@@ -293,11 +301,12 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
                     step += 1
                     continue
 
+            # compute loss and gradients
             losses = compute_kl_pq_loss(model, x, args)
             train_loss.append(losses['nll'])
-            
             losses['nll'].backward()
 
+            # clip gradients if requested
             if args.max_grad_clip > 0:
                 torch.nn.utils.clip_grad_value_(model.parameters(), args.max_grad_clip)
             if args.max_grad_norm > 0:
@@ -305,25 +314,27 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
                 if args.tensorboard:
                     writer.add_scalar("grad_norm/grad_norm", grad_norm, step)
 
+            # Adjust learning rates for boosted model
             if args.boosted:
-                # freeze all but the new component being trained
-                if step > 0:
+                if step > 0:  # freeze all but the new component being trained
                     for c in range(args.num_components):
                         optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
             if args.tensorboard:
                 for i in range(len(optimizer.param_groups)):
                     writer.add_scalar(f'lr/lr_{i}', optimizer.param_groups[i]['lr'], step)
-                    
+
+            # Perform gradient update, modify learning rate according to learning rate schedule
             optimizer.step()
             if not args.no_lr_schedule:
                 if args.lr_schedule == "plateau":
                     scheduler.step(metrics=losses['nll'])
                 else:
-                    scheduler.step(epoch=step)
+                    scheduler.step(epoch=step + step_offset)
 
                 if args.boosted:
                     prev_lr[model.component] = optimizer.param_groups[model.component]['lr']
 
+            # batch level reporting
             if args.tensorboard:
                 writer.add_scalar('step/train_nll', losses['nll'], step)
                 if args.boosted:
@@ -363,6 +374,12 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
             logger.info(epoch_msg + ' |')
 
             if args.boosted:
+                epochs_since_prev_convergence = epoch - converged_epoch
+                if (epochs_since_prev_convergence % args.epochs_per_component) > 0:
+                # how many steps did we skip by converging early? Need this to ensure learning rate schedule is correct
+                    step_offset += args.train_size * (args.epochs_per_component - epochs_since_prev_convergence)
+                    print(f"Step offset increased by {args.epochs_per_component - epochs_since_prev_convergence} epochs. steps={step_offset}, converged_epoch={converged_epoch}")
+
                 converged_epoch = epoch
 
                 # revert back to the last best version of the model and update rho
@@ -388,6 +405,9 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
                 # reset early_stop_count and train the next component
                 model.increment_component()
                 early_stop_count = 0
+                for n, param in model.named_parameters():
+                    param.requires_grad = True if n.startswith(f"flows.{model.component}") else False
+
             else:
                 # if a standard model converges once, break
                 logger.info(f"Model converged, stopping training.")
@@ -425,30 +445,56 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
 
 def evaluate(model, data_loader, args, results_type=None):
     model.eval()
-    loss = torch.stack([compute_kl_pq_loss(model, x.to(args.device), args)['nll'].detach() for (x,_) in data_loader], -1).mean().item()
+
+    if args.boosted:
+        nll = []
+        for (x, _) in data_loader:
+            z, mu, var, ldj, _ = model(x=x, components="1:c")
+            nll_i = -1.0 * (log_normal_standard(z, reduce=False).view(z.shape[0], -1).sum(1, keepdim=False) + ldj)
+            nll.append(nll_i.detach())
+
+        nll = torch.cat(nll).mean().item()
+    else:
+        nll = torch.stack([compute_kl_pq_loss(model, x.to(args.device), args)['nll'].detach() for (x,_) in data_loader], -1).mean().item()
     
     if args.save_results and results_type is not None:
-        results_msg = f'{results_type} set loss: {loss:.6f}'
+        results_msg = f'{results_type} set loss: {nll:.6f}'
         logger.info(results_msg + '\n')
         with open(args.exp_log, 'a') as ff:
             print(results_msg, file=ff)
 
-    return loss
+    return nll
 
 
 def compute_kl_pq_loss(model, x, args):
     if args.flow == "boosted":
         z_g, mu_g, var_g, ldj_g, _ = model(x=x, components="c")
-        g_nll = -1.0 * (log_normal_standard(z_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=True) + ldj_g)
-        #g_nll = -1.0 * (log_normal_normalized(z_g, mu_g, var_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=True) + ldj_g)
+        g_nll = -1.0 * (log_normal_standard(z_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
+        #g_nll = -1.0 * (log_normal_normalized(z_g, mu_g, var_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
         
         if model.all_trained or model.component > 0:
+            # Limit benefit of choosing a new component that is different from fixed components (log(-10) is pretty small)
+            G_MAX_LOSS = -10.0
+            
             fixed = '-c' if model.all_trained else '1:c-1'
-            z_G, mu_G, var_G, ldj_G, _ = model(x=x, components=fixed)
-            unconstrained_G_nll = log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=True) + ldj_G
-            #unconstrained_G_nll = log_normal_normalized(z_G, mu_G, var_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=True) + ldj_G
-            G_nll = -1.0 * torch.max(unconstrained_G_nll,
-                                     torch.ones_like(ldj_G) * G_MAX_LOSS)
+            G_nll = []
+            for i in range(args.fixed_samples):
+                z_G, mu_G, var_G, ldj_G, _ = model(x=x, components=fixed)
+                #unconstrained_G_nll = log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G
+                #unconstrained_G_nll = log_normal_normalized(z_G, mu_G, var_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G
+                #G_nll = -1.0 * torch.max(unconstrained_G_nll,
+                #                         torch.ones_like(ldj_G) * G_MAX_LOSS)
+
+                G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
+                #G_nll_i = -1.0 * (log_normal_normalized(z_G, mu_G, var_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
+                G_nll.append(G_nll_i)
+                
+            if args.fixed_samples > 1:
+                G_nll = torch.cat(G_nll)
+                g_nll = torch.cat(args.fixed_samples * [g_nll])
+            else:
+                G_nll = G_nll[0]
+            
             losses = {"nll": torch.mean(g_nll - G_nll)}
             losses["G_nll"] = torch.mean(G_nll)
             losses["g_nll"] = torch.mean(g_nll)
@@ -458,8 +504,8 @@ def compute_kl_pq_loss(model, x, args):
             losses["G_nll"] = torch.zeros_like(losses['g_nll'])
     else:
         z, z_mu, z_var, log_det_j, _ = model(x=x)
-        #log_pz = log_normal_normalized(z, z_mu, z_var, reduce=False).view(z.shape[0], -1).sum(1, keepdim=True)
-        log_pz = log_normal_standard(z, reduce=False).view(z.shape[0], -1).sum(1, keepdim=True)
+        #log_pz = log_normal_normalized(z, z_mu, z_var, reduce=False).view(z.shape[0], -1).sum(1, keepdim=False)
+        log_pz = log_normal_standard(z, reduce=False).view(z.shape[0], -1).sum(1, keepdim=False)
         nll = -1.0 * (log_pz + log_det_j)
 
         losses = {"nll": torch.mean(nll)}
@@ -482,7 +528,7 @@ def check_convergence(early_stop_count, v_loss, best_loss, epochs_since_prev_con
     else:
         time_to_update = False
 
-    model_improved = v_loss < best_loss[component]
+    model_improved = v_loss < best_loss[component] and epochs_since_prev_convergence > 1
     early_stop_flag = False
     if model_improved:
         early_stop_count = 0
