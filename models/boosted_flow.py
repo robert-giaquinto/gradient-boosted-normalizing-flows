@@ -165,7 +165,6 @@ class BoostedFlow(GenerativeFlow):
 
                 g_nll = torch.cat(num_repeats * [self._rho_gradient_g(x)])
                 G_nll = torch.cat([self._rho_gradient_G(x) for r in range(num_repeats)])
-                sum_ratio = torch.sum(torch.exp(g_nll - G_nll))
                 
                 gradient = torch.mean(g_nll - G_nll)
                 #gradient = torch.mean(G_nll - g_nll)  
@@ -173,7 +172,7 @@ class BoostedFlow(GenerativeFlow):
                 rho = min(max(prev_rho - step_size * gradient, 0.01), 100.0)
 
                 grad_msg = f'{batch_id: >3}. rho = {prev_rho:6.4f} -  {gradient:6.3f} * {step_size:7.5f} = {rho:6.4f} '
-                loss_msg = f"\tg_nll - G_nll: ({g_nll.mean():6.1f} +/- {g_nll.std():3.1f}, {G_nll.mean():6.1f}  +/- {g_nll.std():3.1f}). Sum g/G={sum_ratio:6.1f} vs n={num_repeats * x.size(0):d}"
+                loss_msg = f"\tg_nll - G_nll: ({g_nll.mean():6.1f} +/- {g_nll.std():3.1f}, {G_nll.mean():6.1f}  +/- {g_nll.std():3.1f})."
                 print(grad_msg + loss_msg, file=rho_log)
 
                 self.rho[self.component] = rho

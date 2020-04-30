@@ -260,9 +260,10 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
     best_loss = np.array([np.inf] * args.num_components)
     early_stop_count = 0
     converged_epoch = 0
+    
+    prev_lr = []
     if args.boosted:
         model.component = 0
-        prev_lr = []
         for c in range(args.num_components):
             if c != model.component:
                 optimizer.param_groups[c]['lr'] = 0.0
@@ -273,6 +274,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
             param.requires_grad = True if n.startswith(f"flows.{model.component}") else False
 
 
+    grad_norm = None
     epoch_times = []
     epoch_train = []
     epoch_valid = []
@@ -311,65 +313,39 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
                 torch.nn.utils.clip_grad_value_(model.parameters(), args.max_grad_clip)
             if args.max_grad_norm > 0:
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
-                if args.tensorboard:
-                    writer.add_scalar("grad_norm/grad_norm", grad_norm, step)
 
             # Adjust learning rates for boosted model
             if args.boosted:
-                if step > 0:  # freeze all but the new component being trained
-                    for c in range(args.num_components):
-                        optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
-            if args.tensorboard:
-                for i in range(len(optimizer.param_groups)):
-                    writer.add_scalar(f'lr/lr_{i}', optimizer.param_groups[i]['lr'], step)
-
+                update_learning_rates(prev_lr, model, optimizer, step, args)
+                
+            # batch level reporting
+            batch_reporting(writer, optimizer, losses, grad_norm, step, args)
+            
             # Perform gradient update, modify learning rate according to learning rate schedule
             optimizer.step()
             if not args.no_lr_schedule:
-                if args.lr_schedule == "plateau":
-                    scheduler.step(metrics=losses['nll'])
-                else:
-                    scheduler.step(epoch=step + step_offset)
-
-                if args.boosted:
-                    prev_lr[model.component] = optimizer.param_groups[model.component]['lr']
-
-            # batch level reporting
-            if args.tensorboard:
-                writer.add_scalar('step/train_nll', losses['nll'], step)
-                if args.boosted:
-                    writer.add_scalar('step/train_g', losses['g_nll'], step)
-                    writer.add_scalar('step/train_G', losses['G_nll'], step)
-                else:
-                    writer.add_scalar('step/log_pz', losses['log_pz'], step)
-                    writer.add_scalar('step/log_det_jacobian', losses['log_det_jacobian'], step)
-
+                prev_lr = update_scheduler(prev_lr, model, optimizer, scheduler, losses, step + step_offset, args)
+                
             step += 1
 
-        # Validation
-        val_loss = evaluate(model, val_loader, args)
+        # Validation, collect results
+        val_losses = evaluate(model, val_loader, args)
         train_loss = torch.stack(train_loss).mean().item()
         epoch_times.append(time.time() - t_start)
         epoch_train.append(train_loss)
-        epoch_valid.append(val_loss)
+        epoch_valid.append(val_losses['nll'])
 
         # Assess convergence
         component = model.component if args.boosted else 0
         converged, model_improved, early_stop_count, best_loss = check_convergence(
-            early_stop_count, val_loss, best_loss, epoch - converged_epoch, component, args)
+            early_stop_count, val_losses['nll'], best_loss, epoch - converged_epoch, component, args)
         if model_improved:
             fname = f'model_c{model.component}.pt' if args.boosted and args.save_intermediate_checkpoints else 'model.pt'
             save(model, optimizer, args.snap_dir + fname, scheduler)
 
         # epoch level reporting
-        epoch_msg = f'| {epoch: <5} | {train_loss:18.3f} | {val_loss:18.3f} | {epoch_times[-1]:13.1f} | {"T" if model_improved else "": >10}'
-        if args.boosted:
-            rho_str = '[' + ', '.join([f"{val:4.2f}" for val in model.rho.data]) + ']'
-            epoch_msg += f' | {model.component: >10} | {str(model.all_trained)[0]: >12} | {rho_str: >48}'
-        if args.tensorboard:
-            writer.add_scalar('epoch/validation', val_loss, epoch)
-            writer.add_scalar('epoch/train', train_loss, epoch)
-
+        epoch_msg = epoch_reporting(writer, model, train_loss, val_losses, epoch_times, model_improved, epoch, args)
+        
         if converged:
             logger.info(epoch_msg + ' |')
 
@@ -442,28 +418,100 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
             print('\n' + setup_msg + '\n' + timing_msg, file=ff)
 
 
+def epoch_reporting(writer, model, train_loss, val_losses, epoch_times, model_improved, epoch, args):
+    epoch_msg = f'| {epoch: <5} | {train_loss:18.3f} | {val_losses["nll"]:18.3f} | {epoch_times[-1]:13.1f} | {"T" if model_improved else "": >10}'
+    if args.boosted:
+        rho_str = '[' + ', '.join([f"{wt:4.2f}" for wt in model.rho.data]) + ']'
+        epoch_msg += f' | {model.component: >10} | {str(model.all_trained)[0]: >12} | {rho_str: >48}'
+        epoch_msg += f' | {val_losses["g_nll"]: >12.3f} | {val_losses["ratio"]:12.3f}'
+    if args.tensorboard:
+        writer.add_scalar('epoch/validation', val_losses['nll'], epoch)
+        writer.add_scalar('epoch/train', train_loss, epoch)
+        if args.boosted:
+            writer.add_scalar('epoch/validation_g', val_losses['g_nll'], epoch)
+            writer.add_scalar('epoch/validation_ratio', val_losses['ratio'], epoch)
 
+    return epoch_msg
+
+
+def batch_reporting(writer, optimizer, losses, grad_norm, step, args):
+    if args.tensorboard:
+        writer.add_scalar('step/train_nll', losses['nll'], step)
+        
+        if args.max_grad_norm > 0:
+            writer.add_scalar("grad_norm/grad_norm", grad_norm, step)
+            
+        if args.boosted:
+            writer.add_scalar('step/train_g', losses['g_nll'], step)
+            writer.add_scalar('step/train_G', losses['G_nll'], step)
+        else:
+            writer.add_scalar('step/log_pz', losses['log_pz'], step)
+            writer.add_scalar('step/log_det_jacobian', losses['log_det_jacobian'], step)
+            
+        for i in range(len(optimizer.param_groups)):
+            writer.add_scalar(f'lr/lr_{i}', optimizer.param_groups[i]['lr'], step)
+
+
+def update_learning_rates(prev_lr, model, optimizer, step, args):
+    if step > 0:  # freeze all but the new component being trained
+        for c in range(args.num_components):
+            optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
+
+
+def update_scheduler(prev_lr, model, optimizer, scheduler, losses, step, args):
+    if args.lr_schedule == "plateau":
+        scheduler.step(metrics=losses['nll'])
+    else:
+        scheduler.step(epoch=step)
+        
+    if args.boosted:
+        prev_lr[model.component] = optimizer.param_groups[model.component]['lr']
+    else:
+        prev_lr = []
+
+    return prev_lr
+
+            
 def evaluate(model, data_loader, args, results_type=None):
     model.eval()
 
     if args.boosted:
-        nll = []
+        G_nll, g_nll = [], []
         for (x, _) in data_loader:
-            z, mu, var, ldj, _ = model(x=x, components="1:c")
-            nll_i = -1.0 * (log_normal_standard(z, reduce=False).view(z.shape[0], -1).sum(1, keepdim=False) + ldj)
-            nll.append(nll_i.detach())
+            z_G, mu_G, var_G, ldj_G, _ = model(x=x, components="1:c")
+            G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
+            G_nll.append(G_nll_i.detach())
 
-        nll = torch.cat(nll).mean().item()
+            if model.component > 0 or model.all_trained:
+                z_g, mu_g, var_g, ldj_g, _ = model(x=x, components="c")
+                g_nll_i = -1.0 * (log_normal_standard(z_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
+                g_nll.append(g_nll_i.detach())
+
+        G_nll = torch.cat(G_nll)
+        mean_G_nll = G_nll.mean().item()
+        losses = {'nll': mean_G_nll}
+
+        if model.component > 0 or model.all_trained:
+            g_nll = torch.cat(g_nll)
+            mean_g_nll = g_nll.mean().item()
+            losses['g_nll'] = mean_g_nll
+            ratio = torch.mean(g_nll - G_nll)
+            losses['ratio'] = ratio
+        else:
+            losses['g_nll'] = mean_G_nll
+            losses['ratio'] = 0.0
+        
     else:
         nll = torch.stack([compute_kl_pq_loss(model, x.to(args.device), args)['nll'].detach() for (x,_) in data_loader], -1).mean().item()
+        losses = {'nll': nll}
     
     if args.save_results and results_type is not None:
-        results_msg = f'{results_type} set loss: {nll:.6f}'
+        results_msg = f'{results_type} set loss: {losses["nll"]:.6f}'
         logger.info(results_msg + '\n')
         with open(args.exp_log, 'a') as ff:
             print(results_msg, file=ff)
 
-    return nll
+    return losses
 
 
 def compute_kl_pq_loss(model, x, args):
