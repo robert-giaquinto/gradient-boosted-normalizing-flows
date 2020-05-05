@@ -13,7 +13,7 @@ def safe_log(z):
 	return torch.log(z + 1e-7)
 
 
-def load(model, optimizer, path, args, init_with_args=False, scheduler=None):
+def load(model, optimizer, path, args, init_with_args=False, scheduler=None, verbose=True):
     checkpoint = torch.load(path, map_location=args.device)
     model.load_state_dict(checkpoint['model'])
     optimizer.load_state_dict(checkpoint['optimizer'])
@@ -44,8 +44,10 @@ def load(model, optimizer, path, args, init_with_args=False, scheduler=None):
             model.all_trained = checkpoint['all_trained']
             msg += f" and all_trained={str(model.all_trained)}"
 
-    logger.info(msg)
     model.to(args.device)
+    if verbose:
+        logger.info(msg)
+
     
     
 def save(model, optimizer, path, scheduler=None):

@@ -166,8 +166,7 @@ class BoostedFlow(GenerativeFlow):
                 g_nll = torch.cat(num_repeats * [self._rho_gradient_g(x)])
                 G_nll = torch.cat([self._rho_gradient_G(x) for r in range(num_repeats)])
                 
-                gradient = torch.mean(g_nll - G_nll)
-                #gradient = torch.mean(G_nll - g_nll)  
+                gradient = torch.mean(g_nll - G_nll)  # flipped sign here because g and G have flipped signs
                 step_size = init_step_size / (0.05 * batch_id + 1)
                 rho = min(max(prev_rho - step_size * gradient, 0.01), 100.0)
 

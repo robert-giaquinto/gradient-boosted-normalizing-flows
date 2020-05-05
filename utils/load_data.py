@@ -64,7 +64,7 @@ def load_density_dataset(args):
     if args.h_size is None:
         args.h_size = args.h_size_factor * dataset.n_dims
 
-    logger.info(f"Dataset: {args.dataset} has {len(train_loader)}, {len(val_loader)}, and {len(test_loader)} minibatches of size {args.batch_size} in train, validation, and test sets.")
+    logger.info(f"Dataset: {args.dataset} has {len(train_loader)}, {len(val_loader)}, and {len(test_loader)} minibatches (batch sizes of {args.batch_size}, {args.eval_batch_size}, {args.eval_batch_size}) in train, validation, and test sets.")
     logger.info(f"Dimension={dataset.n_dims}. Total samples: {len(train_loader.sampler)}, {len(val_loader.sampler)}, and {len(test_loader.sampler)} in train, validation, and test sets.\n")
     return train_loader, val_loader, test_loader, args
 

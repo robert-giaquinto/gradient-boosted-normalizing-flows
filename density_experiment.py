@@ -89,6 +89,7 @@ parser.add_argument("--num_init_batches", type=int,default=15, help="Number of b
 parser.add_argument("--warmup_epochs", type=int, default=2, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
 parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', None])
+parser.add_argument('--lr_restarts', type=int, default=1, help='If using a cosine learning rate, how many times should the LR schedule restart? Must evenly divide epochs')
 parser.add_argument("--max_grad_clip", type=float, default=0, help="Max gradient value (clip above max_grad_clip, 0 for off)")
 parser.add_argument("--max_grad_norm", type=float, default=5.0, help="Max norm of gradient (clip above max_grad_norm, 0 for off)")
 
@@ -153,6 +154,9 @@ def parse_args(main_args=None):
     args.density_evaluation = True
     args.shuffle = True
     args.init_epoch = min(max(1, args.init_epoch), args.epochs)
+    if args.dataset == "bsds300":
+        args.batch_size = min(32, args.batch_size)
+        args.eval_batch_size = min(32, args.eval_batch_size)
 
     if args.h_size is None and args.h_size_factor is None:
         raise ValueError("Must specify the hidden size h_size, or provide the size of hidden layer relative to the data with h_size_factor")
@@ -192,8 +196,13 @@ def parse_args(main_args=None):
         args.snap_dir += f'_{args.component_type}_C{args.num_components}'
         if args.fixed_samples < 1:
             raise ValueError(f"Number of fixed_samples must be greater than 0, you gave fixed_samples={args.fixed_samples}")
+        if (args.epochs_per_component % args.lr_restarts) != 0:
+            raise ValueError(f"lr_restarts {args.lr_restarts} must evenly divide epochs_per_component {args.epochs_per_component}")
     else:
         args.num_components = 1
+        if (args.epochs % args.lr_restarts) != 0:
+            raise ValueError(f"lr_restarts {args.lr_restarts} must evenly divide epochs {args.epochs}")
+
 
     args.snap_dir += f'_K{args.num_flows}'
     if args.flow == "realnvp" or args.component_type == "realnvp":
@@ -251,47 +260,38 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
     if args.tensorboard:
         writer = SummaryWriter(args.snap_dir)
         
-    header_msg = f'| Epoch | {"TRAIN": <14}{"Loss": >4} | {"VALIDATION": <14}{"Loss": >4} | {"TIMING":<8}{"(sec)":>4} | {"Improved": >10} |'
-    header_msg += f' {"Component": >10} | {"All Trained": >12} | {"Rho": >48} |' if args.boosted else ''
+    header_msg = f'| Epoch | {"TRAIN": <14}{"Loss": >4} | {"VALIDATION": <14}{"Loss": >4} | {"TIMING":<8}{"(sec)":>4} | {"Improved": >8} |'
+    header_msg += f' {"Component": >9} | {"All Trained": >11} | {"Rho": >{args.num_components * 6}} |' if args.boosted else ''
     logger.info('|' + "-"*(len(header_msg)-2) + '|')
     logger.info(header_msg)
     logger.info('|' + "-"*(len(header_msg)-2) + '|')
     
     best_loss = np.array([np.inf] * args.num_components)
     early_stop_count = 0
-    converged_epoch = 0
+    converged_epoch = 0  # for boosting, helps keep track how long the current component has been training
     
-    prev_lr = []
     if args.boosted:
         model.component = 0
-        for c in range(args.num_components):
-            if c != model.component:
-                optimizer.param_groups[c]['lr'] = 0.0
-
-            prev_lr.append(optimizer.param_groups[c]['lr'])
-
-        for n, param in model.named_parameters():
-            param.requires_grad = True if n.startswith(f"flows.{model.component}") else False
-
+        prev_lr = init_boosted_lr(model, optimizer, args)
 
     grad_norm = None
     epoch_times = []
     epoch_train = []
     epoch_valid = []
-    step_offset = 0
     step = 0
     for epoch in range(args.init_epoch, args.epochs + 1):
 
         model.train()
         train_loss = []
         t_start = time.time()
+        
         for batch_id, (x, _) in enumerate(train_loader):
 
             # initialize data and optimizer
             x = x.to(args.device)
             optimizer.zero_grad()
 
-            # initialize ActNorm on first step
+            # initialize ActNorm on first steps
             if (args.flow =='glow' or args.component_type == 'glow') and step < args.num_init_batches:
                 with torch.no_grad():
                     if args.boosted:
@@ -314,7 +314,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
             if args.max_grad_norm > 0:
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-            # Adjust learning rates for boosted model
+            # Adjust learning rates for boosted model, keep fixed components frozen
             if args.boosted:
                 update_learning_rates(prev_lr, model, optimizer, step, args)
                 
@@ -324,7 +324,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
             # Perform gradient update, modify learning rate according to learning rate schedule
             optimizer.step()
             if not args.no_lr_schedule:
-                prev_lr = update_scheduler(prev_lr, model, optimizer, scheduler, losses, step + step_offset, args)
+                prev_lr = update_scheduler(prev_lr, model, optimizer, scheduler, losses, step, args)
                 
             step += 1
 
@@ -345,25 +345,19 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
 
         # epoch level reporting
         epoch_msg = epoch_reporting(writer, model, train_loss, val_losses, epoch_times, model_improved, epoch, args)
+
         
         if converged:
             logger.info(epoch_msg + ' |')
+            logger.info("-"*(len(header_msg)))
 
             if args.boosted:
-                epochs_since_prev_convergence = epoch - converged_epoch
-                if (epochs_since_prev_convergence % args.epochs_per_component) > 0:
-                # how many steps did we skip by converging early? Need this to ensure learning rate schedule is correct
-                    step_offset += args.train_size * (args.epochs_per_component - epochs_since_prev_convergence)
-                    print(f"Step offset increased by {args.epochs_per_component - epochs_since_prev_convergence} epochs. steps={step_offset}, converged_epoch={converged_epoch}")
-
                 converged_epoch = epoch
 
                 # revert back to the last best version of the model and update rho
                 fname = f'model_c{model.component}.pt' if args.save_intermediate_checkpoints else 'model.pt'
-                load(model=model, optimizer=optimizer, path=args.snap_dir + fname, args=args, scheduler=scheduler)
+                load(model=model, optimizer=optimizer, path=args.snap_dir + fname, args=args, scheduler=scheduler, verbose=False)
                 model.update_rho(train_loader)
-                if model.component > 0 or model.all_trained:
-                    logger.info('Rho Updated: ' + ' '.join([f"{val:1.2f}" for val in model.rho.data]))
 
                 last_component = model.component == (args.num_components - 1)
                 no_fine_tuning = args.epochs <= args.epochs_per_component * args.num_components
@@ -378,12 +372,11 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
                 # else if not done training: save model with updated rho
                 save(model, optimizer, args.snap_dir + fname, scheduler)
                 
-                # reset early_stop_count and train the next component
+                # reset optimizer, scheduler, and early_stop_count and train the next component
                 model.increment_component()
                 early_stop_count = 0
-                for n, param in model.named_parameters():
-                    param.requires_grad = True if n.startswith(f"flows.{model.component}") else False
-
+                optimizer, scheduler = init_optimizer(model, args, verbose=False)
+                prev_lr = init_boosted_lr(model, optimizer, args)
             else:
                 # if a standard model converges once, break
                 logger.info(f"Model converged, stopping training.")
@@ -419,10 +412,10 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
 
 
 def epoch_reporting(writer, model, train_loss, val_losses, epoch_times, model_improved, epoch, args):
-    epoch_msg = f'| {epoch: <5} | {train_loss:18.3f} | {val_losses["nll"]:18.3f} | {epoch_times[-1]:13.1f} | {"T" if model_improved else "": >10}'
+    epoch_msg = f'| {epoch: <5} | {train_loss:18.3f} | {val_losses["nll"]:18.3f} | {epoch_times[-1]:13.1f} | {"T" if model_improved else "": >8}'
     if args.boosted:
         rho_str = '[' + ', '.join([f"{wt:4.2f}" for wt in model.rho.data]) + ']'
-        epoch_msg += f' | {model.component: >10} | {str(model.all_trained)[0]: >12} | {rho_str: >48}'
+        epoch_msg += f' | {model.component: >9} | {str(model.all_trained)[0]: >11} | {rho_str: >{args.num_components * 6}}'
         epoch_msg += f' | {val_losses["g_nll"]: >12.3f} | {val_losses["ratio"]:12.3f}'
     if args.tensorboard:
         writer.add_scalar('epoch/validation', val_losses['nll'], epoch)
@@ -453,16 +446,15 @@ def batch_reporting(writer, optimizer, losses, grad_norm, step, args):
 
 
 def update_learning_rates(prev_lr, model, optimizer, step, args):
-    if step > 0:  # freeze all but the new component being trained
-        for c in range(args.num_components):
-            optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
+    for c in range(args.num_components):
+        optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
 
 
 def update_scheduler(prev_lr, model, optimizer, scheduler, losses, step, args):
     if args.lr_schedule == "plateau":
         scheduler.step(metrics=losses['nll'])
     else:
-        scheduler.step(epoch=step)
+        scheduler.step()
         
     if args.boosted:
         prev_lr[model.component] = optimizer.param_groups[model.component]['lr']
@@ -470,6 +462,21 @@ def update_scheduler(prev_lr, model, optimizer, scheduler, losses, step, args):
         prev_lr = []
 
     return prev_lr
+
+
+def init_boosted_lr(model, optimizer, args):
+    learning_rates = []
+    for c in range(args.num_components):
+        if c != model.component:
+            optimizer.param_groups[c]['lr'] = 0.0
+            
+        learning_rates.append(optimizer.param_groups[c]['lr'])
+            
+    for n, param in model.named_parameters():
+        param.requires_grad = True if n.startswith(f"flows.{model.component}") else False
+
+    return learning_rates
+
 
             
 def evaluate(model, data_loader, args, results_type=None):
@@ -566,17 +573,17 @@ def compute_kl_pq_loss(model, x, args):
     return losses
 
 
-def check_convergence(early_stop_count, v_loss, best_loss, epochs_since_prev_convergence, component, args):
+def check_convergence(early_stop_count, v_loss, best_loss, epoch, component, args):
     """
     Verify if a boosted component has converged
     """
     if args.boosted:
         # Consider the boosted model's component as converged if a pre-set number of epochs have elapsed
-        time_to_update = epochs_since_prev_convergence % args.epochs_per_component == 0
+        time_to_update = epoch % args.epochs_per_component == 0
     else:
         time_to_update = False
 
-    model_improved = v_loss < best_loss[component] and epochs_since_prev_convergence > 1
+    model_improved = v_loss < best_loss[component]
     early_stop_flag = False
     if model_improved:
         early_stop_count = 0

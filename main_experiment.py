@@ -1,4 +1,3 @@
-
 import argparse
 import datetime
 import torch
@@ -127,6 +126,7 @@ parser.set_defaults(batch_norm=True)
 # Boosting parameters and optimization settings
 parser.add_argument('--regularization_rate', type=float, default=1.0, help='Regularization penalty for boosting.')
 parser.add_argument('--epochs_per_component', type=int, default=100, help='Number of epochs to train each component of a boosted model. Defaults to max(annealing_schedule, epochs_per_component). Ignored for non-boosted models.')
+parser.add_argument('--lr_restarts', type=int, default=1, help='If using a cosine learning rate, how many times should the LR schedule restart?')
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
                     help='Initialization scheme for boosted parameter rho')
 parser.add_argument('--rho_iters', type=int, default=100, help='Maximum number of SGD iterations for training boosting weights')
@@ -197,9 +197,14 @@ def parse_args(main_args=None):
     if args.flow == 'iaf':
         args.snap_dir += '_hidden' + str(args.coupling_network_depth) + '_hsize' + str(args.h_size)
     if args.flow == 'boosted':
+        if  (args.epochs_per_component % args.lr_restarts) != 0:
+            raise ValueError(f"lr_restarts {args.lr_restarts} must evenly divide epochs_per_component {args.epochs_per_component}")
         if args.regularization_rate < 0.0:
             raise ValueError("For boosting the regularization_rate should be greater than or equal to zero.")
         args.snap_dir += '_' + args.component_type + '_C' + str(args.num_components) + '_reg' + f'{int(100*args.regularization_rate):d}'
+    else:
+        if (args.epochs % args.lr_restarts) != 0:
+            raise ValueError(f"lr_restarts {args.lr_restarts} must evenly divide epochs {args.epochs}")
 
     if args.flow in ["realnvp"] or args.component_type in ["realnvp"]:
         args.snap_dir += '_' + args.coupling_network + str(args.coupling_network_depth) + '_hsize' + str(args.h_size)
@@ -272,17 +277,18 @@ def init_model(args):
     return model
 
 
-def init_optimizer(model, args):
+def init_optimizer(model, args, verbose=True):
     """
     group model parameters to more easily modify learning rates of components (flow parameters)
     """
-    logger.info('OPTIMIZER:')
-    warmup_mult = 1000.0
-    base_lr = (args.learning_rate / warmup_mult) if args.warmup_epochs > 0 else args.learning_rate
-    logger.info(f"Initializing Adamax optimizer with base learning rate={args.learning_rate}, weight decay={args.weight_decay}.")
+    if verbose:
+        logger.info('OPTIMIZER:')
+        logger.info(f"Initializing Adamax optimizer with base learning rate={args.learning_rate}, weight decay={args.weight_decay}.")
     
     if args.flow == 'boosted':
-        logger.info("For boosted model, grouping parameters according to Component Id:")
+        if verbose:
+            logger.info("For boosted model, grouping parameters according to Component Id:")
+            
         flow_params = {f"{c}": torch.nn.ParameterList() for c in range(args.num_components)}
         flow_labels = {f"{c}": [] for c in range(args.num_components)}
         vae_params = torch.nn.ParameterList()
@@ -302,40 +308,59 @@ def init_optimizer(model, args):
         all_params = []
         for c in range(args.num_components):
             all_params.append(flow_params[f"{c}"])
-            logger.info(f"Grouping [{', '.join(flow_labels[str(c)])}] as Component {c}'s parameters.")
+            if verbose:
+                logger.info(f"Grouping [{', '.join(flow_labels[str(c)])}] as Component {c}'s parameters.")
 
         # vae parameters are at the end of the list (may not exist if doing density estimation)
         if len(vae_params) > 0:
             all_params.append(vae_params)
-            logger.info(f"Grouping [{', '.join(vae_labels)}] as the VAE parameters.\n")
+            if verbose:
+                logger.info(f"Grouping [{', '.join(vae_labels)}] as the VAE parameters.\n")
             
-        optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=base_lr, weight_decay=args.weight_decay)
+        optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=args.learning_rate, weight_decay=args.weight_decay)
     else:
-        logger.info(f"Initializing optimizer for standard models with learning rate={args.learning_rate}.\n")
-        optimizer = optim.Adamax(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
+        if verbose:
+            logger.info(f"Initializing optimizer for standard models with learning rate={args.learning_rate}.\n")
+            
+        optimizer = optim.Adamax(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
 
     if args.no_lr_schedule:
         scheduler = None
     else:
         if args.lr_schedule == "plateau":
-            logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience} steps until it reaches 1e-5.")
+            if verbose:
+                logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience * args.train_size} epochs until it reaches 1e-6.")
+                
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                                    factor=0.5,
-                                                                   patience=args.patience,
-                                                                   min_lr=1e-5,
+                                                                   patience=args.patience * args.train_size,
+                                                                   min_lr=1e-6,
                                                                    verbose=True,
                                                                    threshold_mode='abs')
         elif args.lr_schedule == "cosine":
-            if args.boosted:
-                logger.info(f"Using a Cyclic Cosine Annealing LR as a learning-rate schedule, annealed over {args.epochs_per_component * args.train_size} training steps, restarting with each new component.")
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=args.epochs_per_component * args.train_size, eta_min=1e-6)
+            eta_min = 0.0
+            epochs = args.epochs_per_component if args.boosted else args.epochs
+            msg = "Using a cosine annealing learning-rate schedule, "
+            if args.lr_restarts > 1:
+                steps_per_cycle = int(epochs / args.lr_restarts) * args.train_size
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=steps_per_cycle, eta_min=eta_min)
+                msg += f"annealed over {steps_per_cycle} training steps ({int(epochs / args.lr_restarts)} epochs), restarting {args.lr_restarts} times within each learning cycle."
+
             else:
-                logger.info(f"Using CosineAnnealingLR as a learning-rate schedule, annealed over {args.epochs * args.train_size} training steps.")
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs * args.train_size, eta_min=1e-6)
+                total_steps = epochs * args.train_size
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=eta_min)
+                msg += f"annealed over {total_steps} training steps ({epochs} epochs), restarting with each new component (if boosted)."
+
+            if verbose:
+                logger.info(msg)
+                 
 
     if args.warmup_epochs > 0:
-        logger.info(f"Gradually warming up learning rate from {base_lr} to {args.learning_rate} over the first {args.warmup_epochs * args.train_size} steps.\n")
-        warmup_scheduler = GradualWarmupScheduler(optimizer, multiplier=warmup_mult, total_epoch=args.warmup_epochs * args.train_size, after_scheduler=scheduler)
+        if verbose:
+            logger.info(f"Gradually warming up learning rate from 0.0 to {args.learning_rate} over the first {args.warmup_epochs * args.train_size} steps.\n")
+
+        warmup_steps = args.warmup_epochs * args.train_size
+        warmup_scheduler = GradualWarmupScheduler(optimizer, total_epoch=warmup_steps, after_scheduler=scheduler)
         return optimizer, warmup_scheduler
     else:
         return optimizer, scheduler

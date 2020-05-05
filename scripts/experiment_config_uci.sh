@@ -4,6 +4,7 @@ epochs=500
 warmup_epochs=0
 learning_rate=0.001
 lr_schedule=cosine
+patience=20
 batch_size=256
 epochs_per_component=500
 max_grad_norm=5.0
