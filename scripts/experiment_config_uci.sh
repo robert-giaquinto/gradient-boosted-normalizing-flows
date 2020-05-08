@@ -5,3 +5,4 @@ warmup_epochs=0
 epochs_per_component=250
 weight_decay=0.000001
 coupling_network_depth=1
+batch_size=512

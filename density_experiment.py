@@ -157,7 +157,7 @@ def parse_args(main_args=None):
     args.init_epoch = min(max(1, args.init_epoch), args.epochs)
     if args.dataset == "bsds300":
         args.batch_size = min(32, args.batch_size)
-        args.eval_batch_size = min(32, args.eval_batch_size)
+        args.eval_batch_size = min(16, args.eval_batch_size)
 
     if args.h_size is None and args.h_size_factor is None:
         raise ValueError("Must specify the hidden size h_size, or provide the size of hidden layer relative to the data with h_size_factor")
