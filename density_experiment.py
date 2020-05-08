@@ -507,12 +507,12 @@ def evaluate(model, data_loader, args, results_type=None):
         G_nll, g_nll = [], []
         for (x, _) in data_loader:
             z_G, mu_G, var_G, ldj_G, _ = model(x=x, components="1:c")
-            G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
+            G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=False, device=args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
             G_nll.append(G_nll_i.detach())
 
             if model.component > 0 or model.all_trained:
                 z_g, mu_g, var_g, ldj_g, _ = model(x=x, components="c")
-                g_nll_i = -1.0 * (log_normal_standard(z_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
+                g_nll_i = -1.0 * (log_normal_standard(z_g, reduce=False, device=args.device).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
                 g_nll.append(g_nll_i.detach())
 
         G_nll = torch.cat(G_nll)
@@ -545,8 +545,8 @@ def evaluate(model, data_loader, args, results_type=None):
 def compute_kl_pq_loss(model, x, args):
     if args.flow == "boosted":
         z_g, mu_g, var_g, ldj_g, _ = model(x=x, components="c")
-        g_nll = -1.0 * (log_normal_standard(z_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
-        #g_nll = -1.0 * (log_normal_normalized(z_g, mu_g, var_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
+        g_nll = -1.0 * (log_normal_standard(z_g, reduce=False, device=args.device).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
+        #g_nll = -1.0 * (log_normal_normalized(z_g, mu_g, var_g, reduce=False, device=args.device).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
         
         if model.all_trained or model.component > 0:
             # Limit benefit of choosing a new component that is different from fixed components (log(-10) is pretty small)
@@ -556,13 +556,13 @@ def compute_kl_pq_loss(model, x, args):
             G_nll = []
             for i in range(args.fixed_samples):
                 z_G, mu_G, var_G, ldj_G, _ = model(x=x, components=fixed)
-                #unconstrained_G_nll = log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G
-                #unconstrained_G_nll = log_normal_normalized(z_G, mu_G, var_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G
+                #unconstrained_G_nll = log_normal_standard(z_G, reduce=False, device=args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G
+                #unconstrained_G_nll = log_normal_normalized(z_G, mu_G, var_G, reduce=False, device=args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G
                 #G_nll = -1.0 * torch.max(unconstrained_G_nll,
                 #                         torch.ones_like(ldj_G) * G_MAX_LOSS)
 
-                G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
-                #G_nll_i = -1.0 * (log_normal_normalized(z_G, mu_G, var_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
+                G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=False, device=args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
+                #G_nll_i = -1.0 * (log_normal_normalized(z_G, mu_G, var_G, reduce=False, device=args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
                 G_nll.append(G_nll_i)
                 
             if args.fixed_samples > 1:
@@ -580,8 +580,8 @@ def compute_kl_pq_loss(model, x, args):
             losses["G_nll"] = torch.zeros_like(losses['g_nll'])
     else:
         z, z_mu, z_var, log_det_j, _ = model(x=x)
-        #log_pz = log_normal_normalized(z, z_mu, z_var, reduce=False).view(z.shape[0], -1).sum(1, keepdim=False)
-        log_pz = log_normal_standard(z, reduce=False).view(z.shape[0], -1).sum(1, keepdim=False)
+        #log_pz = log_normal_normalized(z, z_mu, z_var, reduce=False, device=args.device).view(z.shape[0], -1).sum(1, keepdim=False)
+        log_pz = log_normal_standard(z, reduce=False, device=args.device).view(z.shape[0], -1).sum(1, keepdim=False)
         nll = -1.0 * (log_pz + log_det_j)
 
         losses = {"nll": torch.mean(nll)}
