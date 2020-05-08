@@ -20,8 +20,8 @@ from models.nlsq import NLSqFlow
 
 from utils.density_plotting import plot
 from utils.load_data import make_toy_density, make_toy_sampler
-from main_experiment import init_log
-from utils.warmup_scheduler import GradualWarmupScheduler
+from utils.utilities import init_log
+from optimization.optimizers import GradualWarmupScheduler
 
 
 logger = logging.getLogger(__name__)

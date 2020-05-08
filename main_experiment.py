@@ -25,10 +25,10 @@ from models.nlsq import NLSqVAE
 
 from optimization.training import train
 from optimization.evaluation import evaluate, evaluate_likelihood
+from optimization.optimizers import init_optimizer
 
 from utils.load_data import load_image_dataset
-from utils.utilities import load, save
-from utils.warmup_scheduler import GradualWarmupScheduler
+from utils.utilities import load, save, init_log
 
 
 logger = logging.getLogger(__name__)
@@ -91,15 +91,17 @@ parser.add_argument('--epochs', type=int, default=100, help='number of epochs to
 parser.add_argument('--early_stopping_epochs', type=int, default=100, help='number of early stopping epochs')
 parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
 parser.add_argument('--learning_rate', type=float, default=0.0005, help='learning rate')
+parser.add_argument('--min_lr', type=float, default=1e-6, help='Minimum learning rate used in cyclic learning rates schedulers')
 parser.add_argument('--annealing_schedule', type=int, default=100, help='Number of epochs to anneal the KL term. Set to 0 to turn beta annealing off. Applies this annealing schedule to each component of a boosted model.')
 parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
 parser.add_argument('--min_beta', type=float, default=0.0, help='min beta for warm-up')
 parser.add_argument('--no_annealing', action='store_true', default=False, help='disables annealing while training')
 parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay parameter in Adamax')
-parser.add_argument("--warmup_epochs", type=int, default=5, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
+parser.add_argument("--warmup_epochs", type=int, default=0, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
-parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', None])
-parser.add_argument('--patience', type=int, default=5000, help='If using LR schedule, number of steps before reducing LR.')
+parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', 'test', 'cyclic', None])
+parser.add_argument('--patience', type=int, default=5, help='If using LR schedule, number of epochs before reducing LR.')
+parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'], help='Use AdamW or SDG as optimizer?')
 parser.add_argument("--max_grad_clip", type=float, default=0, help="Max gradient value (clip above max_grad_clip, 0 for off)")
 parser.add_argument("--max_grad_norm", type=float, default=100.0, help="Max norm of gradient (clip above max_grad_norm, 0 for off)")
 
@@ -275,105 +277,6 @@ def init_model(args):
         raise ValueError('Invalid flow choice')
 
     return model
-
-
-def init_optimizer(model, args, verbose=True):
-    """
-    group model parameters to more easily modify learning rates of components (flow parameters)
-    """
-    if verbose:
-        logger.info('OPTIMIZER:')
-        logger.info(f"Initializing Adamax optimizer with base learning rate={args.learning_rate}, weight decay={args.weight_decay}.")
-    
-    if args.flow == 'boosted':
-        if verbose:
-            logger.info("For boosted model, grouping parameters according to Component Id:")
-            
-        flow_params = {f"{c}": torch.nn.ParameterList() for c in range(args.num_components)}
-        flow_labels = {f"{c}": [] for c in range(args.num_components)}
-        vae_params = torch.nn.ParameterList()
-        vae_labels = []
-        for name, param in model.named_parameters():
-            if name.startswith("flow"):
-                pos = name.find(".")
-                component_id = name[(pos + 1):(pos + 2)]
-                flow_params[component_id].append(param)
-                flow_labels[component_id].append(name)
-            else:
-                vae_labels.append(name)
-                vae_params.append(param)
-
-        # collect all parameters into a single list
-        # the first args.num_components elements in the parameters list correspond boosting parameters
-        all_params = []
-        for c in range(args.num_components):
-            all_params.append(flow_params[f"{c}"])
-            if verbose:
-                logger.info(f"Grouping [{', '.join(flow_labels[str(c)])}] as Component {c}'s parameters.")
-
-        # vae parameters are at the end of the list (may not exist if doing density estimation)
-        if len(vae_params) > 0:
-            all_params.append(vae_params)
-            if verbose:
-                logger.info(f"Grouping [{', '.join(vae_labels)}] as the VAE parameters.\n")
-            
-        optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=args.learning_rate, weight_decay=args.weight_decay)
-    else:
-        if verbose:
-            logger.info(f"Initializing optimizer for standard models with learning rate={args.learning_rate}.\n")
-            
-        optimizer = optim.Adamax(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
-
-    if args.no_lr_schedule:
-        scheduler = None
-    else:
-        if args.lr_schedule == "plateau":
-            if verbose:
-                logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience * args.train_size} epochs until it reaches 1e-6.")
-                
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                                   factor=0.5,
-                                                                   patience=args.patience * args.train_size,
-                                                                   min_lr=1e-6,
-                                                                   verbose=True,
-                                                                   threshold_mode='abs')
-        elif args.lr_schedule == "cosine":
-            eta_min = 0.0
-            epochs = args.epochs_per_component if args.boosted else args.epochs
-            msg = "Using a cosine annealing learning-rate schedule, "
-            if args.lr_restarts > 1:
-                steps_per_cycle = int(epochs / args.lr_restarts) * args.train_size
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=steps_per_cycle, eta_min=eta_min)
-                msg += f"annealed over {steps_per_cycle} training steps ({int(epochs / args.lr_restarts)} epochs), restarting {args.lr_restarts} times within each learning cycle."
-
-            else:
-                total_steps = epochs * args.train_size
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=eta_min)
-                msg += f"annealed over {total_steps} training steps ({epochs} epochs), restarting with each new component (if boosted)."
-
-            if verbose:
-                logger.info(msg)
-                 
-
-    if args.warmup_epochs > 0:
-        if verbose:
-            logger.info(f"Gradually warming up learning rate from 0.0 to {args.learning_rate} over the first {args.warmup_epochs * args.train_size} steps.\n")
-
-        warmup_steps = args.warmup_epochs * args.train_size
-        warmup_scheduler = GradualWarmupScheduler(optimizer, total_epoch=warmup_steps, after_scheduler=scheduler)
-        return optimizer, warmup_scheduler
-    else:
-        return optimizer, scheduler
-
-
-def init_log(args):
-    log_format = '%(asctime)s : %(message)s'
-    if args.save_log:
-        filename = os.path.join(args.snap_dir, "log.txt")
-        print(f"Saving log output to file: {filename}")
-        logging.basicConfig(filename=filename, format=log_format, datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO)
-    else:
-        logging.basicConfig(format=log_format, level=logging.INFO)
 
 
 def main(main_args=None):

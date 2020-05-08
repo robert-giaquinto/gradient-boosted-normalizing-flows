@@ -13,11 +13,10 @@ import torch.backends.cudnn as cudnn
 import torchvision.utils as tv_utils
 import torch.optim as optim
 
-from main_experiment import init_log
-from utils.utilities import save, load
+from optimization.optimizers import init_optimizer
+from utils.utilities import save, load, init_log
 from utils.load_data import load_image_dataset
 from utils.distributions import log_normal_diag
-from utils.warmup_scheduler import GradualWarmupScheduler
 
 from models.boosted_flow import BoostedFlow
 from models.realnvp import RealNVPFlow
@@ -62,13 +61,18 @@ parser.set_defaults(testing=True)
 parser.add_argument('--epochs', type=int, default=100, help='number of epochs to train (default: 100)')
 parser.add_argument('--early_stopping_epochs', type=int, default=100, help='number of early stopping epochs')
 parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
-parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
+parser.add_argument('--eval_batch_size', type=int, default=1024, help='input batch size for training (default: 1024)')
+parser.add_argument('--learning_rate', type=float, default=None, help='learning rate, if none use best values found during LR range test')
+parser.add_argument('--min_lr', type=float, default=None, help='Minimum learning rate used in cyclic learning rates schedulers')
 parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay parameter in Adamax')
-parser.add_argument("--warmup_epochs", type=int, default=5, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
+parser.add_argument("--warmup_epochs", type=int, default=0, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
 parser.add_argument("--num_init_batches", type=int,default=15, help="Number of batches to use for Act Norm initialisation")
+parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sdg'], help='Use AdamW or SDG as optimizer?')
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
-parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', None])
-parser.add_argument('--patience', type=int, default=5000, help='If using LR schedule, number of steps before reducing LR.')
+parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', 'test', 'cyclic', None])
+parser.add_argument('--lr_restarts', type=int, default=1, help='If using a cosine learning rate, how many times should the LR schedule restart? Must evenly divide epochs')
+parser.add_argument('--patience', type=int, default=5, help='If using LR schedule, number of epochs before reducing LR.')
+parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'], help='Use AdamW or SDG as optimizer?')
 parser.add_argument("--max_grad_clip", type=float, default=0, help="Max gradient value (clip above - for off)")
 parser.add_argument("--max_grad_norm", type=float, default=50.0, help="Max norm of gradient (clip above - 0 for off)")
 
@@ -214,64 +218,6 @@ def init_model(args):
     #    model = torch.nn.DataParallel(model, args.gpu_ids)
 
     return model
-
-
-
-#
-#  TODO UPDATE WITH MAINS INITOPTIMIZER
-#
-def init_optimizer(model, args):
-    """
-    group model parameters to more easily modify learning rates of components (flow parameters)
-    """
-    logger.info('OPTIMIZER:')
-    warmup_mult = 1000.0
-    base_lr = (args.learning_rate / warmup_mult) if args.warmup_epochs > 0 else args.learning_rate
-    logger.info(f"Initializing Adamax optimizer with base learning rate={args.learning_rate}, weight decay={args.weight_decay}.")
-    
-    if args.flow == 'boosted':
-        logger.info("For boosted model, grouping parameters according to Component Id:")
-
-        flow_params = {f"{c}": torch.nn.ParameterList() for c in range(args.num_components)}
-        flow_labels = {f"{c}": [] for c in range(args.num_components)}
-        for name, param in model.named_parameters():
-            pos = name.find(".")
-            component_id = name[(pos + 1):(pos + 2)]
-            flow_params[component_id].append(param)
-            flow_labels[component_id].append(name)
-
-        # collect all parameters into a single list
-        # the first args.num_components elements in the parameters list correspond boosting parameters
-        all_params = []
-        for c in range(args.num_components):
-            all_params.append(flow_params[f"{c}"])
-            logger.info(f"Grouping [{', '.join(flow_labels[str(c)])}] as Component {c}'s parameters.")
-
-        optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=base_lr, weight_decay=args.weight_decay)
-    else:
-        optimizer = optim.Adamax(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
-
-    if args.no_lr_schedule:
-        scheduler = None
-    else:
-        if args.lr_schedule == "plateau":
-            logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience} steps until it reaches 1e-5.")
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                                   factor=0.5,
-                                                                   patience=args.patience,
-                                                                   min_lr=1e-5,
-                                                                   verbose=True,
-                                                                   threshold_mode='abs')
-        elif args.lr_schedule == "cosine":
-            logger.info(f"Using CosineAnnealingLR as a learning-rate schedule, annealed over {args.epochs * args.train_size} training steps.")
-            scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, args.epochs * args.train_size)
-
-    if args.warmup_epochs > 0:
-        logger.info(f"Gradually warming up learning rate from {base_lr} to {args.learning_rate} over the first {args.warmup_epochs * args.train_size} steps.\n")
-        warmup_scheduler = GradualWarmupScheduler(optimizer, multiplier=warmup_mult, total_epoch=args.warmup_epochs * args.train_size, after_scheduler=scheduler)
-        return optimizer, warmup_scheduler
-    else:
-        return optimizer, scheduler
 
 
 def compute_loss(z, z_mu, z_var, logdet, y, y_logits, dim_prod, args):

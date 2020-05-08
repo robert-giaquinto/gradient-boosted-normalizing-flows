@@ -13,6 +13,17 @@ def safe_log(z):
 	return torch.log(z + 1e-7)
 
 
+def init_log(args):
+    log_format = '%(asctime)s : %(message)s'
+    if args.save_log:
+        filename = os.path.join(args.snap_dir, "log.txt")
+        print(f"Saving log output to file: {filename}")
+        logging.basicConfig(filename=filename, format=log_format, datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO)
+    else:
+        logging.basicConfig(format=log_format, level=logging.INFO)
+
+
+
 def load(model, optimizer, path, args, init_with_args=False, scheduler=None, verbose=True):
     checkpoint = torch.load(path, map_location=args.device)
     model.load_state_dict(checkpoint['model'])

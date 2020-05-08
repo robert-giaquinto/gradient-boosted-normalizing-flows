@@ -9,15 +9,14 @@ import logging
 import time
 from tensorboardX import SummaryWriter
 from shutil import copyfile
-from utils.utilities import save, load
 
+from optimization.optimizers import init_optimizer
 from models.boosted_flow import BoostedFlow
 from models.realnvp import RealNVPFlow
 from models.glow import Glow
-
+from utils.utilities import save, load, init_log
 from utils.load_data import load_density_dataset
 from utils.distributions import log_normal_diag, log_normal_standard, log_normal_normalized
-from main_experiment import init_optimizer, init_log
 
 
 logger = logging.getLogger(__name__)
@@ -78,18 +77,20 @@ sr.add_argument('--discard_results', action='store_false', dest='save_results', 
 parser.set_defaults(save_results=True)
 
 # optimization settings
-parser.add_argument('--epochs', type=int, default=500, help='Maximum number of epochs to train (default: 1000)')
-parser.add_argument('--early_stopping_epochs', type=int, default=25, help='number of early stopping epochs')
-parser.add_argument('--batch_size', type=int, default=256, help='input batch size for training (default: 256)')
-parser.add_argument('--eval_batch_size', type=int, default=1024, help='input batch size for training (default: 1024)')
-parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
-parser.add_argument('--patience', type=int, default=5000, help='If using LR schedule, number of steps before reducing LR.')
+parser.add_argument('--epochs', type=int, default=250, help='Maximum number of epochs to train')
+parser.add_argument('--early_stopping_epochs', type=int, default=50, help='number of early stopping epochs')
+parser.add_argument('--batch_size', type=int, default=512, help='input batch size for training')
+parser.add_argument('--eval_batch_size', type=int, default=1024, help='batch size for evaluation with non-boosted models')
+parser.add_argument('--learning_rate', type=float, default=None, help='learning rate, if none use best values found during LR range test for that dataset')
+parser.add_argument('--min_lr', type=float, default=None, help='Minimum learning rate used in cyclic learning rates schedulers')
+parser.add_argument('--patience', type=int, default=5, help='If using LR schedule, number of epochs before reducing LR.')
 parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay parameter in Adamax')
 parser.add_argument("--num_init_batches", type=int,default=15, help="Number of batches to use for Act Norm initialisation")
-parser.add_argument("--warmup_epochs", type=int, default=2, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
+parser.add_argument("--warmup_epochs", type=int, default=0, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
-parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', None])
+parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', 'test', 'cyclic', None])
 parser.add_argument('--lr_restarts', type=int, default=1, help='If using a cosine learning rate, how many times should the LR schedule restart? Must evenly divide epochs')
+parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'], help='Use AdamW or SDG as optimizer?')
 parser.add_argument("--max_grad_clip", type=float, default=0, help="Max gradient value (clip above max_grad_clip, 0 for off)")
 parser.add_argument("--max_grad_norm", type=float, default=5.0, help="Max norm of gradient (clip above max_grad_norm, 0 for off)")
 
@@ -167,6 +168,23 @@ def parse_args(main_args=None):
     else:
         h_size = str(args.h_size)
 
+    if args.learning_rate is None:
+        if args.dataset == "miniboone":
+            args.learning_rate = 1e-3
+            args.min_lr = 4e-5
+        elif args.dataset == "gas":
+            args.learning_rate = 1e-3
+            args.min_lr = 4e-5
+        elif args.dataset == "hepmass":
+            args.learning_rate = 2e-2
+            args.min_lr = 2e-5
+        elif args.dataset == "power":
+            args.learning_rate = 1e-3
+            args.min_lr = 1e-5
+        elif args.dataset == "bsds300":
+            args.learning_rate = 1e-3
+            args.min_lr = 4e-5
+
     # Set a random seed if not given one
     if args.manual_seed is None:
         args.manual_seed = random.randint(1, 100000)
@@ -193,6 +211,7 @@ def parse_args(main_args=None):
 
     args.boosted = args.flow == "boosted"
     if args.flow == 'boosted':
+        args.eval_batch_size = 16
         args.snap_dir += f'_{args.component_type}_C{args.num_components}'
         if args.fixed_samples < 1:
             raise ValueError(f"Number of fixed_samples must be greater than 0, you gave fixed_samples={args.fixed_samples}")
@@ -273,6 +292,8 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
     if args.boosted:
         model.component = 0
         prev_lr = init_boosted_lr(model, optimizer, args)
+    else:
+        prev_lr = []
 
     grad_norm = None
     epoch_times = []
@@ -416,7 +437,7 @@ def epoch_reporting(writer, model, train_loss, val_losses, epoch_times, model_im
     if args.boosted:
         rho_str = '[' + ', '.join([f"{wt:4.2f}" for wt in model.rho.data]) + ']'
         epoch_msg += f' | {model.component: >9} | {str(model.all_trained)[0]: >11} | {rho_str: >{args.num_components * 6}}'
-        epoch_msg += f' | {val_losses["g_nll"]: >12.3f} | {val_losses["ratio"]:12.3f}'
+        epoch_msg += f' | {val_losses["ratio"]:12.3f}'
     if args.tensorboard:
         writer.add_scalar('epoch/validation', val_losses['nll'], epoch)
         writer.add_scalar('epoch/train', train_loss, epoch)
