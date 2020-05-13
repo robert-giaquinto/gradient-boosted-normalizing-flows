@@ -28,8 +28,9 @@ def init_optimizer(model, args, verbose=True):
         vae_labels = []
         for name, param in model.named_parameters():
             if name.startswith("flow"):
-                pos = name.find(".")
-                component_id = name[(pos + 1):(pos + 2)]
+                pos1 = name.find(".") + 1
+                pos2 = name[(pos1):].find(".") + pos1
+                component_id = name[pos1:pos2]
                 flow_params[component_id].append(param)
                 flow_labels[component_id].append(name)
             else:
@@ -69,6 +70,8 @@ def init_optimizer(model, args, verbose=True):
     else:
 
         epochs = args.epochs_per_component if args.boosted else args.epochs
+        if args.min_lr is None:
+            raise ValueError("Must specify a min_lr for lr_schedules")
         
         if args.lr_schedule == "plateau":
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=args.patience * args.train_size, min_lr=args.min_lr, verbose=True, threshold_mode='abs')

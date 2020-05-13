@@ -128,6 +128,8 @@ parser.add_argument("--temperature", type=float, default=1.0, help="Temperature 
 # Boosting parameters
 parser.add_argument('--epochs_per_component', type=int, default=1000,
                     help='Number of epochs to train each component of a boosted model. Defaults to max(annealing_schedule, epochs_per_component). Ignored for non-boosted models.')
+parser.add_argument('--boosted_burnin_epochs', type=int, default=10,
+                    help='Number of epochs to warmup/burnin for EACH component before proceeding with a full training schedule')
 parser.add_argument('--fixed_samples', type=int, default=1, help='Number of samples used to calculate likelihood under fixed components of boosted model.')
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
                     help='Initialization scheme for boosted parameter rho')
@@ -150,8 +152,8 @@ def parse_args(main_args=None):
     if args.device == "cuda":
         cudnn.benchmark = args.benchmark    
 
+    args.boosted = args.flow == "boosted"
     args.dynamic_binarization = False
-    #args.input_type = 'binary'
     args.density_evaluation = True
     args.shuffle = True
     args.init_epoch = min(max(1, args.init_epoch), args.epochs)
@@ -173,8 +175,8 @@ def parse_args(main_args=None):
             args.learning_rate = 1e-3
             args.min_lr = 4e-5
         elif args.dataset == "gas":
-            args.learning_rate = 1e-3
-            args.min_lr = 4e-5
+            args.learning_rate = 5e-4
+            args.min_lr = 1e-5
         elif args.dataset == "hepmass":
             args.learning_rate = 2e-2
             args.min_lr = 2e-5
@@ -206,10 +208,11 @@ def parse_args(main_args=None):
     else:
         args.no_lr_schedule = False
         lr_schedule += f'{args.lr_schedule}'
-
+        epochs = args.epochs_per_component if args.boosted else args.epochs
+        lr_schedule += f'{args.lr_restarts}x{int(epochs / args.lr_restarts)}' if args.lr_schedule in ['cosine', 'cyclic'] else ''
+        
     args.snap_dir += f'_seed{args.manual_seed}' + lr_schedule + '_' + args.dataset + f"_bs{args.batch_size}"
 
-    args.boosted = args.flow == "boosted"
     if args.flow == 'boosted':
         args.eval_batch_size = 16
         args.snap_dir += f'_{args.component_type}_C{args.num_components}'
@@ -275,12 +278,12 @@ def init_model(args):
     return model
 
 
-def train(model, train_loader, val_loader, optimizer, scheduler, args):
+def train(model, data_loaders, optimizer, scheduler, args):
     if args.tensorboard:
         writer = SummaryWriter(args.snap_dir)
         
     header_msg = f'| Epoch | {"TRAIN": <14}{"Loss": >4} | {"VALIDATION": <14}{"Loss": >4} | {"TIMING":<8}{"(sec)":>4} | {"Improved": >8} |'
-    header_msg += f' {"Component": >9} | {"All Trained": >11} | {"Rho": >{args.num_components * 6}} |' if args.boosted else ''
+    header_msg += f' {"Component": >9} | {"All Trained": >11} | {"Rho": >{min(8, args.num_components) * 6}} |' if args.boosted else ''
     logger.info('|' + "-"*(len(header_msg)-2) + '|')
     logger.info(header_msg)
     logger.info('|' + "-"*(len(header_msg)-2) + '|')
@@ -306,7 +309,7 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
         train_loss = []
         t_start = time.time()
         
-        for batch_id, (x, _) in enumerate(train_loader):
+        for batch_id, (x, _) in enumerate(data_loaders['train']):
 
             # initialize data and optimizer
             x = x.to(args.device)
@@ -350,23 +353,23 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
             step += 1
 
         # Validation, collect results
-        val_losses = evaluate(model, val_loader, args)
+        val_losses = evaluate(model, data_loaders['val'], args)
         train_loss = torch.stack(train_loss).mean().item()
         epoch_times.append(time.time() - t_start)
         epoch_train.append(train_loss)
         epoch_valid.append(val_losses['nll'])
 
         # Assess convergence
-        component = model.component if args.boosted else 0
+        component = (model.component, model.all_trained) if args.boosted else 0
         converged, model_improved, early_stop_count, best_loss = check_convergence(
-            early_stop_count, val_losses['nll'], best_loss, epoch - converged_epoch, component, args)
+            early_stop_count, val_losses, best_loss, epoch - converged_epoch, component, args)
         if model_improved:
-            fname = f'model_c{model.component}.pt' if args.boosted and args.save_intermediate_checkpoints else 'model.pt'
+            fname = f'burnin_' if args.boosted and model.all_trained == False else ''
+            fname += f'model_c{model.component}.pt' if args.boosted and args.save_intermediate_checkpoints else 'model.pt'
             save(model, optimizer, args.snap_dir + fname, scheduler)
 
         # epoch level reporting
         epoch_msg = epoch_reporting(writer, model, train_loss, val_losses, epoch_times, model_improved, epoch, args)
-
         
         if converged:
             logger.info(epoch_msg + ' |')
@@ -376,13 +379,15 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
                 converged_epoch = epoch
 
                 # revert back to the last best version of the model and update rho
-                fname = f'model_c{model.component}.pt' if args.save_intermediate_checkpoints else 'model.pt'
+                fname = f'burnin_' if model.all_trained == False else ''
+                fname += f'model_c{model.component}.pt' if args.save_intermediate_checkpoints else 'model.pt'
                 load(model=model, optimizer=optimizer, path=args.snap_dir + fname, args=args, scheduler=scheduler, verbose=False)
-                model.update_rho(train_loader)
+                model.update_rho(data_loaders['train'])
 
                 last_component = model.component == (args.num_components - 1)
                 no_fine_tuning = args.epochs <= args.epochs_per_component * args.num_components
-                fine_tuning_done = model.all_trained and last_component
+                #fine_tuning_done = model.all_trained and last_component
+                fine_tuning_done = False  # Run for the full epochs
                 if (fine_tuning_done or no_fine_tuning) and last_component:
                     # stop the full model after all components have been trained
                     logger.info(f"Model converged, training complete, saving: {args.snap_dir + 'model.pt'}")
@@ -392,6 +397,11 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
 
                 # else if not done training: save model with updated rho
                 save(model, optimizer, args.snap_dir + fname, scheduler)
+
+                # tempory: look at results after each component
+                test_loss = evaluate(model, data_loaders['test'], args)
+                logger.info(f"Loss after training {model.component + 1} components: {test_loss['nll']:8.3f}")
+                logger.info("-"*(len(header_msg)))
                 
                 # reset optimizer, scheduler, and early_stop_count and train the next component
                 model.increment_component()
@@ -435,9 +445,11 @@ def train(model, train_loader, val_loader, optimizer, scheduler, args):
 def epoch_reporting(writer, model, train_loss, val_losses, epoch_times, model_improved, epoch, args):
     epoch_msg = f'| {epoch: <5} | {train_loss:18.3f} | {val_losses["nll"]:18.3f} | {epoch_times[-1]:13.1f} | {"T" if model_improved else "": >8}'
     if args.boosted:
+        epoch_msg += f' | {model.component: >9} | {str(model.all_trained)[0]: >11}'
         rho_str = '[' + ', '.join([f"{wt:4.2f}" for wt in model.rho.data]) + ']'
-        epoch_msg += f' | {model.component: >9} | {str(model.all_trained)[0]: >11} | {rho_str: >{args.num_components * 6}}'
+        epoch_msg += f' | {rho_str: >{args.num_components * 6}}' if args.num_components <= 8 else ''
         epoch_msg += f' | {val_losses["ratio"]:12.3f}'
+        epoch_msg += f' | {val_losses["g_nll"]:12.3f}'
     if args.tensorboard:
         writer.add_scalar('epoch/validation', val_losses['nll'], epoch)
         writer.add_scalar('epoch/train', train_loss, epoch)
@@ -492,12 +504,12 @@ def init_boosted_lr(model, optimizer, args):
             optimizer.param_groups[c]['lr'] = 0.0
             
         learning_rates.append(optimizer.param_groups[c]['lr'])
-            
+
+    # This might speed things up, but risks not properly weighing the loss by fixed G... TBD
     for n, param in model.named_parameters():
         param.requires_grad = True if n.startswith(f"flows.{model.component}") else False
 
     return learning_rates
-
 
             
 def evaluate(model, data_loader, args, results_type=None):
@@ -507,12 +519,13 @@ def evaluate(model, data_loader, args, results_type=None):
         G_nll, g_nll = [], []
         for (x, _) in data_loader:
             z_G, mu_G, var_G, ldj_G, _ = model(x=x, components="1:c")
-            G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=False, device=args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
+            G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
             G_nll.append(G_nll_i.detach())
 
+            # track new component progress just for insights
             if model.component > 0 or model.all_trained:
                 z_g, mu_g, var_g, ldj_g, _ = model(x=x, components="c")
-                g_nll_i = -1.0 * (log_normal_standard(z_g, reduce=False, device=args.device).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
+                g_nll_i = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
                 g_nll.append(g_nll_i.detach())
 
         G_nll = torch.cat(G_nll)
@@ -544,33 +557,24 @@ def evaluate(model, data_loader, args, results_type=None):
 
 def compute_kl_pq_loss(model, x, args):
     if args.flow == "boosted":
-        z_g, mu_g, var_g, ldj_g, _ = model(x=x, components="c")
-        g_nll = -1.0 * (log_normal_standard(z_g, reduce=False, device=args.device).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
-        #g_nll = -1.0 * (log_normal_normalized(z_g, mu_g, var_g, reduce=False, device=args.device).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
+        z_g, _, _, ldj_g, _ = model(x=x, components="c")
+        g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
         
         if model.all_trained or model.component > 0:
-            # Limit benefit of choosing a new component that is different from fixed components (log(-10) is pretty small)
-            G_MAX_LOSS = -10.0
-            
             fixed = '-c' if model.all_trained else '1:c-1'
             G_nll = []
-            for i in range(args.fixed_samples):
-                z_G, mu_G, var_G, ldj_G, _ = model(x=x, components=fixed)
-                #unconstrained_G_nll = log_normal_standard(z_G, reduce=False, device=args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G
-                #unconstrained_G_nll = log_normal_normalized(z_G, mu_G, var_G, reduce=False, device=args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G
-                #G_nll = -1.0 * torch.max(unconstrained_G_nll,
-                #                         torch.ones_like(ldj_G) * G_MAX_LOSS)
-
-                G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=False, device=args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
-                #G_nll_i = -1.0 * (log_normal_normalized(z_G, mu_G, var_G, reduce=False, device=args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
+            num_samples = model.component if args.fixed_samples == args.num_components else args.fixed_samples
+            for i in range(num_samples):
+                z_G, _, _, ldj_G, _ = model(x=x, components=fixed)
+                G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
                 G_nll.append(G_nll_i)
                 
             if args.fixed_samples > 1:
                 G_nll = torch.cat(G_nll)
-                g_nll = torch.cat(args.fixed_samples * [g_nll])
+                g_nll = torch.cat(num_samples * [g_nll])
             else:
                 G_nll = G_nll[0]
-            
+
             losses = {"nll": torch.mean(g_nll - G_nll)}
             losses["G_nll"] = torch.mean(G_nll)
             losses["g_nll"] = torch.mean(g_nll)
@@ -579,9 +583,8 @@ def compute_kl_pq_loss(model, x, args):
             losses["g_nll"] = torch.mean(g_nll)
             losses["G_nll"] = torch.zeros_like(losses['g_nll'])
     else:
-        z, z_mu, z_var, log_det_j, _ = model(x=x)
-        #log_pz = log_normal_normalized(z, z_mu, z_var, reduce=False, device=args.device).view(z.shape[0], -1).sum(1, keepdim=False)
-        log_pz = log_normal_standard(z, reduce=False, device=args.device).view(z.shape[0], -1).sum(1, keepdim=False)
+        z, _, _, log_det_j, _ = model(x=x)
+        log_pz = log_normal_standard(z, reduce=True, dim=-1, device=args.device)
         nll = -1.0 * (log_pz + log_det_j)
 
         losses = {"nll": torch.mean(nll)}
@@ -594,27 +597,37 @@ def compute_kl_pq_loss(model, x, args):
     return losses
 
 
-def check_convergence(early_stop_count, v_loss, best_loss, epoch, component, args):
+def check_convergence(early_stop_count, losses, best_loss, epoch, stage, args):
     """
     Verify if a boosted component has converged
     """
     if args.boosted:
+        c, all_trained = stage
+        # Check if boosted model completed a stage during the warmup period
+        if args.boosted_burnin_epochs > 0:
+            init_stage_c_done = all_trained == False and (epoch % args.boosted_burnin_epochs == 0)
+        else:
+            init_stage_c_done = False
+            
         # Consider the boosted model's component as converged if a pre-set number of epochs have elapsed
-        time_to_update = epoch % args.epochs_per_component == 0
+        stage_complete = (epoch % args.epochs_per_component == 0) or init_stage_c_done
+        v_loss = losses['g_nll']
     else:
-        time_to_update = False
+        c = stage
+        stage_complete = False
+        v_loss = losses['nll']
 
-    model_improved = v_loss < best_loss[component]
+    model_improved = v_loss < best_loss[c]
     early_stop_flag = False
     if model_improved:
         early_stop_count = 0
-        best_loss[component] = v_loss
+        best_loss[c] = v_loss
     elif args.early_stopping_epochs > 0:
         # model didn't improve, do we consider it converged yet?
         early_stop_count += 1        
         early_stop_flag = early_stop_count > args.early_stopping_epochs
 
-    converged = early_stop_flag or time_to_update
+    converged = early_stop_flag or stage_complete
     return converged, model_improved, early_stop_count, best_loss
 
  
@@ -633,7 +646,7 @@ def main(main_args=None):
     # LOAD DATA
     # =========================================================================
     logger.info('LOADING DATA:')
-    train_loader, val_loader, test_loader, args = load_density_dataset(args)
+    data_loaders, args = load_density_dataset(args)
 
     
     # =========================================================================
@@ -662,7 +675,8 @@ def main(main_args=None):
     # =========================================================================
     if args.epochs > 0:
         logger.info('TRAINING:')
-        train(model, train_loader, val_loader, optimizer, scheduler, args)
+        logger.info(f'Follow progress with: tb {args.snap_dir}')
+        train(model, data_loaders, optimizer, scheduler, args)
 
     
     # =========================================================================
@@ -670,7 +684,7 @@ def main(main_args=None):
     # =========================================================================
     logger.info('VALIDATION:')
     load(model=model, optimizer=optimizer, path=args.snap_dir + 'model.pt', args=args)
-    val_loss = evaluate(model, val_loader, args, results_type='Validation')
+    val_loss = evaluate(model, data_loaders['val'], args, results_type='Validation')
 
 
     # =========================================================================
@@ -678,7 +692,7 @@ def main(main_args=None):
     # =========================================================================
     if args.testing:
         logger.info("TESTING:")
-        test_loss = evaluate(model, test_loader, args, results_type='Test')
+        test_loss = evaluate(model, data_loaders['test'], args, results_type='Test')
 
 
 

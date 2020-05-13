@@ -66,7 +66,8 @@ def load_density_dataset(args):
 
     logger.info(f"Dataset: {args.dataset} has {len(train_loader)}, {len(val_loader)}, and {len(test_loader)} minibatches (batch sizes of {args.batch_size}, {args.eval_batch_size}, {args.eval_batch_size}) in train, validation, and test sets.")
     logger.info(f"Dimension={dataset.n_dims}. Total samples: {len(train_loader.sampler)}, {len(val_loader.sampler)}, and {len(test_loader.sampler)} in train, validation, and test sets.\n")
-    return train_loader, val_loader, test_loader, args
+    data_loaders = {'train': train_loader, 'val': val_loader, 'test': test_loader}
+    return data_loaders, args
 
 
 def load_image_dataset(args, **kwargs):

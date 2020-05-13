@@ -42,7 +42,7 @@ class BoostedFlow(GenerativeFlow):
         self.flows = nn.ModuleList()
         for c in range(self.num_components):
             if args.component_type == "realnvp":
-                self.flows.append(RealNVPFlow(args, flip_init=c))
+                self.flows.append(RealNVPFlow(args, flip_init=0))
             elif args.component_type == "glow":
                 self.flows.append(Glow(args))
             else:
@@ -57,7 +57,7 @@ class BoostedFlow(GenerativeFlow):
             # increment to the next component
             self.component = min(self.component + 1, self.num_components - 1)
 
-    def _sample_component(self, sampling_components, batch_size=1):
+    def _sample_component(self, sampling_components):
         """
         Given the argument sampling_components (such as "1:c", "1:c-1", or "-c"), sample a component id from the possible
         components specified by the keyword.
@@ -71,8 +71,6 @@ class BoostedFlow(GenerativeFlow):
         if sampling_components == "c":
             # sample from new component
             j = min(self.component, self.num_components - 1)
-            if batch_size > 1:
-                j = torch.ones(batch_size) * j
             
         elif sampling_components in ["1:c", "1:c-1"]:
             # sample from either the first 1:c-1 (fixed) or 1:c (fixed + new = all) components
@@ -83,18 +81,14 @@ class BoostedFlow(GenerativeFlow):
                 
             num_components = min(max(num_components, 1), self.num_components)
             rho_simplex = self.rho[0:num_components] / torch.sum(self.rho[0:num_components])
-            j = torch.multinomial(rho_simplex, batch_size, replacement=True)
-            if batch_size == 1:
-                j = j.item()
+            j = torch.multinomial(rho_simplex, 1, replacement=True).item()
                 
         elif sampling_components == "-c":
             rho_simplex = self.rho.clone().detach()
             rho_simplex[self.component] = 0.0
             rho_simplex = rho_simplex / rho_simplex.sum()
-            j = torch.multinomial(rho_simplex, batch_size, replacement=True)
-            if batch_size == 1:
-                j = j.item()
-            
+            j = torch.multinomial(rho_simplex, 1, replacement=True).item()
+
         else:
             raise ValueError("z_k can only be sampled from ['c', '1:c-1', '1:c', '-c'] (corresponding to 'new', 'fixed', or new+fixed components)")
 
@@ -108,7 +102,7 @@ class BoostedFlow(GenerativeFlow):
         """
         #x = x.detach().to(self.args.device)
         z_g, mu_g, var_g, ldj_g, _ = self.forward(x=x, components="c")
-        g_nll = -1.0 * (log_normal_standard(z_g, reduce=False).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
+        g_nll = -1.0 * (log_normal_standard(z_g, reduce=False, device=self.args.device).view(z_g.shape[0], -1).sum(1, keepdim=False) + ldj_g)
 
         return g_nll.data.detach()
 
@@ -121,7 +115,7 @@ class BoostedFlow(GenerativeFlow):
         #x = x.detach().to(self.args.device)
         fixed = "-c" if self.all_trained else "1:c-1"
         z_G, mu_G, var_G, ldj_G, _ = self.forward(x=x, components=fixed)
-        G_nll = -1.0 * (log_normal_standard(z_G, reduce=False).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
+        G_nll = -1.0 * (log_normal_standard(z_G, reduce=False, device=self.args.device).view(z_G.shape[0], -1).sum(1, keepdim=False) + ldj_G)
         
         return G_nll.data.detach()
     
