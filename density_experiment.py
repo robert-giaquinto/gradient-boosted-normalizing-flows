@@ -9,12 +9,13 @@ import logging
 import time
 from tensorboardX import SummaryWriter
 from shutil import copyfile
+from collections import Counter
 
 from optimization.optimizers import init_optimizer
 from models.boosted_flow import BoostedFlow
 from models.realnvp import RealNVPFlow
 from models.glow import Glow
-from utils.utilities import save, load, init_log
+from utils.utilities import save, load, init_log, softmax
 from utils.load_data import load_density_dataset
 from utils.distributions import log_normal_diag, log_normal_standard, log_normal_normalized
 
@@ -51,8 +52,8 @@ parser.add_argument('--experiment_name', type=str, default="density",
 parser.add_argument('--out_dir', type=str, default='./results/snapshots', help='Output directory for model snapshots etc.')
 parser.add_argument('--data_dir', type=str, default='./data/raw/', help="Where raw data is saved.")
 parser.add_argument('--exp_log', type=str, default='./results/density_experiment_log.txt', help='File to save high-level results from each run of an experiment.')
-parser.add_argument('--print_log', dest="save_log", action="store_false", help='Add this flag to have progress printed to log (rather than saved to a file).')
-parser.set_defaults(save_log=True)
+parser.add_argument('--print_log', dest="print_log", action="store_true", help='Add this flag to have progress printed to log (rather than only saved to a file).')
+parser.set_defaults(print_log=True)
 parser.add_argument('--no_tensorboard', dest="tensorboard", action="store_false", help='Turns off saving results to tensorboard.')
 parser.set_defaults(tensorboard=True)
 
@@ -214,7 +215,7 @@ def parse_args(main_args=None):
     args.snap_dir += f'_seed{args.manual_seed}' + lr_schedule + '_' + args.dataset + f"_bs{args.batch_size}"
 
     if args.flow == 'boosted':
-        args.eval_batch_size = 16
+        args.eval_batch_size = 1024 if args.fixed_samples > 1 and args.dataset != "bsds300" else 16
         args.snap_dir += f'_{args.component_type}_C{args.num_components}'
         if args.fixed_samples < 1:
             raise ValueError(f"Number of fixed_samples must be greater than 0, you gave fixed_samples={args.fixed_samples}")
@@ -518,9 +519,25 @@ def evaluate(model, data_loader, args, results_type=None):
     if args.boosted:
         G_nll, g_nll = [], []
         for (x, _) in data_loader:
-            z_G, mu_G, var_G, ldj_G, _ = model(x=x, components="1:c")
-            G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
-            G_nll.append(G_nll_i.detach())
+
+            if args.fixed_samples == 1:
+                z_G, mu_G, var_G, ldj_G, _ = model(x=x, components="1:c")
+                G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
+                G_nll.append(G_nll_i.detach())
+
+            else:
+                G_ll = torch.zeros(x.size(0))
+                for c in range(model.component + 1):
+                    z_G, _, _, ldj_G, _ = model(x=x, components=c)
+                    if c == 0:
+                        G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G
+                    else:
+                        last_ll = torch.log(1 - model.rho[c]) + G_ll
+                        next_ll = torch.log(model.rho[c]) + (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
+                        uG_ll = torch.cat([last_ll.view(x.size(0), 1), next_ll.view(x.size(0), 1)], dim=1)
+                        G_ll = torch.logsumexp(uG_ll, dim=1)
+                        
+                G_nll.append(-1.0 * G_ll.detach())
 
             # track new component progress just for insights
             if model.component > 0 or model.all_trained:
@@ -557,28 +574,70 @@ def evaluate(model, data_loader, args, results_type=None):
 
 def compute_kl_pq_loss(model, x, args):
     if args.flow == "boosted":
-        z_g, _, _, ldj_g, _ = model(x=x, components="c")
-        g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
         
         if model.all_trained or model.component > 0:
-            fixed = '-c' if model.all_trained else '1:c-1'
-            G_nll = []
-            num_samples = model.component if args.fixed_samples == args.num_components else args.fixed_samples
-            for i in range(num_samples):
-                z_G, _, _, ldj_G, _ = model(x=x, components=fixed)
-                G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
-                G_nll.append(G_nll_i)
-                
-            if args.fixed_samples > 1:
-                G_nll = torch.cat(G_nll)
-                g_nll = torch.cat(num_samples * [g_nll])
-            else:
-                G_nll = G_nll[0]
 
-            losses = {"nll": torch.mean(g_nll - G_nll)}
+            # 1. Compute likelihood/weight for each sample
+            if args.fixed_samples == 1:
+                # randomly sample a component
+                fixed = '-c' if model.all_trained else '1:c-1'
+                z_G, _, _, ldj_G, _ = model(x=x, components=fixed)
+                G_nll = -1.0 * (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
+            else:
+                # combine weighted likelihoods from each component
+                G_ll = torch.zeros(x.size(0))
+                for c in range(model.component):  # TODO: if model.all_trained then what?
+                    z_G, _, _, ldj_G, _ = model(x=x, components=c)
+                    if c == 0:
+                        G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G
+                    else:
+                        last_ll = torch.log(1 - model.rho[c]) + G_ll
+                        next_ll = torch.log(model.rho[c]) + (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
+                        uG_ll = torch.cat([last_ll.view(x.size(0), 1), next_ll.view(x.size(0), 1)], dim=1)
+                        G_ll = torch.logsumexp(uG_ll, dim=1)
+                
+                G_nll = -1.0 * G_ll
+
+            reweight_samples = True
+            if reweight_samples:
+                # 2. Sample x with replacement, weighted by G_nll
+                #weights = torch.exp(G_nll - torch.logsumexp(G_nll, dim=0)).numpy()  # normalize weights: large NLL => large weight
+                weights = softmax(G_nll).numpy()            
+                if weights.min() < 0.0:
+                    weights = weights - weights.min()
+                if weights.max() > 0.25:
+                    #weights = weights + 1.0
+                    weights = np.maximum(weights, [0.05])
+                    weights = weights / np.sum(weights)
+                if weights.sum() != 1.0:
+                    weights = weights / np.sum(weights)
+
+                reweighted_idx = np.random.choice(x.size(0), x.size(0), p=weights, replace=True)
+                x_resampled = x[reweighted_idx]
+                top_idx = [ct for _, ct in Counter(reweighted_idx).most_common(5)]
+                #if np.random.rand() > 0.95:
+                #    print(top_idx)
+
+                # 3. Compute g for resampled observations
+                z_g, _, _, ldj_g, _ = model(x=x_resampled, components="c")
+                g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
+                nll = torch.mean(g_nll)
+
+                if torch.isnan(z_g).any() or torch.isnan(g_nll).any():
+                    print("FAILURE")
+                    quit()
+            else:
+                z_g, _, _, ldj_g, _ = model(x=x, components="c")
+                g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
+                nll = torch.mean(g_nll - G_nll)
+
+            losses = {"nll": nll}
             losses["G_nll"] = torch.mean(G_nll)
             losses["g_nll"] = torch.mean(g_nll)
+            
         else:
+            z_g, _, _, ldj_g, _ = model(x=x, components="c")
+            g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
             losses = {"nll": torch.mean(g_nll)}
             losses["g_nll"] = torch.mean(g_nll)
             losses["G_nll"] = torch.zeros_like(losses['g_nll'])

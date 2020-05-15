@@ -9,19 +9,34 @@ import logging
 logger = logging.getLogger(__name__)
 
 
+def softmax(x):
+    e_x = torch.exp(x - torch.max(x))
+    return e_x / torch.sum(e_x)
+
+
 def safe_log(z):
 	return torch.log(z + 1e-7)
 
 
 def init_log(args):
     log_format = '%(asctime)s : %(message)s'
-    if args.save_log:
-        filename = os.path.join(args.snap_dir, "log.txt")
-        print(f"Saving log output to file: {filename}")
-        logging.basicConfig(filename=filename, format=log_format, datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO)
-    else:
-        logging.basicConfig(format=log_format, level=logging.INFO)
+    filename = os.path.join(args.snap_dir, "log.txt")
+    print(f"Saving log output to file: {filename}")
 
+    if args.print_log:
+        #logging.basicConfig(filename=filename, format=log_format, datefmt='%Y-%m-%d %H:%M:%S', level=logging.INFO)
+        handlers = [
+            logging.FileHandler(filename),
+            logging.StreamHandler()
+        ]
+    else:
+        #logging.basicConfig(format=log_format, level=logging.INFO)
+        handlers = [logging.FileHandler(filename)]
+        
+    logging.basicConfig(level=logging.INFO,
+                        format=log_format,
+                        datefmt='%Y-%m-%d %H:%M:%S',
+                        handlers=handlers)
 
 
 def load(model, optimizer, path, args, init_with_args=False, scheduler=None, verbose=True):

@@ -46,9 +46,9 @@ parser.set_defaults(benchmark=True)
 parser.add_argument('--out_dir', type=str, default='./results/snapshots', help='Output directory for model snapshots etc.')
 parser.add_argument('--data_dir', type=str, default='./data/raw/', help="Where raw data is saved.")
 parser.add_argument('--exp_log', type=str, default='./results/image_experiment_log.txt', help='File to save high-level results from each run of an experiment.')
-parser.add_argument('--print_log', dest="save_log", action="store_false", help='Add this flag to have progress printed to log (rather than saved to a file).')
+parser.add_argument('--print_log', dest="print_log", action="store_true", help='Add this flag to have progress printed to log (rather than just saved to a file).')
 parser.add_argument('--no_tensorboard', dest="tensorboard", action="store_false", help='Turns off saving results to tensorboard.')
-parser.set_defaults(save_log=True)
+parser.set_defaults(print_log=False)
 parser.set_defaults(tensorboard=True)
 
 # testing vs. just validation
