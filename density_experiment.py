@@ -41,8 +41,7 @@ parser.set_defaults(testing=True)
 
 # gpu/cpu
 parser.add_argument('--gpu_id', type=int, default=0, metavar='GPU', help='choose GPU to run on.')
-parser.add_argument('--num_workers', type=int, default=1,
-                    help='How many CPU cores to run on. Setting to 0 uses os.cpu_count() - 1.')
+parser.add_argument('--num_workers', type=int, default=1, help='How many CPU cores to run on. Setting to 0 uses os.cpu_count() - 1.')
 parser.add_argument('--no_cuda', action='store_true', default=False, help='disables CUDA training')
 parser.add_argument('--no_benchmark', dest='benchmark', action='store_false', help='Turn off CUDNN benchmarking')
 parser.set_defaults(benchmark=True)
@@ -387,8 +386,7 @@ def train(model, data_loaders, optimizer, scheduler, args):
 
                 last_component = model.component == (args.num_components - 1)
                 no_fine_tuning = args.epochs <= args.epochs_per_component * args.num_components
-                #fine_tuning_done = model.all_trained and last_component
-                fine_tuning_done = False  # Run for the full epochs
+                fine_tuning_done = model.all_trained and last_component and args.boosted_burnin_epochs == 0  # no early stopping if burnin employed
                 if (fine_tuning_done or no_fine_tuning) and last_component:
                     # stop the full model after all components have been trained
                     logger.info(f"Model converged, training complete, saving: {args.snap_dir + 'model.pt'}")
