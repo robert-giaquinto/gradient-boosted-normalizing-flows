@@ -628,7 +628,7 @@ def compute_kl_pq_loss(model, x, args):
                         weights.sort()
                         top_wts2 = ', '.join([f"{w:1.3f}" for w in weights[-5:]])
                         top_idx = ', '.join([str(ct) for _, ct in Counter(reweighted_idx.data.cpu().numpy()).most_common(5)])
-                        num_unique = np.unique(reweighted_idx).shape[0]
+                        num_unique = torch.unique(reweighted_idx).size(0)
                         print(f"C{model.component}. Unique samples={num_unique}, top ids={top_idx}, orig={top_wts1}, norm={top_wts2}", file=ff)
 
                 # 3. Compute g for resampled observations
