@@ -24,9 +24,8 @@ def log_normal_diag(x, mean, log_var, average=False, reduce=True, dim=None):
 def log_normal_normalized(x, mean, log_var, average=False, reduce=True, dim=None, device=None):
     PI = torch.FloatTensor([math.pi])
     PI.requires_grad = False
-    if device is None or device == "cuda":
-        if torch.cuda.is_available():
-            PI = PI.cuda()
+    if (device is None or device.type == "cuda") and torch.cuda.is_available():
+        PI = PI.cuda()
             
     log_norm = -(x - mean) * (x - mean)
     log_norm *= torch.reciprocal(2.*log_var.exp())
@@ -47,9 +46,8 @@ def log_normal_standard(x, average=False, reduce=True, dim=None, device=None):
 
     PI = torch.FloatTensor([math.pi])
     PI.requires_grad = False
-    if device is None or device == "cuda":
-        if torch.cuda.is_available():
-            PI = PI.cuda()
+    if (device is None or device.type == "cuda") and torch.cuda.is_available():
+        PI = PI.cuda()
 
     log_norm = (-0.5 * torch.log(2 * PI)) - (0.5 * x.pow(2))
 

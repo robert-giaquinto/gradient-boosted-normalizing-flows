@@ -608,17 +608,17 @@ def compute_kl_pq_loss(model, x, args):
             reweight_samples = True
             if reweight_samples:
                 # 2. Sample x with replacement, weighted by G_nll
-                #weights = torch.exp(G_nll - torch.logsumexp(G_nll, dim=0)).numpy()  # normalize weights: large NLL => large weight
-                weights = softmax(G_nll).numpy()
+                #weights = torch.exp(G_nll - torch.logsumexp(G_nll, dim=0))  # normalize weights: large NLL => large weight
+                weights = softmax(G_nll)
                 orig_weights = weights
                 if weights.min() < 0.0:
                     weights = weights - weights.min()
                 if weights.max() > 0.1:
-                    weights = np.maximum(np.minimum(weights, [0.1]), [0.01])
+                    weights = torch.max(torch.min(weights, torch.tensor([0.1])), torch.tensor([0.01]))
                 if weights.sum() != 1.0:
-                    weights = weights / np.sum(weights)
+                    weights = weights / torch.sum(weights)
 
-                reweighted_idx = np.random.choice(x.size(0), x.size(0), p=weights, replace=True)
+                reweighted_idx = torch.multinomial(weights, x.size(0), replacement=True)
                 x_resampled = x[reweighted_idx]
 
                 if np.random.rand() > 0.9:
@@ -627,7 +627,7 @@ def compute_kl_pq_loss(model, x, args):
                         top_wts1 = ', '.join([f"{w:1.3f}" for w in orig_weights[-5:]])
                         weights.sort()
                         top_wts2 = ', '.join([f"{w:1.3f}" for w in weights[-5:]])
-                        top_idx = ', '.join([str(ct) for _, ct in Counter(reweighted_idx).most_common(5)])
+                        top_idx = ', '.join([str(ct) for _, ct in Counter(reweighted_idx.data.cpu().numpy()).most_common(5)])
                         num_unique = np.unique(reweighted_idx).shape[0]
                         print(f"C{model.component}. Unique samples={num_unique}, top ids={top_idx}, orig={top_wts1}, norm={top_wts2}", file=ff)
 
