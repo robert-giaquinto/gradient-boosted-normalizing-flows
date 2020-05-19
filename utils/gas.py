@@ -50,7 +50,8 @@ def load_data_and_clean(file):
         col_name = data.columns[col_to_remove]
         data.drop(col_name, axis=1, inplace=True)
         B = get_correlation_numbers(data)
-    # print(data.corr())
+
+    #print("correlation:\n", data.corr())
     data = (data - data.mean()) / data.std()
 
     return data

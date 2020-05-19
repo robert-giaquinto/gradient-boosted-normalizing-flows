@@ -14,7 +14,7 @@ class BSDS300:
 
         def __init__(self, data):
 
-            self.x = data[:]
+            self.x = np.array(data[:]).astype(np.float32)
             self.N = self.x.shape[0]
 
     def __init__(self, file):

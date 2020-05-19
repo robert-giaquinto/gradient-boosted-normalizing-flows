@@ -128,9 +128,8 @@ parser.add_argument("--temperature", type=float, default=1.0, help="Temperature 
 # Boosting parameters
 parser.add_argument('--epochs_per_component', type=int, default=1000,
                     help='Number of epochs to train each component of a boosted model. Defaults to max(annealing_schedule, epochs_per_component). Ignored for non-boosted models.')
-parser.add_argument('--boosted_burnin_epochs', type=int, default=10,
+parser.add_argument('--boosted_burnin_epochs', type=int, default=0,
                     help='Number of epochs to warmup/burnin for EACH component before proceeding with a full training schedule')
-parser.add_argument('--fixed_samples', type=int, default=1, help='Number of samples used to calculate likelihood under fixed components of boosted model.')
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
                     help='Initialization scheme for boosted parameter rho')
 parser.add_argument('--rho_iters', type=int, default=100, help='Maximum number of SGD iterations for training boosting weights')
@@ -157,9 +156,9 @@ def parse_args(main_args=None):
     args.density_evaluation = True
     args.shuffle = True
     args.init_epoch = min(max(1, args.init_epoch), args.epochs)
-    if args.dataset == "bsds300":
-        args.batch_size = min(32, args.batch_size)
-        args.eval_batch_size = min(16, args.eval_batch_size)
+    #if args.dataset == "bsds300":
+    #    args.batch_size = min(32, args.batch_size)
+    #    args.eval_batch_size = min(16, args.eval_batch_size)
 
     if args.h_size is None and args.h_size_factor is None:
         raise ValueError("Must specify the hidden size h_size, or provide the size of hidden layer relative to the data with h_size_factor")
@@ -171,21 +170,32 @@ def parse_args(main_args=None):
         h_size = str(args.h_size)
 
     if args.learning_rate is None:
+        logger.info("No learning rate given, using default settings for this dataset")
         if args.dataset == "miniboone":
             args.learning_rate = 1e-3
             args.min_lr = 4e-5
+            args.max_grad_norm = 0.0
+            args.weight_decay = 1e-6
         elif args.dataset == "gas":
-            args.learning_rate = 5e-4
-            args.min_lr = 1e-5
+            args.learning_rate = 1e-4
+            args.min_lr = 1e-6
+            args.max_grad_norm = 10.0
+            args.weight_decay = 1e-4
         elif args.dataset == "hepmass":
             args.learning_rate = 2e-2
             args.min_lr = 2e-5
+            args.max_grad_norm = 0.0
+            args.weight_decay = 1e-6
         elif args.dataset == "power":
             args.learning_rate = 1e-3
             args.min_lr = 1e-5
+            args.max_grad_norm = 0.0
+            args.weight_decay = 1e-6
         elif args.dataset == "bsds300":
-            args.learning_rate = 1e-3
-            args.min_lr = 4e-5
+            args.learning_rate = 1e-4  # may be able to get away with 5e-4
+            args.min_lr = 1e-6
+            args.max_grad_norm = 20.0
+            args.weight_decay = 1e-5
 
     # Set a random seed if not given one
     if args.manual_seed is None:
@@ -199,7 +209,7 @@ def parse_args(main_args=None):
     # intialize snapshots directory for saving models and results
     args.model_signature = str(datetime.datetime.now())[0:19].replace(' ', '_').replace(':', '_').replace('-', '_')
     args.experiment_name = args.experiment_name + "_" if args.experiment_name is not None else ""
-    args.snap_dir = os.path.join(args.out_dir, args.experiment_name + args.flow)
+    args.snap_dir = os.path.join(args.out_dir,  f"{args.experiment_name}{args.model_signature}_{args.flow}")
 
     lr_schedule = f'_lr{str(args.learning_rate)[2:]}'
     if args.lr_schedule is None or args.no_lr_schedule:
@@ -214,10 +224,8 @@ def parse_args(main_args=None):
     args.snap_dir += f'_seed{args.manual_seed}' + lr_schedule + '_' + args.dataset + f"_bs{args.batch_size}"
 
     if args.flow == 'boosted':
-        args.eval_batch_size = 1024 if args.fixed_samples > 1 and args.dataset != "bsds300" else 16
+        args.eval_batch_size = 16 if args.dataset == "bsds300" else args.eval_batch_size
         args.snap_dir += f'_{args.component_type}_C{args.num_components}'
-        if args.fixed_samples < 1:
-            raise ValueError(f"Number of fixed_samples must be greater than 0, you gave fixed_samples={args.fixed_samples}")
         if (args.epochs_per_component % args.lr_restarts) != 0:
             raise ValueError(f"lr_restarts {args.lr_restarts} must evenly divide epochs_per_component {args.epochs_per_component}")
     else:
@@ -233,8 +241,7 @@ def parse_args(main_args=None):
         args.num_dequant_blocks = 0
         args.snap_dir += f'_L{str(args.num_blocks)}_{args.flow_permutation}_{args.flow_coupling}'
 
-    args.snap_dir += f'_hsize{h_size}'
-    args.snap_dir += f'_{args.model_signature}/'
+    args.snap_dir += f'_hsize{h_size}/'
     if not os.path.exists(args.snap_dir):
         os.makedirs(args.snap_dir)
 
@@ -364,8 +371,7 @@ def train(model, data_loaders, optimizer, scheduler, args):
         converged, model_improved, early_stop_count, best_loss = check_convergence(
             early_stop_count, val_losses, best_loss, epoch - converged_epoch, component, args)
         if model_improved:
-            fname = f'burnin_' if args.boosted and model.all_trained == False else ''
-            fname += f'model_c{model.component}.pt' if args.boosted and args.save_intermediate_checkpoints else 'model.pt'
+            fname = f'model_c{model.component}.pt' if args.boosted and args.save_intermediate_checkpoints else 'model.pt'
             save(model, optimizer, args.snap_dir + fname, scheduler)
 
         # epoch level reporting
@@ -379,8 +385,7 @@ def train(model, data_loaders, optimizer, scheduler, args):
                 converged_epoch = epoch
 
                 # revert back to the last best version of the model and update rho
-                fname = f'burnin_' if model.all_trained == False else ''
-                fname += f'model_c{model.component}.pt' if args.save_intermediate_checkpoints else 'model.pt'
+                fname = f'model_c{model.component}.pt' if args.save_intermediate_checkpoints else 'model.pt'
                 load(model=model, optimizer=optimizer, path=args.snap_dir + fname, args=args, scheduler=scheduler, verbose=False)
                 model.update_rho(data_loaders['train'])
 
@@ -504,7 +509,6 @@ def init_boosted_lr(model, optimizer, args):
             
         learning_rates.append(optimizer.param_groups[c]['lr'])
 
-    # This might speed things up, but risks not properly weighing the loss by fixed G... TBD
     for n, param in model.named_parameters():
         param.requires_grad = True if n.startswith(f"flows.{model.component}") else False
 
@@ -518,7 +522,10 @@ def evaluate(model, data_loader, args, results_type=None):
         G_nll, g_nll = [], []
         for (x, _) in data_loader:
 
-            if args.fixed_samples == 1:
+            approximate_fixed_G = False
+            
+            if approximate_fixed_G:
+                # randomly sample a component
                 z_G, mu_G, var_G, ldj_G, _ = model(x=x, components="1:c")
                 G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
                 G_nll.append(G_nll_i.detach())
@@ -530,8 +537,9 @@ def evaluate(model, data_loader, args, results_type=None):
                     if c == 0:
                         G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G
                     else:
-                        last_ll = torch.log(1 - model.rho[c]) + G_ll
-                        next_ll = torch.log(model.rho[c]) + (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
+                        rho_simplex = model.rho[0:(c+1)] / torch.sum(model.rho[0:(c+1)])
+                        last_ll = torch.log(1 - rho_simplex[c]) + G_ll
+                        next_ll = torch.log(rho_simplex[c]) + (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
                         uG_ll = torch.cat([last_ll.view(x.size(0), 1), next_ll.view(x.size(0), 1)], dim=1)
                         G_ll = torch.logsumexp(uG_ll, dim=1)
                         
@@ -572,11 +580,13 @@ def evaluate(model, data_loader, args, results_type=None):
 
 def compute_kl_pq_loss(model, x, args):
     if args.flow == "boosted":
-        
+
         if model.all_trained or model.component > 0:
 
             # 1. Compute likelihood/weight for each sample
-            if args.fixed_samples == 1:
+            approximate_fixed_G = False
+            
+            if approximate_fixed_G:
                 # randomly sample a component
                 fixed = '-c' if model.all_trained else '1:c-1'
                 z_G, _, _, ldj_G, _ = model(x=x, components=fixed)
@@ -589,8 +599,9 @@ def compute_kl_pq_loss(model, x, args):
                     if c == 0:
                         G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G
                     else:
-                        last_ll = torch.log(1 - model.rho[c]) + G_ll
-                        next_ll = torch.log(model.rho[c]) + (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
+                        rho_simplex = model.rho[0:(c+1)] / torch.sum(model.rho[0:(c+1)])
+                        last_ll = torch.log(1 - rho_simplex[c]) + G_ll
+                        next_ll = torch.log(rho_simplex[c]) + (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
                         uG_ll = torch.cat([last_ll.view(x.size(0), 1), next_ll.view(x.size(0), 1)], dim=1)
                         G_ll = torch.logsumexp(uG_ll, dim=1)
                 
@@ -600,30 +611,33 @@ def compute_kl_pq_loss(model, x, args):
             if reweight_samples:
                 # 2. Sample x with replacement, weighted by G_nll
                 #weights = torch.exp(G_nll - torch.logsumexp(G_nll, dim=0)).numpy()  # normalize weights: large NLL => large weight
-                weights = softmax(G_nll).numpy()            
+                weights = softmax(G_nll).numpy()
+                orig_weights = weights
                 if weights.min() < 0.0:
                     weights = weights - weights.min()
-                if weights.max() > 0.25:
-                    #weights = weights + 1.0
-                    weights = np.maximum(weights, [0.05])
-                    weights = weights / np.sum(weights)
+                if weights.max() > 0.1:
+                    weights = np.maximum(np.minimum(weights, [0.1]), [0.01])
                 if weights.sum() != 1.0:
                     weights = weights / np.sum(weights)
 
                 reweighted_idx = np.random.choice(x.size(0), x.size(0), p=weights, replace=True)
                 x_resampled = x[reweighted_idx]
-                top_idx = [ct for _, ct in Counter(reweighted_idx).most_common(5)]
-                #if np.random.rand() > 0.95:
-                #    print(top_idx)
+
+                if np.random.rand() > 0.9:
+                    with open(os.path.join(args.snap_dir, 'counts.txt'), 'a') as ff:
+                        orig_weights.sort()
+                        top_wts1 = ', '.join([f"{w:1.3f}" for w in orig_weights[-5:]])
+                        weights.sort()
+                        top_wts2 = ', '.join([f"{w:1.3f}" for w in weights[-5:]])
+                        top_idx = ', '.join([str(ct) for _, ct in Counter(reweighted_idx).most_common(5)])
+                        num_unique = np.unique(reweighted_idx).shape[0]
+                        print(f"C{model.component}. Unique samples={num_unique}, top ids={top_idx}, orig={top_wts1}, norm={top_wts2}", file=ff)
 
                 # 3. Compute g for resampled observations
                 z_g, _, _, ldj_g, _ = model(x=x_resampled, components="c")
                 g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
                 nll = torch.mean(g_nll)
 
-                if torch.isnan(z_g).any() or torch.isnan(g_nll).any():
-                    print("FAILURE")
-                    quit()
             else:
                 z_g, _, _, ldj_g, _ = model(x=x, components="c")
                 g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
