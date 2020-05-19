@@ -34,8 +34,6 @@ parser.add_argument('--manual_seed', type=int, default=1,
 # testing vs. just validation
 fp = parser.add_mutually_exclusive_group(required=False)
 fp.add_argument('--testing', action='store_true', dest='testing', help='evaluate on test set after training')
-parser.add_argument('--nll_samples', type=int, default=2000, help='Number of samples to use in evaluating NLL')
-parser.add_argument('--nll_mb', type=int, default=500, help='Number of mini-batches to use in evaluating NLL')
 fp.add_argument('--validation', action='store_false', dest='testing', help='only evaluate on validation set')
 parser.set_defaults(testing=True)
 
@@ -286,8 +284,7 @@ def init_model(args):
 
 
 def train(model, data_loaders, optimizer, scheduler, args):
-    if args.tensorboard:
-        writer = SummaryWriter(args.snap_dir)
+    writer = SummaryWriter(args.snap_dir) if args.tensorboard else None
         
     header_msg = f'| Epoch | {"TRAIN": <14}{"Loss": >4} | {"VALIDATION": <14}{"Loss": >4} | {"TIMING":<8}{"(sec)":>4} | {"Improved": >8} |'
     header_msg += f' {"Component": >9} | {"All Trained": >11} | {"Rho": >{min(8, args.num_components) * 6}} |' if args.boosted else ''
@@ -430,7 +427,8 @@ def train(model, data_loaders, optimizer, scheduler, args):
                     logger.info(f"Stopping training after {epoch} epochs of training.")
 
     logger.info('|' + "-"*(len(header_msg)-2) + '|\n')
-    writer.close()
+    if args.tensorboard:
+        writer.close()
 
     epoch_times, epoch_train, epoch_valid = np.array(epoch_times), np.array(epoch_train), np.array(epoch_valid)
     timing_msg = f"Stopped after {epoch_times.shape[0]} epochs. "
