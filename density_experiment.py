@@ -183,12 +183,12 @@ def parse_args(main_args=None):
             args.learning_rate = 5e-3  #1e-2
             args.min_lr = 5e-5
             args.max_grad_norm = 20.0
-            args.weight_decay = 1e-6
+            args.weight_decay = 1e-5
         elif args.dataset == "power":
             args.learning_rate = 1e-3
             args.min_lr = 1e-5
-            args.max_grad_norm = 0.0
-            args.weight_decay = 1e-6
+            args.max_grad_norm = 20.0
+            args.weight_decay = 1e-5
         elif args.dataset == "bsds300":
             args.learning_rate = 1e-4  # may be able to get away with 5e-4
             args.min_lr = 1e-6
