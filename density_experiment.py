@@ -614,7 +614,7 @@ def compute_kl_pq_loss(model, x, args):
                 if weights.min() < 0.0:
                     weights = weights - weights.min()
                 if weights.max() > 0.1:
-                    weights = torch.max(torch.min(weights, torch.tensor([0.1])), torch.tensor([0.01]))
+                    weights = torch.max(torch.min(weights, torch.tensor([0.1], device=args.device)), torch.tensor([0.01], device=args.device))
                 if weights.sum() != 1.0:
                     weights = weights / torch.sum(weights)
 
