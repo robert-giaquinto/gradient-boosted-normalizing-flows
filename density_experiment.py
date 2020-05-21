@@ -181,7 +181,7 @@ def parse_args(main_args=None):
             args.weight_decay = 1e-4
         elif args.dataset == "hepmass":
             args.learning_rate = 5e-3  #1e-2
-            args.min_lr = 2e-4 # 5e-5
+            args.min_lr = 2e-4
             args.max_grad_norm = 20.0
             args.weight_decay = 1e-5
         elif args.dataset == "power":
@@ -190,9 +190,9 @@ def parse_args(main_args=None):
             args.max_grad_norm = 20.0
             args.weight_decay = 1e-5
         elif args.dataset == "bsds300":
-            args.learning_rate = 1e-4  # may be able to get away with 5e-4
-            args.min_lr = 1e-6
-            args.max_grad_norm = 20.0
+            args.learning_rate = 5e-4
+            args.min_lr = 5e-5
+            args.max_grad_norm = 60.0
             args.weight_decay = 1e-5
 
     # Set a random seed if not given one
@@ -353,7 +353,7 @@ def train(model, data_loaders, optimizer, scheduler, args):
             optimizer.step()
             if not args.no_lr_schedule:
                 prev_lr = update_scheduler(prev_lr, model, optimizer, scheduler, losses, step, args)
-                
+                    
             step += 1
 
         # Validation, collect results
@@ -534,11 +534,7 @@ def evaluate(model, data_loader, args, results_type=None):
                 for c in range(model.component + 1):
                     z_G, _, _, ldj_G, _ = model(x=x, components=c)
                     if c == 0:
-                        G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G
-                        bad = torch.isinf(G_ll) + torch.isnan(G_ll)
-                        if bad.sum() > 0: 
-                            print("BAD:", x[bad > 0])
-                        
+                        G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G                        
                     else:
                         rho_simplex = model.rho[0:(c+1)] / torch.sum(model.rho[0:(c+1)])
                         last_ll = torch.log(1 - rho_simplex[c]) + G_ll
@@ -555,14 +551,19 @@ def evaluate(model, data_loader, args, results_type=None):
                 g_nll.append(g_nll_i.detach())
 
         G_nll = torch.cat(G_nll, dim=0)
-        G_nll = G_nll[torch.isinf(G_nll) == False]
-        G_nll = G_nll[torch.isnan(G_nll) == False]
+        # remove nan for now
+        not_inf = torch.isinf(G_nll) == False
+        G_nll = G_nll[not_inf]
+        not_nan = torch.isnan(G_nll) == False
+        G_nll = G_nll[not_nan]
 
         mean_G_nll = G_nll.mean().item()
         losses = {'nll': mean_G_nll}
 
         if model.component > 0 or model.all_trained:
             g_nll = torch.cat(g_nll, dim=0)
+            g_nll = g_nll[not_inf]
+            g_nll = g_nll[not_nan]
             losses['g_nll'] = g_nll.mean().item()
             losses['ratio'] = torch.mean(g_nll - G_nll).item()
         else:
