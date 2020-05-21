@@ -171,17 +171,17 @@ def parse_args(main_args=None):
         logger.info("No learning rate given, using default settings for this dataset")
         if args.dataset == "miniboone":
             args.learning_rate = 1e-3
-            args.min_lr = 4e-5
-            args.max_grad_norm = 0.0
-            args.weight_decay = 1e-6
+            args.min_lr = 1e-4  # 4e-5
+            args.max_grad_norm = 60.0
+            args.weight_decay = 1e-5
         elif args.dataset == "gas":
             args.learning_rate = 1e-4
-            args.min_lr = 1e-6
-            args.max_grad_norm = 10.0
+            args.min_lr = 5e-6
+            args.max_grad_norm = 5.0
             args.weight_decay = 1e-4
         elif args.dataset == "hepmass":
             args.learning_rate = 5e-3  #1e-2
-            args.min_lr = 5e-5
+            args.min_lr = 2e-4 # 5e-5
             args.max_grad_norm = 20.0
             args.weight_decay = 1e-5
         elif args.dataset == "power":
@@ -519,13 +519,14 @@ def evaluate(model, data_loader, args, results_type=None):
     if args.boosted:
         G_nll, g_nll = [], []
         for (x, _) in data_loader:
+            x = x.to(args.device)
 
             approximate_fixed_G = False
             
             if approximate_fixed_G:
                 # randomly sample a component
-                z_G, mu_G, var_G, ldj_G, _ = model(x=x, components="1:c")
-                G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
+                z_G, _, _, ldj_G, _ = model(x=x, components="1:c")
+                G_nll_i = -1.0 * (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)                
                 G_nll.append(G_nll_i.detach())
 
             else:
@@ -534,6 +535,10 @@ def evaluate(model, data_loader, args, results_type=None):
                     z_G, _, _, ldj_G, _ = model(x=x, components=c)
                     if c == 0:
                         G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G
+                        bad = torch.isinf(G_ll) + torch.isnan(G_ll)
+                        if bad.sum() > 0: 
+                            print("BAD:", x[bad > 0])
+                        
                     else:
                         rho_simplex = model.rho[0:(c+1)] / torch.sum(model.rho[0:(c+1)])
                         last_ll = torch.log(1 - rho_simplex[c]) + G_ll
@@ -549,16 +554,17 @@ def evaluate(model, data_loader, args, results_type=None):
                 g_nll_i = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
                 g_nll.append(g_nll_i.detach())
 
-        G_nll = torch.cat(G_nll)
+        G_nll = torch.cat(G_nll, dim=0)
+        G_nll = G_nll[torch.isinf(G_nll) == False]
+        G_nll = G_nll[torch.isnan(G_nll) == False]
+
         mean_G_nll = G_nll.mean().item()
         losses = {'nll': mean_G_nll}
 
         if model.component > 0 or model.all_trained:
-            g_nll = torch.cat(g_nll)
-            mean_g_nll = g_nll.mean().item()
-            losses['g_nll'] = mean_g_nll
-            ratio = torch.mean(g_nll - G_nll)
-            losses['ratio'] = ratio
+            g_nll = torch.cat(g_nll, dim=0)
+            losses['g_nll'] = g_nll.mean().item()
+            losses['ratio'] = torch.mean(g_nll - G_nll).item()
         else:
             losses['g_nll'] = mean_G_nll
             losses['ratio'] = 0.0
@@ -744,7 +750,9 @@ def main(main_args=None):
     # =========================================================================
     if args.epochs > 0:
         logger.info('TRAINING:')
-        logger.info(f'Follow progress with: tb {args.snap_dir}')
+        if args.tensorboard:
+            logger.info(f'Follow progress on tensorboard: tb {args.snap_dir}')
+            
         train(model, data_loaders, optimizer, scheduler, args)
 
     

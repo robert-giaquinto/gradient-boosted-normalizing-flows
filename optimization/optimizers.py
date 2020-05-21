@@ -74,7 +74,12 @@ def init_optimizer(model, args, verbose=True):
             raise ValueError("Must specify a min_lr for lr_schedules")
         
         if args.lr_schedule == "plateau":
-            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=0.5, patience=args.patience * args.train_size, min_lr=args.min_lr, verbose=True, threshold_mode='abs')
+            scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
+                                                                   factor=0.5,
+                                                                   patience=args.patience * args.train_size,
+                                                                   min_lr=args.min_lr,
+                                                                   verbose=True,
+                                                                   threshold_mode='abs')
             if verbose:
                 logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience * args.train_size} epochs until it reaches {args.min_lr}.")                
             
@@ -82,12 +87,16 @@ def init_optimizer(model, args, verbose=True):
             msg = "Using a cosine annealing learning-rate schedule, "
             if args.lr_restarts > 1:
                 steps_per_cycle = int(epochs / args.lr_restarts) * args.train_size
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=steps_per_cycle, eta_min=args.min_lr)
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
+                                                                                 T_0=steps_per_cycle,
+                                                                                 eta_min=args.min_lr)
                 msg += f"annealed over {steps_per_cycle} training steps ({int(epochs / args.lr_restarts)} epochs), restarting {args.lr_restarts} times within each learning cycle."
 
             else:
                 total_steps = epochs * args.train_size
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=total_steps, eta_min=args.min_lr)
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
+                                                                       T_max=total_steps,
+                                                                       eta_min=args.min_lr)
                 msg += f"annealed over {total_steps} training steps ({epochs} epochs), restarting with each new component (if boosted)."
 
             if verbose:
