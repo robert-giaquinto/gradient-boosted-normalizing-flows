@@ -297,7 +297,7 @@ def train(model, data_loaders, optimizer, scheduler, args):
     converged_epoch = 0  # for boosting, helps keep track how long the current component has been training
     
     if args.boosted:
-        model.component = 0
+        #model.component = 0
         prev_lr = init_boosted_lr(model, optimizer, args)
     else:
         prev_lr = []
@@ -405,7 +405,7 @@ def train(model, data_loaders, optimizer, scheduler, args):
                 logger.info("-"*(len(header_msg)))
                 
                 # reset optimizer, scheduler, and early_stop_count and train the next component
-                model.increment_component()
+                model.increment_component()                
                 early_stop_count = 0
                 optimizer, scheduler = init_optimizer(model, args, verbose=False)
                 prev_lr = init_boosted_lr(model, optimizer, args)
@@ -734,6 +734,8 @@ def main(main_args=None):
         logger.info(f'LOADING CHECKPOINT FROM PRE-TRAINED MODEL: {args.load}')
         init_with_args = args.flow == "boosted" and args.loaded_init_component is not None and args.loaded_all_trained is not None
         load(model=model, optimizer=optimizer, path=args.load, args=args, init_with_args=init_with_args, scheduler=scheduler)
+        logger.info(f'Warning: boosted models may only be loaded to train a new component (until pytorch bug is fixed), optimizer and scheduler will be reset. Non-boosted models may not be loaded at all (will fail).')
+        optimizer, scheduler = init_optimizer(model, args, verbose=False)
 
     
     # =========================================================================
