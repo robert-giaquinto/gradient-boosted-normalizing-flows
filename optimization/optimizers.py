@@ -16,7 +16,7 @@ def init_optimizer(model, args, verbose=True):
     """
     if verbose:
         logger.info('OPTIMIZER:')
-        logger.info(f"Initializing AdamW optimizer with base learning rate={args.learning_rate}, weight decay={args.weight_decay}.")
+        logger.info(f"Initializing {args.optimizer} optimizer with base learning rate={args.learning_rate}, weight decay={args.weight_decay}.")
     
     if args.flow == 'boosted':
         if verbose:
@@ -57,7 +57,7 @@ def init_optimizer(model, args, verbose=True):
             optimizer = optim.AdamW([{'params': param_group} for param_group in all_params], lr=args.learning_rate, weight_decay=args.weight_decay)
     else:
         if verbose:
-            logger.info(f"Initializing optimizer for standard models with learning rate={args.learning_rate}.\n")
+            logger.info(f"Initializing {args.optimizer} optimizer for standard models with learning rate={args.learning_rate}.\n")
 
         if args.optimizer.lower() == "sgd":
             optimizer = optim.SGD(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)

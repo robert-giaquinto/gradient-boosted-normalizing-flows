@@ -627,16 +627,6 @@ def compute_kl_pq_loss(model, x, args):
                 reweighted_idx = torch.multinomial(weights, x.size(0), replacement=True)
                 x_resampled = x[reweighted_idx]
 
-                if np.random.rand() > 0.9:
-                    with open(os.path.join(args.snap_dir, 'counts.txt'), 'a') as ff:
-                        orig_weights.sort()
-                        top_wts1 = ', '.join([f"{w:1.3f}" for w in orig_weights[-5:]])
-                        weights.sort()
-                        top_wts2 = ', '.join([f"{w:1.3f}" for w in weights[-5:]])
-                        top_idx = ', '.join([str(ct) for _, ct in Counter(reweighted_idx.data.cpu().numpy()).most_common(5)])
-                        num_unique = torch.unique(reweighted_idx).size(0)
-                        print(f"C{model.component}. Unique samples={num_unique}, top ids={top_idx}, orig={top_wts1}, norm={top_wts2}", file=ff)
-
                 # 3. Compute g for resampled observations
                 z_g, _, _, ldj_g, _ = model(x=x_resampled, components="c")
                 g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
