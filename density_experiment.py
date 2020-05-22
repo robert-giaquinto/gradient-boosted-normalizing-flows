@@ -190,7 +190,7 @@ def parse_args(main_args=None):
             args.max_grad_norm = 20.0
             args.weight_decay = 1e-5
         elif args.dataset == "bsds300":
-            args.learning_rate = 5e-4
+            args.learning_rate = 6e-4
             args.min_lr = 5e-5
             args.max_grad_norm = 60.0
             args.weight_decay = 1e-5
