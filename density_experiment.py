@@ -78,7 +78,7 @@ parser.set_defaults(save_results=True)
 parser.add_argument('--epochs', type=int, default=250, help='Maximum number of epochs to train')
 parser.add_argument('--early_stopping_epochs', type=int, default=50, help='number of early stopping epochs')
 parser.add_argument('--batch_size', type=int, default=512, help='input batch size for training')
-parser.add_argument('--eval_batch_size', type=int, default=1024, help='batch size for evaluation with non-boosted models')
+parser.add_argument('--eval_batch_size', type=int, default=1024, help='batch size for evaluation')
 parser.add_argument('--learning_rate', type=float, default=None, help='learning rate, if none use best values found during LR range test for that dataset')
 parser.add_argument('--min_lr', type=float, default=None, help='Minimum learning rate used in cyclic learning rates schedulers')
 parser.add_argument('--patience', type=int, default=5, help='If using LR schedule, number of epochs before reducing LR.')
@@ -154,9 +154,6 @@ def parse_args(main_args=None):
     args.density_evaluation = True
     args.shuffle = True
     args.init_epoch = min(max(1, args.init_epoch), args.epochs)
-    #if args.dataset == "bsds300":
-    #    args.batch_size = min(32, args.batch_size)
-    #    args.eval_batch_size = min(16, args.eval_batch_size)
 
     if args.h_size is None and args.h_size_factor is None:
         raise ValueError("Must specify the hidden size h_size, or provide the size of hidden layer relative to the data with h_size_factor")
@@ -186,8 +183,8 @@ def parse_args(main_args=None):
             args.weight_decay = 1e-5
         elif args.dataset == "power":
             args.learning_rate = 1e-3
-            args.min_lr = 1e-5
-            args.max_grad_norm = 20.0
+            args.min_lr = 1e-4
+            args.max_grad_norm = 10.0
             args.weight_decay = 1e-5
         elif args.dataset == "bsds300":
             args.learning_rate = 6e-4
@@ -230,7 +227,6 @@ def parse_args(main_args=None):
         args.num_components = 1
         if (args.epochs % args.lr_restarts) != 0:
             raise ValueError(f"lr_restarts {args.lr_restarts} must evenly divide epochs {args.epochs}")
-
 
     args.snap_dir += f'_K{args.num_flows}'
     if args.flow == "realnvp" or args.component_type == "realnvp":
