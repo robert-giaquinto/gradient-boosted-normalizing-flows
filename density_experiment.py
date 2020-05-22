@@ -204,22 +204,9 @@ def parse_args(main_args=None):
     # intialize snapshots directory for saving models and results
     args.model_signature = str(datetime.datetime.now())[0:19].replace(' ', '_').replace(':', '_').replace('-', '_')
     args.experiment_name = args.experiment_name + "_" if args.experiment_name is not None else ""
-    args.snap_dir = os.path.join(args.out_dir,  f"{args.experiment_name}{args.model_signature}_{args.flow}")
-
-    lr_schedule = f'_lr{str(args.learning_rate)[2:]}'
-    if args.lr_schedule is None or args.no_lr_schedule:
-        args.no_lr_schedule = True
-        args.lr_schedule = None
-    else:
-        args.no_lr_schedule = False
-        lr_schedule += f'{args.lr_schedule}'
-        epochs = args.epochs_per_component if args.boosted else args.epochs
-        lr_schedule += f'{args.lr_restarts}x{int(epochs / args.lr_restarts)}' if args.lr_schedule in ['cosine', 'cyclic'] else ''
-        
-    args.snap_dir += f'_seed{args.manual_seed}' + lr_schedule + '_' + args.dataset + f"_bs{args.batch_size}"
+    args.snap_dir = os.path.join(args.out_dir,  f"{args.experiment_name}{args.dataset}_{args.flow}")
 
     if args.flow == 'boosted':
-        args.eval_batch_size = 16 if args.dataset == "bsds300" else args.eval_batch_size
         args.snap_dir += f'_{args.component_type}_C{args.num_components}'
         if (args.epochs_per_component % args.lr_restarts) != 0:
             raise ValueError(f"lr_restarts {args.lr_restarts} must evenly divide epochs_per_component {args.epochs_per_component}")
@@ -235,7 +222,17 @@ def parse_args(main_args=None):
         args.num_dequant_blocks = 0
         args.snap_dir += f'_L{str(args.num_blocks)}_{args.flow_permutation}_{args.flow_coupling}'
 
-    args.snap_dir += f'_hsize{h_size}/'
+    lr_schedule = f'_lr{str(args.learning_rate)[2:]}'
+    if args.lr_schedule is None or args.no_lr_schedule:
+        args.no_lr_schedule = True
+        args.lr_schedule = None
+    else:
+        args.no_lr_schedule = False
+        lr_schedule += f'{args.lr_schedule}'
+        epochs = args.epochs_per_component if args.boosted else args.epochs
+        lr_schedule += f'{args.lr_restarts}x{int(epochs / args.lr_restarts)}' if args.lr_schedule in ['cosine', 'cyclic'] else ''
+        
+    args.snap_dir += f'_hsize{h_size}' + lr_schedule + f"_bs{args.batch_size}_seed{args.manual_seed}_{args.model_signature}/"
     if not os.path.exists(args.snap_dir):
         os.makedirs(args.snap_dir)
 
