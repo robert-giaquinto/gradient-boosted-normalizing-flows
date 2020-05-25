@@ -182,8 +182,8 @@ def parse_args(main_args=None):
             args.max_grad_norm = 20.0
             args.weight_decay = 1e-5
         elif args.dataset == "power":
-            args.learning_rate = 1e-3
-            args.min_lr = 1e-4
+            args.learning_rate = 1e-4
+            args.min_lr = 1e-6
             args.max_grad_norm = 10.0
             args.weight_decay = 1e-5
         elif args.dataset == "bsds300":
@@ -346,6 +346,12 @@ def train(model, data_loaders, optimizer, scheduler, args):
             optimizer.step()
             if not args.no_lr_schedule:
                 prev_lr = update_scheduler(prev_lr, model, optimizer, scheduler, losses, step, args)
+
+                if args.lr_schedule == "test":
+                    if step % 50 == 0:
+                        pval_loss = evaluate(model, data_loaders['val'], args)['nll']
+                    
+                    writer.add_scalar('step/val_nll', pval_loss, step)
                     
             step += 1
 
@@ -617,7 +623,7 @@ def compute_kl_pq_loss(model, x, args):
                     weights = torch.max(torch.min(weights, torch.tensor([0.1], device=args.device)), torch.tensor([0.01], device=args.device))
                 if weights.sum() != 1.0:
                     weights = weights / torch.sum(weights)
-
+                    
                 reweighted_idx = torch.multinomial(weights, x.size(0), replacement=True)
                 x_resampled = x[reweighted_idx]
 
