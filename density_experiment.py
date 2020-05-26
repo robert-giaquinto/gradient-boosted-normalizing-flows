@@ -174,9 +174,9 @@ def parse_args(main_args=None):
                 args.max_grad_norm = 20.0
                 args.weight_decay = 1e-5
             elif args.dataset == "gas":
-                args.learning_rate = 1e-3
-                args.min_lr = 3e-6
-                args.max_grad_norm = 10.0
+                args.learning_rate = 7e-4
+                args.min_lr = 2e-6
+                args.max_grad_norm = 20.0
                 args.weight_decay = 1e-4
             elif args.dataset == "hepmass":
                 args.learning_rate = 2e-5
