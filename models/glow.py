@@ -2,10 +2,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 import math
+import numpy as np
 
 from utils.utilities import safe_log, split_feature
 from models.layers import Conv2d, Conv2dZeros, ActNorm1d, ActNorm2d, InvertibleConv1x1, Permute1d, Permute2d, LinearZeros, SqueezeLayer, Split2d
-from models.layers import ConvNet, ReLUNet
+from models.layers import ConvNet, ReLUNet, TanhNet
 
 
 class Glow(nn.Module):

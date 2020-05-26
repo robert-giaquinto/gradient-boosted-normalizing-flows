@@ -75,7 +75,7 @@ sr.add_argument('--discard_results', action='store_false', dest='save_results', 
 parser.set_defaults(save_results=True)
 
 # optimization settings
-parser.add_argument('--epochs', type=int, default=250, help='Maximum number of epochs to train')
+parser.add_argument('--epochs', type=int, default=100, help='Maximum number of epochs to train')
 parser.add_argument('--early_stopping_epochs', type=int, default=50, help='number of early stopping epochs')
 parser.add_argument('--batch_size', type=int, default=512, help='input batch size for training')
 parser.add_argument('--eval_batch_size', type=int, default=1024, help='batch size for evaluation')
@@ -87,10 +87,10 @@ parser.add_argument("--num_init_batches", type=int,default=15, help="Number of b
 parser.add_argument("--warmup_epochs", type=int, default=0, help="Use this number of epochs to warmup learning rate linearly from zero to learning rate")
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
 parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', 'test', 'cyclic', None])
-parser.add_argument('--lr_restarts', type=int, default=1, help='If using a cosine learning rate, how many times should the LR schedule restart? Must evenly divide epochs')
+parser.add_argument('--lr_restarts', type=int, default=1, help='If using a cyclic/cosine learning rate, how many times should the LR schedule restart? Must evenly divide epochs')
 parser.add_argument('--optimizer', type=str, default='adam', choices=['adam', 'sgd'], help='Use AdamW or SDG as optimizer?')
-parser.add_argument("--max_grad_clip", type=float, default=0, help="Max gradient value (clip above max_grad_clip, 0 for off)")
-parser.add_argument("--max_grad_norm", type=float, default=5.0, help="Max norm of gradient (clip above max_grad_norm, 0 for off)")
+parser.add_argument("--max_grad_clip", type=float, default=0.0, help="Max gradient value (clip above max_grad_clip, 0 for off)")
+parser.add_argument("--max_grad_norm", type=float, default=0.0, help="Max norm of gradient (clip above max_grad_norm, 0 for off)")
 
 # flow parameters
 parser.add_argument('--flow', type=str, default='glow', help="Type of flow to use", choices=['realnvp', 'glow', 'boosted'])
@@ -113,7 +113,7 @@ parser.set_defaults(use_attn=False)
 
 parser.add_argument('--h_size', type=int, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--h_size_factor', type=int, help='Sets width of hidden layers as h_size_factor * dimension of data.')
-parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers')
+parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers (not recommended)')
 parser.set_defaults(batch_norm=True)
 parser.add_argument('--coupling_network_depth', type=int, default=1, help='Number of layers in the coupling network of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--coupling_network', type=str, default='tanh', choices=['relu', 'residual', 'tanh', 'random', 'mixed'],
@@ -124,10 +124,10 @@ parser.add_argument('--sample_size', type=int, default=16, help='Number of image
 parser.add_argument("--temperature", type=float, default=1.0, help="Temperature of samples")
 
 # Boosting parameters
-parser.add_argument('--epochs_per_component', type=int, default=1000,
+parser.add_argument('--epochs_per_component', type=int, default=100,
                     help='Number of epochs to train each component of a boosted model. Defaults to max(annealing_schedule, epochs_per_component). Ignored for non-boosted models.')
-parser.add_argument('--boosted_burnin_epochs', type=int, default=0,
-                    help='Number of epochs to warmup/burnin for EACH component before proceeding with a full training schedule')
+parser.add_argument('--boosted_burnin_epochs', type=int, default=None,
+                    help='(DEPRECATED) Number of epochs to warmup/burnin for EACH component before proceeding with a full training schedule')
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
                     help='Initialization scheme for boosted parameter rho')
 parser.add_argument('--rho_iters', type=int, default=100, help='Maximum number of SGD iterations for training boosting weights')
@@ -164,33 +164,64 @@ def parse_args(main_args=None):
     else:
         h_size = str(args.h_size)
 
+    # default optimization settings for each optimizer and dataset
     if args.learning_rate is None:
         logger.info("No learning rate given, using default settings for this dataset")
-        if args.dataset == "miniboone":
-            args.learning_rate = 1e-3
-            args.min_lr = 1e-4  # 4e-5
-            args.max_grad_norm = 60.0
-            args.weight_decay = 1e-5
-        elif args.dataset == "gas":
-            args.learning_rate = 1e-4
-            args.min_lr = 5e-6
-            args.max_grad_norm = 5.0
-            args.weight_decay = 1e-4
-        elif args.dataset == "hepmass":
-            args.learning_rate = 5e-3  #1e-2
-            args.min_lr = 2e-4
-            args.max_grad_norm = 20.0
-            args.weight_decay = 1e-5
-        elif args.dataset == "power":
-            args.learning_rate = 1e-4
-            args.min_lr = 1e-6
-            args.max_grad_norm = 10.0
-            args.weight_decay = 1e-5
-        elif args.dataset == "bsds300":
-            args.learning_rate = 6e-4
-            args.min_lr = 5e-5
-            args.max_grad_norm = 60.0
-            args.weight_decay = 1e-5
+        if args.optimizer == "adam":
+            if args.dataset == "miniboone":
+                args.learning_rate = 5e-4
+                args.min_lr = 5e-6
+                args.max_grad_norm = 20.0
+                args.weight_decay = 1e-5
+            elif args.dataset == "gas":
+                args.learning_rate = 1e-4
+                args.min_lr = 5e-6
+                args.max_grad_norm = 10.0
+                args.weight_decay = 1e-4
+            elif args.dataset == "hepmass":
+                args.learning_rate = 2e-5
+                args.min_lr = 5e-7
+                args.max_grad_norm = 10.0
+                args.weight_decay = 1e-5
+            elif args.dataset == "power":
+                args.learning_rate = 1e-4
+                args.min_lr = 1e-6
+                args.max_grad_norm = 10.0
+                args.weight_decay = 1e-5
+            elif args.dataset == "bsds300":
+                args.learning_rate = 1e-5
+                args.min_lr = 1e-6
+                args.max_grad_norm = 60.0
+                args.weight_decay = 1e-5
+        elif args.optimizer == "sgd":
+            if args.dataset == "miniboone":
+                args.learning_rate = 1e-3
+                args.min_lr = 1e-4
+                args.max_grad_norm = 20.0
+                args.weight_decay = 1e-5
+            elif args.dataset == "gas":
+                args.learning_rate = 1e-4
+                args.min_lr = 5e-6
+                args.max_grad_norm = 10.0
+                args.weight_decay = 1e-4
+            elif args.dataset == "hepmass":
+                args.learning_rate = 1e-3
+                args.min_lr = 1e-5
+                args.max_grad_norm = 10.0
+                args.weight_decay = 1e-5
+            elif args.dataset == "power":
+                args.learning_rate = 1e-3
+                args.min_lr = 1e-4
+                args.max_grad_norm = 10.0
+                args.weight_decay = 1e-5
+            elif args.dataset == "bsds300":
+                args.learning_rate = 6e-4
+                args.min_lr =51e-5
+                args.max_grad_norm = 60.0
+                args.weight_decay = 1e-5
+        else:
+            raise ValueError(f"No default settings found for optimizer {args.optimizer}")
+            
 
     # Set a random seed if not given one
     if args.manual_seed is None:
@@ -299,6 +330,8 @@ def train(model, data_loaders, optimizer, scheduler, args):
     epoch_times = []
     epoch_train = []
     epoch_valid = []
+
+    pval_loss = 0.0
     step = 0
     for epoch in range(args.init_epoch, args.epochs + 1):
 
@@ -387,7 +420,7 @@ def train(model, data_loaders, optimizer, scheduler, args):
 
                 last_component = model.component == (args.num_components - 1)
                 no_fine_tuning = args.epochs <= args.epochs_per_component * args.num_components
-                fine_tuning_done = model.all_trained and last_component and args.boosted_burnin_epochs == 0  # no early stopping if burnin employed
+                fine_tuning_done = model.all_trained and last_component  # no early stopping if burnin employed
                 if (fine_tuning_done or no_fine_tuning) and last_component:
                     # stop the full model after all components have been trained
                     logger.info(f"Model converged, training complete, saving: {args.snap_dir + 'model.pt'}")
@@ -667,15 +700,8 @@ def check_convergence(early_stop_count, losses, best_loss, epoch, stage, args):
     Verify if a boosted component has converged
     """
     if args.boosted:
-        c, all_trained = stage
-        # Check if boosted model completed a stage during the warmup period
-        if args.boosted_burnin_epochs > 0:
-            init_stage_c_done = all_trained == False and (epoch % args.boosted_burnin_epochs == 0)
-        else:
-            init_stage_c_done = False
-            
-        # Consider the boosted model's component as converged if a pre-set number of epochs have elapsed
-        stage_complete = (epoch % args.epochs_per_component == 0) or init_stage_c_done
+        c, all_trained = stage            
+        stage_complete = (epoch % args.epochs_per_component == 0)
         v_loss = losses['g_nll']
     else:
         c = stage
