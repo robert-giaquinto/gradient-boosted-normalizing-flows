@@ -174,20 +174,20 @@ def parse_args(main_args=None):
                 args.max_grad_norm = 20.0
                 args.weight_decay = 1e-5
             elif args.dataset == "gas":
-                args.learning_rate = 7e-4
+                args.learning_rate = 8e-4
                 args.min_lr = 2e-6
                 args.max_grad_norm = 20.0
                 args.weight_decay = 1e-4
             elif args.dataset == "hepmass":
-                args.learning_rate = 2e-5
-                args.min_lr = 5e-7
+                args.learning_rate = 1e-3
+                args.min_lr = 1e-5
                 args.max_grad_norm = 10.0
                 args.weight_decay = 1e-5
             elif args.dataset == "power":
                 args.learning_rate = 1e-4
                 args.min_lr = 1e-6
                 args.max_grad_norm = 10.0
-                args.weight_decay = 1e-5
+                args.weight_decay = 1e-3
             elif args.dataset == "bsds300":
                 args.learning_rate = 1e-5
                 args.min_lr = 1e-6
@@ -247,11 +247,11 @@ def parse_args(main_args=None):
             raise ValueError(f"lr_restarts {args.lr_restarts} must evenly divide epochs {args.epochs}")
 
     args.snap_dir += f'_K{args.num_flows}'
-    if args.flow == "realnvp" or args.component_type == "realnvp":
-        args.snap_dir += f'_{args.coupling_network}{args.coupling_network_depth}'
     if args.flow == "glow" or args.component_type == "glow":
         args.num_dequant_blocks = 0
         args.snap_dir += f'_L{str(args.num_blocks)}_{args.flow_permutation}_{args.flow_coupling}'
+
+    args.snap_dir += f'_{args.coupling_network}{args.coupling_network_depth}'
 
     lr_schedule = f'_lr{str(args.learning_rate)[2:]}'
     if args.lr_schedule is None or args.no_lr_schedule:

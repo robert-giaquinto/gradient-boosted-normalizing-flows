@@ -293,7 +293,7 @@ class FlowStep(nn.Module):
         elif args.coupling_network == "residual":
             coupling_network = ResidualNet
         elif args.coupling_network == "random":
-            coupling_network = [TanhNet, ReLUNet][np.random.randint(1)]
+            coupling_network = [TanhNet, ReLUNet][np.random.randint(2)]
         else:
             coupling_network = ReLUNet
 

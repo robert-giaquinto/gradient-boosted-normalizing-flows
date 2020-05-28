@@ -362,7 +362,7 @@ def train_epoch_boosted(epoch, train_loader, model, optimizer, scheduler, beta, 
             if args.lr_schedule == "plateau":
                 scheduler.step(metrics=loss)
             else:
-                scheduler.step(epoch=step)
+                scheduler.step()
 
             prev_lr[model.component] = optimizer.param_groups[model.component]['lr']
 
