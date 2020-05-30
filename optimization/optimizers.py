@@ -75,10 +75,10 @@ def init_optimizer(model, args, verbose=True):
         
         if args.lr_schedule == "plateau":
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
-                                                                   factor=0.5,
+                                                                   factor=0.9,
                                                                    patience=args.patience * args.train_size,
                                                                    min_lr=args.min_lr,
-                                                                   verbose=True,
+                                                                   verbose=False,
                                                                    threshold_mode='abs')
             if verbose:
                 logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience * args.train_size} epochs until it reaches {args.min_lr}.")                
@@ -114,11 +114,20 @@ def init_optimizer(model, args, verbose=True):
             args.warmup_epochs = 0  # no warmup allowed with cyclic lr
             if args.lr_restarts > 1:
                 # Cyclic Learning Rates
-                steps_per_half_cycle = int(epochs / (2 * args.lr_restarts)) * args.train_size
-                scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer, base_lr=args.min_lr, cycle_momentum=args.optimizer == "sgd",
-                                                             max_lr=args.learning_rate, mode="triangular2", step_size_up=steps_per_half_cycle)
+                #steps_per_half_cycle = int(epochs / (2 * args.lr_restarts)) * args.train_size
+                epochs_per_cycle = int(epochs / args.lr_restarts)
+                steps_up = 3 * args.train_size
+                steps_down = (epochs_per_cycle - 3) * args.train_size
+                scheduler = torch.optim.lr_scheduler.CyclicLR(optimizer,
+                                                              base_lr=args.min_lr,
+                                                              cycle_momentum=args.optimizer == "sgd",
+                                                              max_lr=args.learning_rate,
+                                                              mode="triangular2",
+                                                              step_size_up=steps_up,
+                                                              step_size_down=steps_down)
                 if verbose:
-                    logger.info(f"Using cyclic learning rate schedule between {args.min_lr} and {args.learning_rate}, max lr cut in half after each {2 * steps_per_half_cycle} steps ({epochs / args.lr_restarts} epochs)")
+                    #logger.info(f"Using cyclic learning rate schedule between {args.min_lr} and {args.learning_rate}, max lr cut in half after each {2 * steps_per_half_cycle} steps ({epochs / args.lr_restarts} epochs)")
+                    logger.info(f"Using cyclic learning rate schedule between {args.min_lr} and {args.learning_rate}, max lr cut in half after each cycle of {epochs_per_cycle * args.train_size} steps ({epochs / args.lr_restarts} epochs)")
 
             else:
                 # One Cycle Super Convergence
@@ -204,8 +213,8 @@ class GradualWarmupScheduler(_LRScheduler):
 
 
 class ExponentialLR(_LRScheduler):
-    """Exponentially increases the learning rate between two boundaries over a number of
-    iterations.
+    """
+    Exponentially increases the learning rate between two boundaries over a number of iterations.
     
     Arguments:
         optimizer (torch.optim.Optimizer): wrapped optimizer.

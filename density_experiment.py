@@ -332,6 +332,7 @@ def train(model, data_loaders, optimizer, scheduler, args):
     epoch_valid = []
 
     pval_loss = 0.0
+    val_losses = {'g_nll': 9999999.9}
     step = 0
     for epoch in range(args.init_epoch, args.epochs + 1):
 
@@ -378,7 +379,7 @@ def train(model, data_loaders, optimizer, scheduler, args):
             # Perform gradient update, modify learning rate according to learning rate schedule
             optimizer.step()
             if not args.no_lr_schedule:
-                prev_lr = update_scheduler(prev_lr, model, optimizer, scheduler, losses, step, args)
+                prev_lr = update_scheduler(prev_lr, model, optimizer, scheduler, val_losses['g_nll'], step, args)
 
                 if args.lr_schedule == "test":
                     if step % 50 == 0:
@@ -517,9 +518,9 @@ def update_learning_rates(prev_lr, model, optimizer, step, args):
         optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
 
 
-def update_scheduler(prev_lr, model, optimizer, scheduler, losses, step, args):
+def update_scheduler(prev_lr, model, optimizer, scheduler, loss, step, args):
     if args.lr_schedule == "plateau":
-        scheduler.step(metrics=losses['nll'])
+        scheduler.step(metrics=loss)
     else:
         scheduler.step()
         
@@ -604,7 +605,7 @@ def evaluate(model, data_loader, args, results_type=None):
         
     else:
         nll = torch.stack([compute_kl_pq_loss(model, x.to(args.device), args)['nll'].detach() for (x,_) in data_loader], -1).mean().item()
-        losses = {'nll': nll}
+        losses = {'nll': nll, 'g_nll': nll}
     
     if args.save_results and results_type is not None:
         results_msg = f'{results_type} set loss: {losses["nll"]:.6f}'

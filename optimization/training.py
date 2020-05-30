@@ -171,7 +171,7 @@ def train_epoch_vae(epoch, train_loader, model, optimizer, scheduler, args):
             if args.lr_schedule == "plateau":
                 scheduler.step(metrics=loss)
             else:
-                scheduler.step(epoch=step)
+                scheduler.step()
 
         train_loss[batch_id] = loss.item()
         train_rec[batch_id] = rec.item()
