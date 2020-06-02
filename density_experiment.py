@@ -363,9 +363,6 @@ def train(model, data_loaders, optimizer, scheduler, args):
             train_loss.append(losses['nll'])
             losses['nll'].backward()
 
-            # clip gradients if requested
-            if args.max_grad_clip > 0:
-                torch.nn.utils.clip_grad_value_(model.parameters(), args.max_grad_clip)
             if args.max_grad_norm > 0:
                 grad_norm = torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
@@ -438,8 +435,9 @@ def train(model, data_loaders, optimizer, scheduler, args):
                 logger.info("-"*(len(header_msg)))
                 
                 # reset optimizer, scheduler, and early_stop_count and train the next component
-                model.increment_component()                
+                model.increment_component()
                 early_stop_count = 0
+                val_losses = {'g_nll': 9999999.9}
                 optimizer, scheduler = init_optimizer(model, args, verbose=False)
                 prev_lr = init_boosted_lr(model, optimizer, args)
             else:
@@ -632,7 +630,7 @@ def compute_kl_pq_loss(model, x, args):
             else:
                 # combine weighted likelihoods from each component
                 G_ll = torch.zeros(x.size(0))
-                for c in range(model.component):  # TODO: if model.all_trained then what?
+                for c in range(model.component):
                     z_G, _, _, ldj_G, _ = model(x=x, components=c)
                     if c == 0:
                         G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G

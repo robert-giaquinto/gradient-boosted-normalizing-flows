@@ -302,10 +302,10 @@ class FlowStep(nn.Module):
 
         if flow_coupling == "additive":
             #self.block = get_block(in_dim // 2, in_dim // 2, hidden_dim, image_input)
-            self.block = coupling_network(coupling_in_dim, coupling_out_dim, hidden_dim)
+            self.block = coupling_network(coupling_in_dim, coupling_out_dim, hidden_dim, args.coupling_network_depth)
         elif flow_coupling == "affine":
             #self.block = get_block(in_dim // 2, in_dim, hidden_dim, image_input)
-            self.block = coupling_network(coupling_in_dim, coupling_out_dim * 2, hidden_dim)
+            self.block = coupling_network(coupling_in_dim, coupling_out_dim * 2, hidden_dim, args.coupling_network_depth)
 
     def forward(self, input, logdet=None, reverse=False):
         if reverse:

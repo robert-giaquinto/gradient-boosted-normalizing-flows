@@ -68,7 +68,6 @@ def init_optimizer(model, args, verbose=True):
         scheduler = None
         
     else:
-
         epochs = args.epochs_per_component if args.boosted else args.epochs
         if args.min_lr is None:
             raise ValueError("Must specify a min_lr for lr_schedules")
@@ -81,7 +80,7 @@ def init_optimizer(model, args, verbose=True):
                                                                    verbose=False,
                                                                    threshold_mode='abs')
             if verbose:
-                logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience * args.train_size} epochs until it reaches {args.min_lr}.")                
+                logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 10% after {args.patience} epochs until it reaches {args.min_lr}.")                
             
         elif args.lr_schedule == "cosine":
             msg = "Using a cosine annealing learning-rate schedule, "

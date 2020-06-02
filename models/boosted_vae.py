@@ -33,7 +33,7 @@ class BoostedVAE(VAE):
         if args.rho_init == "decreasing":
             # each component is given half the weight of the previous one
             self.register_buffer('rho', torch.clamp(
-                1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(1.0) + \
+                1.0 / torch.pow(2.0, self.FloatTensor(self.num_components).fill_(0.0) + \
                                 torch.arange(self.num_components * 1.0, device=args.device)), min=0.05).to(args.device))
         else:
             # args.rho_init == "uniform"

@@ -68,6 +68,7 @@ def neg_elbo(x_recon, x, z_mu, z_var, z_0, z_k, ldj, args, beta=1.0):
 
 def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regularization_rate, first_component, args, beta=1.0):
 
+    # Reconstruction term
     if args.input_type == "binary":
         reconstruction_function = nn.BCEWithLogitsLoss(reduction='sum')
         recon_loss = reconstruction_function(x_recon, x)
@@ -80,18 +81,10 @@ def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regulariza
         else:
             x_recon = x_recon.view(batch_size, num_classes, args.input_size[0], args.input_size[1], args.input_size[2])
 
-        # make integer class labels
         target = (x * (num_classes-1)).long()
-
-        # - N E_q0 [ ln p(x|z_k) ]
-        # sums over batch dimension (and feature dimension)
         recon_loss = cross_entropy(x=x_recon, target=target, reduction='sum')
     else:
         raise ValueError('Invalid input type for calculate loss: %s.' % args.input_type)
-
-    if torch.isnan(recon_loss).any().item():
-        print(x_recon.data,"\n", x.data)
-        raise SystemExit
 
     # prior: ln p(z_k)  (not averaged)
     log_p_zk = torch.sum(log_normal_standard(z_g[-1], dim=1))
@@ -114,7 +107,7 @@ def boosted_neg_elbo(x_recon, x, z_mu, z_var, z_g, g_ldj, z_G, G_ldj, regulariza
         log_G_z = torch.clamp(log_G_base - G_ldj, min=-1000.0)
         log_ratio = torch.sum(log_G_z.data - log_g_z.data).detach()
 
-        # limit log likelihoods to a small number for numerical stability
+        # limit log likelihoods of FIXED components to a small number for numerical stability
         log_G_z = torch.sum(torch.max(log_G_z, torch.ones_like(G_ldj) * G_MAX_LOSS))
         entropy = torch.sum(regularization_rate * log_g_z)
 

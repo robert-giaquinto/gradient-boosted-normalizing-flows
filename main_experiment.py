@@ -56,6 +56,8 @@ parser.add_argument('--plot_interval', type=int, default=10, help='Number of epo
 parser.add_argument('--out_dir', type=str, default='./results/snapshots', help='Output directory for model snapshots etc.')
 parser.add_argument('--data_dir', type=str, default='./data/raw/', help="Where raw data is saved.")
 parser.add_argument('--exp_log', type=str, default='./results/experiment_log.txt', help='File to save high-level results from each run of an experiment.')
+parser.add_argument('--save_intermediate_checkpoints', dest="save_intermediate_checkpoints",
+                    action="store_true", help='Save versions of the boosted model after each component converges.')
 parser.add_argument('--print_log', dest="print_log", action="store_true", help='Add this flag to have progress printed to log (rather just than saved to a file).')
 parser.add_argument('--no_tensorboard', dest="tensorboard", action="store_false", help='Turns off saving results to tensorboard.')
 parser.set_defaults(print_log=False)
@@ -90,6 +92,7 @@ parser.set_defaults(testing=True)
 parser.add_argument('--epochs', type=int, default=100, help='number of epochs to train (default: 100)')
 parser.add_argument('--early_stopping_epochs', type=int, default=100, help='number of early stopping epochs')
 parser.add_argument('--batch_size', type=int, default=64, help='input batch size for training (default: 64)')
+parser.add_argument('--eval_batch_size', type=int, default=64, help='batch size for evaluation')
 parser.add_argument('--learning_rate', type=float, default=0.0005, help='learning rate')
 parser.add_argument('--min_lr', type=float, default=1e-6, help='Minimum learning rate used in cyclic learning rates schedulers')
 parser.add_argument('--annealing_schedule', type=int, default=100, help='Number of epochs to anneal the KL term. Set to 0 to turn beta annealing off. Applies this annealing schedule to each component of a boosted model.')
@@ -320,6 +323,9 @@ def main(main_args=None):
     training_required = args.epochs > 0 or args.load is None
     if training_required:
         logger.info('TRAINING:')
+        if args.tensorboard:
+            logger.info(f'Follow progress on tensorboard: tb {args.snap_dir}')
+
         train_loss, val_loss = train(train_loader, val_loader, model, optimizer, scheduler, args)
 
     # =========================================================================
