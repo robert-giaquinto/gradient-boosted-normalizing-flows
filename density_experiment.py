@@ -301,9 +301,6 @@ def init_model(args):
     else:
         raise ValueError('Invalid flow choice')
 
-    #if device == 'cuda':
-    #    model = torch.nn.DataParallel(model, args.gpu_ids)
-
     return model
 
 
@@ -582,11 +579,10 @@ def evaluate(model, data_loader, args, results_type=None):
                 g_nll.append(g_nll_i.detach())
 
         G_nll = torch.cat(G_nll, dim=0)
-        # remove nan for now
-        not_inf = torch.isinf(G_nll) == False
-        G_nll = G_nll[not_inf]
-        not_nan = torch.isnan(G_nll) == False
-        G_nll = G_nll[not_nan]
+        #not_inf = torch.isinf(G_nll) == False  # debug
+        #G_nll = G_nll[not_inf]
+        #not_nan = torch.isnan(G_nll) == False
+        #G_nll = G_nll[not_nan]
 
         mean_G_nll = G_nll.mean().item()
         losses = {'nll': mean_G_nll}
@@ -646,11 +642,7 @@ def compute_kl_pq_loss(model, x, args):
             reweight_samples = True
             if reweight_samples:
                 # 2. Sample x with replacement, weighted by G_nll
-                #weights = torch.exp(G_nll - torch.logsumexp(G_nll, dim=0))  # normalize weights: large NLL => large weight
                 weights = softmax(G_nll)
-                orig_weights = weights
-                if weights.min() < 0.0:
-                    weights = weights - weights.min()
                 if weights.max() > 0.1:
                     weights = torch.max(torch.min(weights, torch.tensor([0.1], device=args.device)), torch.tensor([0.01], device=args.device))
                 if weights.sum() != 1.0:

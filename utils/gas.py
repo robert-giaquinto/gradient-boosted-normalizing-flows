@@ -53,7 +53,6 @@ def load_data_and_clean(file):
 
     #print(data.corr())
     data = (data - data.mean()) / data.std()
-    data = np.delete(data.values, np.where(data.values[:, 3] > 100.0)[0], axis=0)
     return data
 
 
