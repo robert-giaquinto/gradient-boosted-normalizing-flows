@@ -130,7 +130,7 @@ parser.add_argument('--boosted_burnin_epochs', type=int, default=None,
                     help='(DEPRECATED) Number of epochs to warmup/burnin for EACH component before proceeding with a full training schedule')
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
                     help='Initialization scheme for boosted parameter rho')
-parser.add_argument('--rho_iters', type=int, default=100, help='Maximum number of SGD iterations for training boosting weights')
+parser.add_argument('--rho_iters', type=int, default=0, help='Maximum number of SGD iterations for training boosting weights')
 parser.add_argument('--rho_lr', type=float, default=0.005, help='Initial learning rate used for training boosting weights')
 parser.add_argument('--num_components', type=int, default=2,
                     help='How many components are combined to form the flow')
@@ -562,7 +562,7 @@ def evaluate(model, data_loader, args, results_type=None):
                 for c in range(model.component + 1):
                     z_G, _, _, ldj_G, _ = model(x=x, components=c)
                     if c == 0:
-                        G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G                        
+                        G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G
                     else:
                         rho_simplex = model.rho[0:(c+1)] / torch.sum(model.rho[0:(c+1)])
                         last_ll = torch.log(1 - rho_simplex[c]) + G_ll
@@ -579,18 +579,11 @@ def evaluate(model, data_loader, args, results_type=None):
                 g_nll.append(g_nll_i.detach())
 
         G_nll = torch.cat(G_nll, dim=0)
-        #not_inf = torch.isinf(G_nll) == False  # debug
-        #G_nll = G_nll[not_inf]
-        #not_nan = torch.isnan(G_nll) == False
-        #G_nll = G_nll[not_nan]
-
         mean_G_nll = G_nll.mean().item()
         losses = {'nll': mean_G_nll}
 
         if model.component > 0 or model.all_trained:
             g_nll = torch.cat(g_nll, dim=0)
-            g_nll = g_nll[not_inf]
-            g_nll = g_nll[not_nan]
             losses['g_nll'] = g_nll.mean().item()
             losses['ratio'] = torch.mean(g_nll - G_nll).item()
         else:
@@ -616,56 +609,51 @@ def compute_kl_pq_loss(model, x, args):
         if model.all_trained or model.component > 0:
 
             # 1. Compute likelihood/weight for each sample
-            approximate_fixed_G = False
-            
-            if approximate_fixed_G:
-                # randomly sample a component
-                fixed = '-c' if model.all_trained else '1:c-1'
-                z_G, _, _, ldj_G, _ = model(x=x, components=fixed)
-                G_nll = -1.0 * (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
-            else:
-                # combine weighted likelihoods from each component
-                G_ll = torch.zeros(x.size(0))
-                for c in range(model.component):
-                    z_G, _, _, ldj_G, _ = model(x=x, components=c)
-                    if c == 0:
-                        G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G
-                    else:
-                        rho_simplex = model.rho[0:(c+1)] / torch.sum(model.rho[0:(c+1)])
-                        last_ll = torch.log(1 - rho_simplex[c]) + G_ll
-                        next_ll = torch.log(rho_simplex[c]) + (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
-                        uG_ll = torch.cat([last_ll.view(x.size(0), 1), next_ll.view(x.size(0), 1)], dim=1)
-                        G_ll = torch.logsumexp(uG_ll, dim=1)
+            G_ll = torch.zeros(x.size(0))
+            for c in range(model.component):
+                z_G, _, _, ldj_G, _ = model(x=x, components=c)
+                if c == 0:
+                    G_ll = log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G
+                else:
+                    rho_simplex = model.rho[0:(c+1)] / torch.sum(model.rho[0:(c+1)])
+                    last_ll = torch.log(1 - rho_simplex[c]) + G_ll
+                    next_ll = torch.log(rho_simplex[c]) + (log_normal_standard(z_G, reduce=True, dim=-1, device=args.device) + ldj_G)
+                    uG_ll = torch.cat([last_ll.view(x.size(0), 1), next_ll.view(x.size(0), 1)], dim=1)
+                    G_ll = torch.logsumexp(uG_ll, dim=1)
                 
-                G_nll = -1.0 * G_ll
+            G_nll = -1.0 * G_ll
 
-            reweight_samples = True
-            if reweight_samples:
-                # 2. Sample x with replacement, weighted by G_nll
-                weights = softmax(G_nll)
-                if weights.max() > 0.1:
-                    weights = torch.max(torch.min(weights, torch.tensor([0.1], device=args.device)), torch.tensor([0.01], device=args.device))
-                if weights.sum() != 1.0:
-                    weights = weights / torch.sum(weights)
-                    
-                reweighted_idx = torch.multinomial(weights, x.size(0), replacement=True)
-                x_resampled = x[reweighted_idx]
-
-                # 3. Compute g for resampled observations
-                z_g, _, _, ldj_g, _ = model(x=x_resampled, components="c")
-                g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
-                nll = torch.mean(g_nll)
-
+            # 2. Sample x with replacement, weighted by G_nll
+            weights = softmax(G_nll)
+            heuristic = "unity"
+            if heuristic == "decay":
+                beta = 1.0 / (2.0**model.component)
+            elif heuristic == "uniform":
+                beta = 1.0 / (1.0 + args.num_components)
             else:
-                z_g, _, _, ldj_g, _ = model(x=x, components="c")
-                g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
-                nll = torch.mean(g_nll - G_nll)
+                beta = 1.0  # unity
+                
+            weights = torch.pow(weights, beta)
+            
+            if weights.max() > 0.1:
+                weights = torch.max(torch.min(weights, torch.tensor([0.1], device=args.device)), torch.tensor([0.01], device=args.device))
+            if weights.sum() != 1.0:
+                weights = weights / torch.sum(weights)
+                    
+            reweighted_idx = torch.multinomial(weights, x.size(0), replacement=True)
+            x_resampled = x[reweighted_idx]
+
+            # 3. Compute g for resampled observations
+            z_g, _, _, ldj_g, _ = model(x=x_resampled, components="c")
+            g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
+            nll = torch.mean(g_nll)
 
             losses = {"nll": nll}
             losses["G_nll"] = torch.mean(G_nll)
             losses["g_nll"] = torch.mean(g_nll)
             
         else:
+            # train first boosted component just like a non-boosted model
             z_g, _, _, ldj_g, _ = model(x=x, components="c")
             g_nll = -1.0 * (log_normal_standard(z_g, reduce=True, dim=-1, device=args.device) + ldj_g)
             losses = {"nll": torch.mean(g_nll)}

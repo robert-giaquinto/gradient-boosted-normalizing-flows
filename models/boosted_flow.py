@@ -36,14 +36,14 @@ class BoostedFlow(GenerativeFlow):
                                 torch.arange(self.num_components * 1.0, device=args.device)), min=0.05).to(args.device))
         else:
             # args.rho_init == "uniform"
-            #self.register_buffer('rho', self.FloatTensor(self.num_components).fill_(1.0 / self.num_components))
-            self.register_buffer('rho', self.FloatTensor(self.num_components).fill_(1.0))
+            self.register_buffer('rho', self.FloatTensor(self.num_components).fill_(1.0 / self.num_components))
+            #self.register_buffer('rho', self.FloatTensor(self.num_components).fill_(1.0))
 
         # initialize component flows
         self.flows = nn.ModuleList()
         for c in range(self.num_components):
             if args.component_type == "realnvp":
-                self.flows.append(RealNVPFlow(args, flip_init=0))
+                self.flows.append(RealNVPFlow(args, flip_init=c))
             elif args.component_type == "glow":
                 self.flows.append(Glow(args))
             else:

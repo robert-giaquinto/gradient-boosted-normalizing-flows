@@ -67,8 +67,8 @@ def plot(batch_id, model, potential_or_sampling_fn, args):
     # save
     fname = f'{args.dataset}_{args.flow}_K{args.num_flows}_bs{args.batch_size}'
     fname += f'_C{args.num_components}_reg{int(100*args.regularization_rate):d}_{args.component_type}' if args.flow == 'boosted' else ''
-    fname += f'_{args.base_network}{args.num_base_layers}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
-    fname += f'_hidden{args.num_base_layers}_hsize{args.h_size}' if args.flow == 'iaf' else ''
+    fname += f'_{args.coupling_network}{args.coupling_network_depth}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
+    fname += f'_hidden{args.coupling_network_depth}_hsize{args.h_size}' if args.flow == 'iaf' else ''
     fname += '_annealed' if args.min_beta < 1.0 else ''
     fname += '_lr_scheduling' if not args.no_lr_schedule else ''
     plt.savefig(os.path.join(args.snap_dir, fname + f'_step{batch_id:07d}.png'))
@@ -166,7 +166,8 @@ def plot_fwd_flow_density(model, ax, test_grid, n_pts, batch_size, args):
     # compute posterior approx density
     zzk, logdet = [], []
     for zz_i in zz.split(batch_size, dim=0):        
-        zzk_i, logdet_i = model.flow(zz_i)
+        #zzk_i, logdet_i = model.flow(zz_i)
+        zzk_i, _, _, logdet_i, _ = model(x=zz_i)
         zzk += [zzk_i]
         logdet += [logdet_i]
         
@@ -194,7 +195,7 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
     plt_height = max(2, int(np.ceil(np.sqrt(args.num_components))) + 1)
             
     total_prob = torch.zeros(n_pts, n_pts)
-    num_components_to_plot = args.num_components if model.all_trained else model.component + 1
+    num_components_to_plot = max(1, args.num_components if model.all_trained else model.component + 1)
     for c in range(num_components_to_plot):
         if model.rho[c] == 0.0:
             continue
@@ -206,17 +207,17 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
 
         zzk, logdet = [], []
         for zz_i in zz.split(batch_size, dim=0):
-            ZZ_i, logdet_i = model.component_forward_flow(zz_i, c)
-            zzk += [ZZ_i[-1]]  # grab K-th element
+            ZZ_i, _, _, logdet_i, _ = model(x=zz_i, components=c)
+            zzk += [ZZ_i]    
             logdet += [logdet_i]
 
         zzk, logdet = torch.cat(zzk, 0), torch.cat(logdet, 0)
         q_log_prob = model.base_dist.log_prob(zzk).sum(1)
         log_prob = q_log_prob + logdet
-        prob = log_prob.exp().cpu()
+        prob = log_prob.exp().cpu().view(n_pts,n_pts).data
 
         # plot component c
-        axs[row,col].pcolormesh(xx, yy, prob.view(n_pts,n_pts).data, cmap=plt.cm.viridis)
+        axs[row,col].pcolormesh(xx, yy, prob, cmap=plt.cm.viridis)
         axs[row,col].set_facecolor(plt.cm.viridis(0.))
         axs[row,col].set_title(f'c={c}', fontdict={'fontsize': 20})
 
@@ -224,7 +225,7 @@ def plot_boosted_fwd_flow_density(model, axs, test_grid, n_pts, batch_size, args
         total_prob += log_prob.cpu().view(n_pts, n_pts).data * model.rho[c]
 
     # plot full model
-    total_prob = total_prob.exp()
+    total_prob = torch.exp(total_prob / torch.sum(model.rho[0:num_components_to_plot]))
     axs[0,1].pcolormesh(xx, yy, total_prob, cmap=plt.cm.viridis)
     axs[0,1].set_facecolor(plt.cm.viridis(0.))
     axs[0,1].set_title('GBF - All Components', fontdict={'fontsize': 20})
@@ -258,8 +259,8 @@ def plot_inv_flow_density(model, ax, test_grid, n_pts, batch_size, args):
     
 def plot_inv_flow(model, batch_id, n_pts, batch_size, args):
     fname = f'{args.dataset}_{args.flow}_K{args.num_flows}_bs{args.batch_size}'
-    fname += f'_{args.base_network}{args.num_base_layers}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
-    fname += f'_hidden{args.num_base_layers}_hsize{args.h_size}' if args.flow == 'iaf' else ''
+    fname += f'_{args.coupling_network}{args.coupling_network_depth}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
+    fname += f'_hidden{args.coupling_network_depth}_hsize{args.h_size}' if args.flow == 'iaf' else ''
     fname += '_annealed' if args.min_beta < 1.0 else ''
     fname += '_lr_scheduling' if not args.no_lr_schedule else ''
 
@@ -313,7 +314,7 @@ def plot_boosted_inv_flow(model, batch_id, n_pts, batch_size, args):
     """
     fname = f'{args.dataset}_{args.flow}_K{args.num_flows}_bs{args.batch_size}'
     fname += f'_C{args.num_components}_reg{int(100*args.regularization_rate):d}_{args.component_type}'
-    fname += f'_{args.base_network}{args.num_base_layers}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
+    fname += f'_{args.coupling_network}{args.coupling_network_depth}_hsize{args.h_size}' if args.component_type == 'realnvp' or args.flow == 'realnvp' else ''
     fname += '_annealed' if args.min_beta < 1.0 else ''
     fname += '_lr_scheduling' if not args.no_lr_schedule else ''
 

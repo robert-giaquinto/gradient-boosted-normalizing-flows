@@ -5,7 +5,7 @@ source ./scripts/experiment_config.sh
 source ./venv/bin/activate
 
 # variables specific to this experiment
-experiment_name=example
+experiment_name=getting_started
 dataset=caltech # freyfaces
 seed=123
 num_flows=2
@@ -25,6 +25,7 @@ epochs=$((num_components * epochs_per_component))
 
 python main_experiment.py --dataset ${dataset} \
        --experiment_name ${experiment_name} \
+       --print_log \
        --testing \
        --nll_samples 100 \
        --nll_mb 50 \

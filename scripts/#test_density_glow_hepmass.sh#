@@ -1,0 +1,56 @@
+# Load defaults for all experiments
+source ./scripts/experiment_config_uci.sh
+
+# activate virtual environment
+source ./venv/bin/activate
+
+# variables specific to this experiment
+experiment_name=uci_adam
+dataset=hepmass
+seed=3
+num_flows=10
+component_type=glow
+h_size_factor=10
+coupling_network=tanh
+
+epochs_per_component=150  # override default for this small example
+num_components=4
+lr_schedule=cosine
+lr_restarts=1
+optimizer=adam
+warmup_epochs=1
+batch_size=512
+
+early_stop=$((epochs_per_component / lr_restarts / 2))
+epochs=$((num_components * epochs_per_component))
+
+
+python -m density_experiment --dataset ${dataset} \
+       --learning_rate 1e-3 \
+       --min_lr 1e-5 \
+       --max_grad_norm 10.0 \
+       --weight_decay 1e-5 \
+       --experiment_name ${experiment_name} \
+       --print_log \
+       --testing \
+       --no_cuda \
+       --num_workers 2 \
+       --optimizer ${optimizer} \
+       --lr_schedule ${lr_schedule} \
+       --lr_restarts ${lr_restarts} \
+       --warmup_epochs ${warmup_epochs} \
+       --epochs ${epochs} \
+       --epochs_per_component ${epochs_per_component} \
+       --early_stopping_epochs ${early_stop} \
+       --batch_size ${batch_size} \
+       --flow boosted \
+       --rho_init decreasing \
+       --rho_iters 0 \
+       --rho_lr 0.01 \
+       --component_type ${component_type} \
+       --h_size_factor ${h_size_factor} \
+       --num_components ${num_components} \
+       --num_flows ${num_flows} \
+       --manual_seed ${seed} 
+
+echo "Job complete!"

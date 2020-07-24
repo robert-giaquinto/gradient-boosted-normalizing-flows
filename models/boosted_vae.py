@@ -84,8 +84,10 @@ class BoostedVAE(VAE):
                             flow_c_k.append(coupling_network(in_dim, out_dim, args.h_size, args.coupling_network_depth))
                             
                         
-                    if args.batch_norm:
+                    if args.batch_norm and k < self.num_flows - 1:
                         flow_c_k.append(BatchNorm(self.z_size))
+                    else:
+                        flow_c_k.append(None)
                         
                     flow_c.append(nn.ModuleList(flow_c_k))
                     

@@ -494,26 +494,24 @@ class NLSq(nn.Module):
         return z_new, log_det_jacobian
 
         
-class RealNVP(nn.Module):
+class PairedRealNVP(nn.Module):
     """
     Non-volume preserving flow.
     [Dinh et. al. 2017]
 
-    Contains coupling layers, representating one RealNVP flow step
+    Contains coupling layers, representating TWO RealNVP coupling layers: one for each half of the data
     """
-    def __init__(self, dim, use_batch_norm=False):
+    def __init__(self, dim):
         super().__init__()        
         self.dim = dim
-        self.use_batch_norm = use_batch_norm
 
     def forward(self, x, layers):
-        if self.use_batch_norm:
-            (t1, s1, t2, s2, batch_norm), flipped = layers
-        else:
-            (t1, s1, t2, s2), flipped = layers
+        (t1, s1, t2, s2, batch_norm), flipped = layers
 
-        if self.use_batch_norm:
+        if batch_norm is not None:
             x, bn_ldj = batch_norm(x)
+        else:
+            bn_ldj = 0.0
 
         lower, upper = (x[:, self.dim // 2:], x[:, :self.dim // 2]) if flipped > 0 else (x[:, :self.dim // 2], x[:, self.dim // 2:])
 
@@ -530,10 +528,7 @@ class RealNVP(nn.Module):
         return z, log_det
 
     def inverse(self, z, layers):
-        if self.use_batch_norm:
-            (t1, s1, t2, s2, batch_norm), flipped = layers
-        else:
-            (t1, s1, t2, s2), flipped = layers
+        (t1, s1, t2, s2, batch_norm), flipped = layers
 
         lower, upper = (z[:, :self.dim // 2], z[:, self.dim // 2:]) if flipped else (z[:, self.dim // 2:], z[:, :self.dim // 2])
         t2_transformed = t2(upper)
@@ -545,31 +540,27 @@ class RealNVP(nn.Module):
         x = torch.cat([lower, upper], dim=1)
         log_det = torch.sum(-s1_transformed, dim=1) + torch.sum(-s2_transformed, dim=1)
 
-        if self.use_batch_norm:
+        if batch_norm is not None:
             x, ldj = batch_norm.inverse(x)
             log_det = log_det + ldj
 
         return x, log_det
 
 
-class RealNVP2(nn.Module):
+class RealNVP(nn.Module):
     """
     Non-volume preserving flow.
     [Dinh et. al. 2017]
 
     Contains coupling layers, representating one RealNVP flow step
     """
-    def __init__(self, use_batch_norm=True):
+    def __init__(self):
         super().__init__()        
-        self.use_batch_norm = use_batch_norm
 
     def forward(self, x, layers):
-        if self.use_batch_norm:
-            (t_net, s_net, batch_norm), flipped = layers
-        else:
-            (t_net, s_net), flipped = layers
+        (t_net, s_net, batch_norm), flipped = layers
 
-        if self.use_batch_norm:
+        if batch_norm is not None:
             x, bn_ldj = batch_norm(x)
         else:
             bn_ldj = 0.0
@@ -588,10 +579,7 @@ class RealNVP2(nn.Module):
         return z, log_det
 
     def inverse(self, z, layers):
-        if self.use_batch_norm:
-            (t_net, s_net, batch_norm), flipped = layers
-        else:
-            (t_net, s_net), flipped = layers
+        (t_net, s_net, batch_norm), flipped = layers
 
         if flipped:
             x1, x2 = split_feature(z, "split")
@@ -604,7 +592,7 @@ class RealNVP2(nn.Module):
         x = torch.cat([x1, x2], dim=1)
         log_det = torch.sum(-scale, dim=1)
 
-        if self.use_batch_norm:
+        if batch_norm is not None:
             x, bn_ldj = batch_norm.inverse(x)
             log_det = log_det + bn_ldj
 

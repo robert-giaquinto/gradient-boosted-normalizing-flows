@@ -28,8 +28,8 @@ class RealNVPFlow(GenerativeFlow):
         self.sample_size = args.sample_size
         self.flip_init = flip_init
         
-        #self.flow_step = flows.RealNVP(dim=self.z_size, use_batch_norm=args.batch_norm)
-        self.flow_step = flows.RealNVP2(use_batch_norm=args.batch_norm)
+        #self.flow_step, num_nets = flows.PairedRealNVP(dim=self.z_size), 4
+        self.flow_step, num_nets = flows.RealNVP(), 2
         
         self.flow_param = nn.ModuleList()
         for k in range(self.num_flows):
@@ -48,12 +48,12 @@ class RealNVPFlow(GenerativeFlow):
                 # scale network s uses TanH, shift network t uses relu
                 # this setup is mention in original paper and MAF or MADE paper
                 flow_k += [ReLUNet(in_dim, out_dim, args.h_size, args.coupling_network_depth),
-                           TanhNet(in_dim, out_dim, args.h_size, args.coupling_network_depth)] #,
-                #ReLUNet(out_dim, in_dim, args.h_size, args.coupling_network_depth),
-                #TanhNet(out_dim, in_dim, args.h_size, args.coupling_network_depth)]
+                           TanhNet(in_dim, out_dim, args.h_size, args.coupling_network_depth)]
+                if num_nets > 2:
+                    flow_k += [ReLUNet(out_dim, in_dim, args.h_size, args.coupling_network_depth),
+                               TanhNet(out_dim, in_dim, args.h_size, args.coupling_network_depth)]
             else:
-                #for n in range(4):
-                for n in range(2): 
+                for n in range(num_nets): 
                     if args.coupling_network == "tanh":
                         coupling_network = TanhNet
                     elif args.coupling_network == "residual":
@@ -68,8 +68,10 @@ class RealNVPFlow(GenerativeFlow):
                     else:
                         flow_k += [coupling_network(out_dim, in_dim, args.h_size, args.coupling_network_depth)]
 
-            if args.batch_norm:
+            if args.batch_norm and k < self.num_flows - 1:
                 flow_k += [BatchNorm(self.z_size)]
+            else:
+                flow_k += [None]
 
             self.flow_param.append(nn.ModuleList(flow_k))
 
@@ -155,7 +157,7 @@ class RealNVPVAE(VAE):
         self.flow_param = nn.ModuleList()
         for k in range(self.num_flows):
             flow_k = [coupling_network(in_dim, out_dim, args.h_size, args.coupling_network_depth) for _ in range(4)]
-            if args.batch_norm:
+            if args.batch_norm: # and k < self.num_flows - 1:
                 flow_k += [BatchNorm(self.z_size)]
 
             self.flow_param.append(nn.ModuleList(flow_k))

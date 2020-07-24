@@ -5,22 +5,27 @@ source ./scripts/experiment_config_density.sh
 source ./venv/bin/activate
 
 # variables specific to this experiment
-exp_name=density_estimation
-iters_per_component=20000
-num_steps=160000
-learning_rate=0.0005
-plot_resolution=250
+exp_name=toy_estimation
+#iters_per_component=10000
+iters_per_component=2500
+learning_rate=0.001
+plot_resolution=100
 dataset=8gaussians
 num_components=8
-num_flows=1
-regularization_rate=0.8
+num_flows=4
+
+num_steps=$((num_components * iters_per_component * 2))
 
 python -m toy_experiment --dataset ${dataset} \
        --experiment_name ${exp_name} \
+       --print_log \
        --no_cuda \
        --no_annealing \
-       --no_lr_schedule \
-       --num_workers 1 \
+       --lr_schedule cosine \
+       --max_grad_norm 20.0 \
+       --no_batch_norm \
+       --warmup_iters 50 \
+       --num_workers 3 \
        --num_steps ${num_steps} \
        --learning_rate ${learning_rate} \
        --iters_per_component ${iters_per_component} \
@@ -31,12 +36,13 @@ python -m toy_experiment --dataset ${dataset} \
        --coupling_network_depth 1 \
        --coupling_network tanh \
        --h_size 256 \
-       --regularization_rate ${regularization_rate} \
-       --batch_size 64 \
+       --batch_size 100 \
        --manual_seed 1 \
-       --log_interval ${logging} \
+       --rho_iters 0 \
+       --rho_init uniform \
+       --log_interval 500 \
        --plot_resolution ${plot_resolution} \
-       --plot_interval 1000 ;
+       --plot_interval 500 ;
 
 
 

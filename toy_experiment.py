@@ -8,8 +8,10 @@ import os
 import logging
 import torch.optim as optim
 from tensorboardX import SummaryWriter
+from collections import Counter
 
 from models.boosted_vae import BoostedVAE
+from models.boosted_flow import BoostedFlow
 from models.realnvp import RealNVPFlow
 from models.iaf import IAFFlow
 from models.planar import PlanarFlow
@@ -20,8 +22,9 @@ from models.nlsq import NLSqFlow
 
 from utils.density_plotting import plot
 from utils.load_data import make_toy_density, make_toy_sampler
-from utils.utilities import init_log
+from utils.utilities import init_log, softmax
 from optimization.optimizers import GradualWarmupScheduler
+from utils.distributions import log_normal_diag, log_normal_standard, log_normal_normalized
 
 
 logger = logging.getLogger(__name__)
@@ -73,7 +76,7 @@ parser.add_argument('--plot_resolution', type=int, default=250, help='how many p
 # optimization settings
 parser.add_argument('--num_steps', type=int, default=100000, help='number of training steps to take (default: 100000)')
 parser.add_argument('--batch_size', type=int, default=256, help='input batch size for training (default: 64)')
-parser.add_argument('--learning_rate', type=float, default=0.005, help='learning rate')
+parser.add_argument('--learning_rate', type=float, default=0.001, help='learning rate')
 parser.add_argument('--regularization_rate', type=float, default=0.8, help='Regularization penalty for boosting.')
 parser.add_argument('--iters_per_component', type=int, default=10000, help='how often to train each boosted component before changing')
 parser.add_argument('--max_beta', type=float, default=1.0, help='max beta for warm-up')
@@ -82,9 +85,10 @@ parser.add_argument('--no_annealing', action='store_true', default=False, help='
 parser.add_argument('--weight_decay', type=float, default=0.0, help='Weight decay parameter in Adamax')
 parser.add_argument('--no_lr_schedule', action='store_true', default=False, help='Disables learning rate scheduler during training')
 parser.add_argument('--lr_schedule', type=str, default=None, help="Type of LR schedule to use.", choices=['plateau', 'cosine', None])
+parser.add_argument('--lr_restarts', type=int, default=1, help='If using a cyclic/cosine learning rate, how many times should the LR schedule restart? Must evenly divide epochs')
 parser.add_argument('--patience', type=int, default=5000, help='If using LR schedule, number of steps before reducing LR.')
 parser.add_argument("--max_grad_clip", type=float, default=0, help="Max gradient value (clip above max_grad_clip, 0 for off)")
-parser.add_argument("--max_grad_norm", type=float, default=100.0, help="Max norm of gradient (clip above max_grad_norm, 0 for off)")
+parser.add_argument("--max_grad_norm", type=float, default=10.0, help="Max norm of gradient (clip above max_grad_norm, 0 for off)")
 parser.add_argument("--warmup_iters", type=int, default=0, help="Use this number of iterations to warmup learning rate linearly from zero to learning rate")
 
 # flow parameters
@@ -93,13 +97,13 @@ parser.add_argument('--flow', type=str, default='planar',
                     help="""Type of flows to use, no flows can also be selected""")
 parser.add_argument('--num_flows', type=int, default=2, help='Number of flow layers, ignored in absence of flows')
 
-parser.add_argument('--h_size', type=int, default=16, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
+parser.add_argument('--h_size', type=int, default=64, help='Width of layers in base networks of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--coupling_network_depth', type=int, default=1, help='Number of extra hidden layers in the base network of iaf and realnvp. Ignored for all other flows.')
 parser.add_argument('--coupling_network', type=str, default='tanh', choices=['relu', 'residual', 'tanh', 'random', 'mixed'],
                     help='Base network for RealNVP coupling layers. Random chooses between either Tanh or ReLU for every network, whereas mixed uses ReLU for the T network and TanH for the S network.')
 parser.add_argument('--no_batch_norm', dest='batch_norm', action='store_false', help='Disables batch norm in realnvp layers')
 parser.set_defaults(batch_norm=True)
-parser.add_argument('--z_size', type=int, default=2, help='how many stochastic hidden units')
+parser.add_argument('--z_size', type=int, default=2, help='Size of base distibution, should be the same as data input size.')
 
 # Boosting parameters
 parser.add_argument('--rho_init', type=str, default='decreasing', choices=['decreasing', 'uniform'],
@@ -128,6 +132,10 @@ def parse_args(main_args=None):
     args.density_evaluation = True
     args.shuffle = True
     args.train_size = args.iters_per_component
+    args.learn_top = False
+    args.y_classes = None
+    args.y_condition = None
+    args.sample_size = args.z_size
 
     # Set a random seed if not given one
     if args.manual_seed is None:
@@ -209,7 +217,10 @@ def parse_args(main_args=None):
 
 def init_model(args):
     if args.flow == 'boosted':
-        model = BoostedVAE(args).to(args.device)
+        if args.density_matching:
+            model = BoostedVAE(args).to(args.device)
+        else:
+            model = BoostedFlow(args).to(args.device)
     elif args.flow == 'planar':
         model = PlanarFlow(args).to(args.device)
     elif args.flow == 'radial':
@@ -230,17 +241,20 @@ def init_model(args):
     return model
 
 
-def init_optimizer(model, args):
+def init_optimizer(model, args, verbose=True):
     """
     group model parameters to more easily modify learning rates of components (flow parameters)
     """
-    logger.info('OPTIMIZER:')
-    warmup_mult = 1000.0
-    base_lr = (args.learning_rate / warmup_mult) if args.warmup_iters > 0 else args.learning_rate
-    logger.info(f"Initializing Adamax optimizer with base learning rate={args.learning_rate}, weight decay={args.weight_decay}.")
+    #warmup_mult = 1000.0
+    #base_lr = (args.learning_rate / warmup_mult) if args.warmup_iters > 0 else args.learning_rate
+    if verbose:
+        logger.info('OPTIMIZER:')
+        logger.info(f"Initializing AdamW optimizer with base learning rate={args.learning_rate}, weight decay={args.weight_decay}.")
     
     if args.flow == 'boosted':
-        logger.info("For boosted model, grouping parameters according to Component Id:")
+        if verbose:
+            logger.info("For boosted model, grouping parameters according to Component Id:")
+        
         flow_params = {f"{c}": torch.nn.ParameterList() for c in range(args.num_components)}
         flow_labels = {f"{c}": [] for c in range(args.num_components)}
         vae_params = torch.nn.ParameterList()
@@ -260,48 +274,82 @@ def init_optimizer(model, args):
         all_params = []
         for c in range(args.num_components):
             all_params.append(flow_params[f"{c}"])
-            logger.info(f"Grouping [{', '.join(flow_labels[str(c)])}] as Component {c}'s parameters.")
+
+            if verbose:
+                logger.info(f"Grouping [{', '.join(flow_labels[str(c)])}] as Component {c}'s parameters.")
 
         # vae parameters are at the end of the list (may not exist if doing density estimation)
         if len(vae_params) > 0:
             all_params.append(vae_params)
-            logger.info(f"Grouping [{', '.join(vae_labels)}] as the VAE parameters.\n")
+
+            if verbose:
+                logger.info(f"Grouping [{', '.join(vae_labels)}] as the VAE parameters.\n")
             
-        optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=base_lr, weight_decay=args.weight_decay)
+        #optimizer = optim.Adamax([{'params': param_group} for param_group in all_params], lr=base_lr, weight_decay=args.weight_decay)
+        optimizer = optim.AdamW([{'params': param_group} for param_group in all_params], lr=args.learning_rate, weight_decay=args.weight_decay)
+        
     else:
-        logger.info(f"Initializing optimizer for standard models with learning rate={args.learning_rate}.\n")
-        optimizer = optim.Adamax(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
+        #optimizer = optim.Adamax(model.parameters(), lr=base_lr, weight_decay=args.weight_decay)
+        optimizer = optim.AdamW(model.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+        if verbose:
+            logger.info(f"Initializing optimizer for standard models with learning rate={args.learning_rate}.\n")
 
     if args.no_lr_schedule:
         scheduler = None
     else:
         if args.lr_schedule == "plateau":
-            logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience} steps until it reaches 1e-5.")
             scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer,
                                                                    factor=0.5,
                                                                    patience=args.patience,
                                                                    min_lr=1e-5,
                                                                    verbose=True,
                                                                    threshold_mode='abs')
+            if verbose:
+                logger.info(f"Using ReduceLROnPlateua as a learning-rate schedule, reducing LR by 0.5 after {args.patience} steps until it reaches 1e-5.")
+
         elif args.lr_schedule == "cosine":
-            if args.boosted:
-                logger.info(f"Using a Cyclic Cosine Annealing LR as a learning-rate schedule, annealed over {args.iters_per_component} training steps, restarting with each new component.")
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer, T_0=args.iters_per_component)
+            msg = "Using a cosine annealing learning-rate schedule, "
+            steps_per_cycle = args.iters_per_component if args.boosted else args.num_steps
+            if args.lr_restarts > 1:
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(optimizer,
+                                                                                 T_0=int(steps_per_cycle / args.lr_restarts),
+                                                                                 eta_min=1e-5)
+                msg += f"annealed over {steps_per_cycle}, restarting {args.lr_restarts} times within each learning cycle."
+
             else:
-                logger.info(f"Using CosineAnnealingLR as a learning-rate schedule, annealed over {args.num_steps} training steps.")
-                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.num_steps)
+                scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer,
+                                                                       T_max=steps_per_cycle,
+                                                                       eta_min=1e-5)
+                msg += f"annealed over {steps_per_cycle} training steps, restarting with each new component (if boosted)."
+
+            if verbose:
+                logger.info(msg)
 
     if args.warmup_iters > 0:
-        logger.info(f"Gradually warming up learning rate from {base_lr} to {args.learning_rate} over the first {args.warmup_iters} steps.\n")
-        warmup_scheduler = GradualWarmupScheduler(optimizer, multiplier=warmup_mult, total_epoch=args.warmup_iters, after_scheduler=scheduler)
+        warmup_scheduler = GradualWarmupScheduler(optimizer, total_epoch=args.warmup_iters, after_scheduler=scheduler)
+        if verbose:
+            logger.info(f"Gradually warming up learning rate from 0.0 to {args.learning_rate} over the first {args.warmup_iters} steps.\n")
+            
         return optimizer, warmup_scheduler
+    
     else:
         return optimizer, scheduler
 
 
+def init_boosted_lr(model, optimizer, args):
+    for c in range(args.num_components):
+        # optimizer.param_groups[c]['lr'] = args.learning_rate if c == model.component else 0.
+        if c != model.component:
+            optimizer.param_groups[c]['lr'] = 0.0
+            
+    for n, param in model.named_parameters():
+        param.requires_grad = True if n.startswith(f"flows.{model.component}") or n.startswith(f"flow_param.{model.component}") else False
+
 
 def compute_kl_qp_loss(model, target_fn, beta, args):
     """
+    Density Matching
+
     Compute KL(q_inv || p) where q_inv is the inverse flow transform:
     
     (log_q_inv = log_q_base - logdet),
@@ -329,57 +377,130 @@ def compute_kl_qp_loss(model, target_fn, beta, args):
         
         if model.component == 0 and model.all_trained == False:
             G_lhood = torch.zeros_like(g_lhood)
-            loss = g_lhood - p_log_prob
+            nll = g_lhood - p_log_prob
         else:
-            G_log_prob = model.base_dist.log_prob(z_G[0]).sum(1)
-            G_lhood = torch.max(G_log_prob - boosted_ldj, torch.ones_like(boosted_ldj) * G_MAX_LOSS)
-            loss =  G_lhood - p_log_prob + g_lhood * args.regularization_rate
+            G_lhood = model.base_dist.log_prob(z_G[0]).sum(1) - boosted_ldj
+            G_lhood = torch.max(G_lhood, torch.ones_like(G_lhood) * G_MAX_LOSS)  # when g, G not overlapping award -10 (at most) to loss
+            nll = G_lhood - p_log_prob + g_lhood * args.regularization_rate
 
-        return loss.mean(0), (g_lhood.mean().item(), G_lhood.mean().item(), p_log_prob.mean().item())
+        losses = {'nll': nll.mean(), 'g_nll': g_lhood.mean().item(), 'G_nll': G_lhood.mean().item(), 'p': p_log_prob.mean().item()}
 
     else:
         zk, logdet = model(z0)
         p_log_prob = -1.0 * target_fn(zk) * beta  # p = exp(-potential) => log_p = - potential
-        loss = q_log_prob - logdet - p_log_prob
-        return loss.mean(0), (q_log_prob.mean().item(), logdet.mean().item(), p_log_prob.mean().item())
+        nll = q_log_prob - logdet - p_log_prob
+        losses = {'nll': nll, 'q': q_log_prob.mean().item(), 'logdet': logdet.mean().item(), 'p': p_log_prob.mean().item()}
+
+    return losses
 
 
 def compute_kl_pq_loss(model, data_or_sampler, beta, args):
     """
-    Compute KL(p || q_fwd) where q_fwd is the forward flow transform (log_q_fwd = log_q_base + logdet),
-    and p is the target distribution.
+    Density Estimation with reweighting
 
-    Returns the minimization objective for density estimation (NLL under the flow since the
-    entropy of the target dist is fixed wrt the optimization)
-
-    ADAPTED FROM: https://arxiv.org/pdf/1904.04676.pdf (https://github.com/kamenbliznashki/normalizing_flows/blob/master/bnaf.py)
+    Compute KL(p || q)
     """
     if callable(data_or_sampler):
-        sample = data_or_sampler(args.batch_size).to(args.device)
+        x = data_or_sampler(args.batch_size).to(args.device)
     else:
-        sample = data_or_sampler
+        x = data_or_sampler
     
     if args.boosted:
-        Z_g, g_ldj = model.component_forward_flow(sample, component=model.component)
-        g_lhood = model.base_dist.log_prob(Z_g[-1]).sum(1) + g_ldj
+        if model.component > 0:
 
-        if model.all_trained or model.component > 0:
-            G_component = '-c' if model.all_trained else '1:c-1'
-            component = model._sample_component(sampling_components=G_component)
-            Z_G, G_ldj = model.component_forward_flow(sample, component=component)
-            G_lhood = torch.max(model.base_dist.log_prob(Z_G[-1]).sum(1) + G_ldj, torch.ones_like(G_ldj) * G_MAX_LOSS)
-            loss =  beta * -1.0 * g_lhood + (1 - beta) * G_lhood
+            # 1. Compute likelihood/weight for each sample
+            additive = True  # recommended: True
+            G_ll = torch.zeros(x.size(0))
+            num_trained_components = args.num_components if model.all_trained else model.component
+            for c in range(num_trained_components):
+                if model.all_trained and c == model.component:
+                    continue
+                
+                rho_simplex = model.rho[0:c+1] / torch.sum(model.rho[0:c+1])
+                z_G, _, _, ldj_G, _ = model(x=x, components=c)
+
+                if additive:
+                    if c == 0:
+                        G_ll = model.base_dist.log_prob(z_G).sum(1) + ldj_G
+                    else:
+                        last_ll = torch.log(1.0 - rho_simplex[c]) + G_ll
+                        next_ll = torch.log(rho_simplex[c]) + (model.base_dist.log_prob(z_G).sum(1) + ldj_G)
+                        uG_ll = torch.cat([last_ll.view(x.size(0), 1), next_ll.view(x.size(0), 1)], dim=1)
+                        G_ll = torch.logsumexp(uG_ll, dim=1)
+                else:
+                    # multiplicative
+                    G_ll += rho_simplex[c] * (model.base_dist.log_prob(z_G).sum(1) + ldj_G)
+            
+            G_nll = -1.0 * G_ll
+
+            weight_samples = True  # recommended: True
+            if weight_samples:
+                # 2. Sample x with replacement, weighted by G_nll
+                if additive:
+                    weights = softmax(G_nll)
+                else:
+                    heuristic = "unity"
+                    if heuristic == "decay":
+                        beta = 1.0 / (2.0**model.component)
+                    elif heuristic == "uniform":
+                        beta = 1.0 / (1.0 + args.num_components)
+                    else:
+                        beta = 1.0  # unity
+                        
+                    uweights = G_nll * beta
+                    weights = torch.exp(uweights - torch.logsumexp(uweights, dim=0))  # normalize weights: large NLL => large weight
+                    
+                weights = weights / torch.sum(weights)
+                orig_weights = weights.data.clone()
+
+                max_wt = 0.1
+                if weights.max() > max_wt:
+                    weights = torch.max(torch.min(weights, torch.tensor([max_wt], device=args.device)), torch.tensor([0.1 / args.batch_size], device=args.device))
+                    weights = weights / torch.sum(weights)
+                    
+                reweighted_idx = torch.multinomial(weights, x.size(0), replacement=True)
+                x_resampled = x[reweighted_idx]
+
+                if np.random.rand() > 0.9:
+                    with open(os.path.join(args.snap_dir, 'counts.txt'), 'a') as ff:
+                        orig_weights.sort()
+                        top_wts1 = ', '.join([f"{w:1.3f}" for w in orig_weights[-5:]])
+                        weights.sort()
+                        top_wts2 = ', '.join([f"{w:1.3f}" for w in weights[-5:]])
+                        top_idx = ', '.join([str(ct) for _, ct in Counter(reweighted_idx.data.cpu().numpy()).most_common(10)])
+                        num_unique = torch.unique(reweighted_idx).size(0)
+                        print(f"C{model.component}. Unique samples={num_unique}, top ids={top_idx}, orig={top_wts1}, norm={top_wts2}", file=ff)
+
+                # 3. Compute g for resampled observations
+                z_g, _, _, ldj_g, _ = model(x=x_resampled, components="c")
+                g_nll = -1.0 * (model.base_dist.log_prob(z_g).sum(1) + ldj_g)
+                nll = torch.mean(g_nll)
+
+            else:
+                # Compute g in standard fashion
+                z_g, _, _, ldj_g, _ = model(x=x, components="c")
+                g_nll = -1.0 * (model.base_dist.log_prob(z_g).sum(1) + ldj_g)
+                nll =  torch.mean(g_nll / (torch.exp(G_ll) + 0.1))
+
+            losses = {"nll": nll}
+            losses["G_nll"] = torch.mean(G_nll)
+            losses["g_nll"] = torch.mean(g_nll)
+            
         else:
-            G_lhood = torch.zeros_like(g_lhood)
-            loss = -1.0 * g_lhood
-
-        return loss.mean(0), (g_lhood.mean().item(), G_lhood.mean().item())
-        
+            # train first boosted component just like a non-boosted model
+            z_g, _, _, ldj_g, _ = model(x=x, components="c")
+            g_nll = -1.0 * (model.base_dist.log_prob(z_g).sum(1) + ldj_g)
+            losses = {"nll": torch.mean(g_nll)}
+            losses["g_nll"] = torch.mean(g_nll)
+            losses["G_nll"] = torch.zeros_like(losses['g_nll'])
+    
     else:
-        z, logdet = model(sample)
+        z, _, _, logdet, _ = model(x)
         q_log_prob = model.base_dist.log_prob(z).sum(1)
-        loss = -1.0 * (q_log_prob + logdet)
-        return loss.mean(0), (q_log_prob.mean().item(), logdet.mean().detach().item())
+        nll = -1.0 * (q_log_prob + logdet)
+        losses = {'nll': nll.mean(0), 'q': q_log_prob.mean().detach().item(), 'logdet': logdet.mean().detach().item()}
+
+    return losses
 
 
 @torch.no_grad()
@@ -483,19 +604,15 @@ def annealing_schedule(i, args):
             if i >= args.iters_per_component * args.num_components or i == args.iters_per_component:
                 rval = 1.0
             else:
-                rval = 0.01 + ((i % args.iters_per_component) / args.iters_per_component)
+                halfway = args.iters_per_component // 2
+                rval = 0.01 + ((i % halfway) / halfway) if (i % args.iters_per_component) < halfway else 1.0
         else:
             rval = 0.01 + i/10000.0
 
         rval = max(args.min_beta, min(args.max_beta, rval))
     else:
-        # anneal the push away from G by slowing dropping the weight of g
-        # WHAT HAPPENS if we do the reverse of this schedule?
-        if args.boosted:
-            # starting with a high G weight initially
-            rval = 0.01 + 0.98 * (( max(i-1,0) % args.iters_per_component) / args.iters_per_component)
-        else:
-            rval = 1.0
+        rval = 1.0
+            
     return rval
 
 
@@ -507,20 +624,19 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
 
     if args.boosted:
         model.component = 0
-        prev_lr = []
-        for c in range(args.num_components):
-            if c != model.component:
-                optimizer.param_groups[c]['lr'] = 0.0
-            
-            prev_lr.append(optimizer.param_groups[c]['lr'])
+        init_boosted_lr(model, optimizer, args)
     
     for batch_id in range(args.num_steps+1):
         model.train()
         optimizer.zero_grad()
         beta = annealing_schedule(batch_id, args)
 
-        loss, loss_terms = loss_fn(model, target_or_sample_fn, beta, args)
-        loss.backward()
+        if args.dataset == "u0" and batch_id == args.iters_per_component + 1:
+            args.dataset = "u1"
+            target_or_sample_fn = make_toy_density(args)
+
+        losses = loss_fn(model, target_or_sample_fn, beta, args)
+        losses['nll'].backward()
 
         if args.max_grad_clip > 0:
             torch.nn.utils.clip_grad_value_(model.parameters(), args.max_grad_clip)
@@ -532,7 +648,8 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
         if args.boosted:  # freeze all but the new component being trained
             if batch_id > 0:
                 for c in range(args.num_components):
-                    optimizer.param_groups[c]['lr'] = prev_lr[c] if c == model.component else 0.0
+                    if c != model.component:
+                        optimizer.param_groups[c]['lr'] = 0.0
         if args.tensorboard:
             for i in range(len(optimizer.param_groups)):
                 writer.add_scalar(f'lr/lr_{i}', optimizer.param_groups[i]['lr'], batch_id)
@@ -540,46 +657,43 @@ def train(model, target_or_sample_fn, loss_fn, optimizer, scheduler, args):
         optimizer.step()
         if not args.no_lr_schedule:
             if args.lr_schedule == "plateau":
-                scheduler.step(metrics=loss)
+                scheduler.step(metrics=losses['nll'])
             else:
-                scheduler.step(epoch=batch_id)
-
-            if args.boosted:
-                prev_lr[model.component] = optimizer.param_groups[model.component]['lr']
+                scheduler.step()
 
         boosted_component_converged = args.boosted and batch_id % args.iters_per_component == 0 and batch_id > 0
         new_boosted_component = args.boosted and batch_id % args.iters_per_component == 1
         if boosted_component_converged or new_boosted_component or batch_id % args.log_interval == 0:
-            msg = f'{args.dataset}: step {batch_id:5d} / {args.num_steps}; loss {loss.item():8.3f} (beta={beta:5.4f})'
+            msg = f"{args.dataset}: step {batch_id:5d} / {args.num_steps}; loss {losses['nll'].item():8.3f} (beta={beta:4.2f})"
             if args.boosted:
-                msg += f' | g vs G ({loss_terms[0]:8.3f}, {loss_terms[1]:8.3f})'
-                msg += f' | p_log_prob {loss_terms[2]:8.3f}' if args.density_matching else ''
-                msg += f' | c={model.component} (all={str(model.all_trained)[0]})'
-                msg += f' | Rho=[' + ', '.join([f"{val:4.2f}" for val in model.rho.data]) + "]"
+                msg += f" | g vs G ({losses['g_nll']:8.3f}, {losses['G_nll']:8.3f})"
+                msg += f" | p_log_prob {losses['p']:8.3f}" if args.density_matching else ''
+                msg += f" | c={model.component} (all={str(model.all_trained)[0]})"
+                msg += f" | Rho=[" + ', '.join([f"{val:4.2f}" for val in model.rho.data]) + "]"
             else:
-                msg += f' | q_log_prob {loss_terms[0]:8.3f}'
-                msg += f' | ldj {loss_terms[1]:8.3f}'
-                msg += f' | p_log_prob {loss_terms[2]:7.3f}' if args.density_matching else ''
+                msg += f" | q_log_prob {losses['q']:8.3f}"
+                msg += f" | ldj {losses['logdet']:8.3f}"
+                msg += f" | p_log_prob {losses['p']:7.3f}" if args.density_matching else ''
             logger.info(msg)
 
         if args.tensorboard:
-            writer.add_scalar('batch/train_loss', loss.item(), batch_id)
+            writer.add_scalar('batch/train_loss', losses['nll'].item(), batch_id)
             if args.boosted:
-                writer.add_scalar('batch/train_g', loss_terms[0], batch_id)
-                writer.add_scalar('batch/train_G', loss_terms[1], batch_id)
+                writer.add_scalar('batch/train_g', losses['g_nll'], batch_id)
+                writer.add_scalar('batch/train_G', losses['G_nll'], batch_id)
             else:
-                writer.add_scalar('batch/q_log_prob', loss_terms[0], batch_id)
-                writer.add_scalar('batch/log_det_jacobian', loss_terms[1], batch_id)
+                writer.add_scalar('batch/q_log_prob', losses['q'], batch_id)
+                writer.add_scalar('batch/log_det_jacobian', losses['logdet'], batch_id)
 
         if boosted_component_converged:
             update_rho(model, target_or_sample_fn, writer, args)
             model.increment_component()
+            optimizer, scheduler = init_optimizer(model, args, verbose=False)
+            init_boosted_lr(model, optimizer, args)
 
         if (batch_id > 0 and batch_id % args.plot_interval == 0) or boosted_component_converged:
             with torch.no_grad():
                 plot(batch_id, model, target_or_sample_fn, args)
-
-            
 
  
 def main(main_args=None):
