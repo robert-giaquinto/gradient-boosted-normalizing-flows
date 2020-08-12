@@ -12,7 +12,7 @@ The GBNF formulation results in a mixture model structure, whose flexibility inc
 
 Link to paper:
 
-[Gradient Boosted Flows](https://arxiv.org/abs/2002.11896) (under review) by Robert Giaquinto and Arindam Banerjee
+[Gradient Boosted Normalizing Flows](https://arxiv.org/abs/2002.11896) (under review) by Robert Giaquinto and Arindam Banerjee
 
 
 
@@ -74,7 +74,7 @@ Additionally, density estimation experiments can be run on datasets from the UCI
 
 ## Getting Started
 
-The scripts folder includes examples for running the GBF model on the
+The scripts folder includes examples for running the GBNF model on the
 Caltech 101 Silhouettes dataset and a density estimation experiment.
 
 **Toy problem: match 2-moons energy function with Boosted Real-NVPs**<br/>
