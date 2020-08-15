@@ -1,6 +1,6 @@
 <img src="../master/docs/images/stew.png" width="100">
 
-# Gradient Boosted Normalizing Flows
+# Gradient Boosted Normalizing Flows [![](https://img.shields.io/badge/python-3.7+-blue.svg)](https://www.python.org/download/releases/3.7.0/) ![t](https://img.shields.io/badge/status-stable-green.svg) [![](https://img.shields.io/github/license/robert-giaquinto/gradient-boosted-normalizing-flows)](https://github.com/robert-giaquinto/gradient-boosted-normalizing-flows/blob/master/LICENSE.md) [![arXiv](https://img.shields.io/badge/arXiv-2002.11896-b31b1b.svg)](https://arxiv.org/abs/2002.11896)
 
 ## Introduction
 The trend in normalizing flow (NF) literature has been to devise deeper, more complex transformations to achieve greater flexibility.
