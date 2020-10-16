@@ -12,8 +12,10 @@ The GBNF formulation results in a mixture model structure, whose flexibility inc
 
 Link to paper:
 
-[Gradient Boosted Normalizing Flows](https://arxiv.org/abs/2002.11896) (under review) by Robert Giaquinto and Arindam Banerjee
+[Gradient Boosted Normalizing Flows](https://arxiv.org/abs/2002.11896) by Robert Giaquinto and Arindam Banerjee. In Advances in Neural Information Processing Systems (NeurIPS), 2020.
 
+
+<img src="../master/docs/images/simple_gbnf.png" width="400">
 
 
 
